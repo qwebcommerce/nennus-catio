@@ -1,0 +1,37 @@
+{
+  "name": "nennus-catio-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "db:generate": "prisma generate",
+    "db:generate:clean": "node scripts/prisma-generate-clean.mjs",
+    "db:validate": "prisma validate",
+    "db:deploy": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.787.0",
+    "@prisma/client": "6.19.0",
+    "@supabase/supabase-js": "^2.101.1",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^8.3.2",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.1.1",
+    "prisma": "6.19.0",
+    "stripe": "^18.5.0",
+    "xlsx": "^0.18.5"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  }
+}

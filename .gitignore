@@ -1,0 +1,24 @@
+# جذر المستودع: مشروع POS عام — المشروع الفعلي داخل system/
+system/node_modules/
+system/client/node_modules/
+system/server/node_modules/
+system/server/src/generated/
+system/.env
+system/.env.local
+system/client/.env
+system/server/.env
+system/dist/
+system/build/
+system/client/dist/
+system/*.log
+system/server/dev.db
+system/server/dev.db-journal
+system/server/prisma/*.db
+system/server/prisma/*.db-journal
+system/.vercel
+**/.DS_Store
+Thumbs.db
+backups/
+
+.vercel
+.env*.local

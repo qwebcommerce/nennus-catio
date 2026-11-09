@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "DeliveryRoute"
+ADD COLUMN "lastDriverLat" DOUBLE PRECISION,
+ADD COLUMN "lastDriverLng" DOUBLE PRECISION,
+ADD COLUMN "lastDriverAt" TIMESTAMP(3);

@@ -1,0 +1,402 @@
+import { Router } from "express";
+import { Prisma } from "../lib/prisma-client-bundle.js";
+import { prisma } from "../lib/prisma.js";
+import { authMiddleware, requireRole } from "../middleware/auth.js";
+
+const router = Router();
+router.use(authMiddleware);
+router.use(requireRole("ADMIN", "MANAGER"));
+
+const DEFAULT_ACCOUNTS = [
+  { code: "1000", name: "Cash", type: "ASSET" },
+  { code: "1100", name: "Customer Receivables", type: "ASSET" },
+  { code: "4000", name: "Sales Revenue", type: "REVENUE" },
+  { code: "4010", name: "Wholesale Revenue", type: "REVENUE" },
+  { code: "4020", name: "Sales Returns", type: "CONTRA_REVENUE" },
+  { code: "5000", name: "Operating Expenses", type: "EXPENSE" },
+  { code: "5100", name: "Payroll Expense", type: "EXPENSE" },
+  { code: "5200", name: "Rent Expense", type: "EXPENSE" },
+  { code: "5300", name: "Electricity Expense", type: "EXPENSE" },
+  { code: "5400", name: "Internet Expense", type: "EXPENSE" },
+];
+
+function parseDateOrNull(v) {
+  if (!v) return null;
+  const d = new Date(String(v));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+async function ensureDefaultAccounts(organizationId) {
+  for (const acc of DEFAULT_ACCOUNTS) {
+    await prisma.account.upsert({
+      where: { organizationId_code: { organizationId, code: acc.code } },
+      update: { name: acc.name, type: acc.type, active: true },
+      create: { organizationId, code: acc.code, name: acc.name, type: acc.type, active: true },
+    });
+  }
+}
+
+router.post("/accounts/init-defaults", async (req, res) => {
+  const orgId = req.user.organizationId;
+  await ensureDefaultAccounts(orgId);
+  const rows = await prisma.account.findMany({
+    where: { organizationId: orgId, active: true },
+    orderBy: { code: "asc" },
+  });
+  res.json({ ok: true, count: rows.length, accounts: rows });
+});
+
+router.get("/accounts", async (req, res) => {
+  const rows = await prisma.account.findMany({
+    where: { organizationId: req.user.organizationId },
+    orderBy: { code: "asc" },
+  });
+  res.json(rows);
+});
+
+router.get("/trial-balance", async (req, res) => {
+  const orgId = req.user.organizationId;
+  const from = parseDateOrNull(req.query.from);
+  const to = parseDateOrNull(req.query.to);
+  const rows = await prisma.journalLine.findMany({
+    where: {
+      organizationId: orgId,
+      journalEntry: {
+        ...(from || to
+          ? {
+              entryDate: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
+    },
+    include: { account: true },
+    take: 10000,
+  });
+  const byCode = new Map();
+  for (const ln of rows) {
+    const code = ln.account.code;
+    if (!byCode.has(code)) {
+      byCode.set(code, {
+        accountCode: code,
+        accountName: ln.account.name,
+        type: ln.account.type,
+        debit: 0,
+        credit: 0,
+      });
+    }
+    const it = byCode.get(code);
+    it.debit += Number(ln.debit || 0);
+    it.credit += Number(ln.credit || 0);
+  }
+  const lines = [...byCode.values()].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  const totals = lines.reduce(
+    (s, l) => ({ debit: s.debit + l.debit, credit: s.credit + l.credit }),
+    { debit: 0, credit: 0 },
+  );
+  res.json({ lines, totals, balanced: Math.abs(totals.debit - totals.credit) < 0.01 });
+});
+
+router.post("/journals/rebuild", async (req, res) => {
+  const orgId = req.user.organizationId;
+  const from = parseDateOrNull(req.body?.from);
+  const to = parseDateOrNull(req.body?.to);
+  if (!from || !to) return res.status(400).json({ error: "from/to مطلوبان" });
+  if (to < from) return res.status(400).json({ error: "فترة غير صالحة" });
+
+  await ensureDefaultAccounts(orgId);
+  const accounts = await prisma.account.findMany({ where: { organizationId: orgId, active: true } });
+  const acc = new Map(accounts.map((a) => [a.code, a]));
+  const by = (code) => {
+    const a = acc.get(code);
+    if (!a) throw new Error(`Missing account ${code}`);
+    return a.id;
+  };
+
+  const periodWhere = { gte: from, lte: to };
+  const [sales, refunds, expenses] = await Promise.all([
+    prisma.sale.findMany({
+      where: { branch: { organizationId: orgId }, createdAt: periodWhere },
+      select: {
+        id: true,
+        branchId: true,
+        channel: true,
+        amountPaid: true,
+        amountDue: true,
+        createdAt: true,
+        total: true,
+      },
+    }),
+    prisma.refund.findMany({
+      where: { branch: { organizationId: orgId }, createdAt: periodWhere },
+      select: { id: true, branchId: true, total: true, createdAt: true },
+    }),
+    prisma.expense.findMany({
+      where: { organizationId: orgId, expenseDate: periodWhere },
+      select: { id: true, category: true, amount: true, expenseDate: true },
+    }),
+  ]);
+
+  await prisma.$transaction(
+    async (tx) => {
+    const existing = await tx.journalEntry.findMany({
+      where: { organizationId: orgId, autoGenerated: true, entryDate: periodWhere },
+      select: { id: true },
+      take: 20000,
+    });
+    const ids = existing.map((e) => e.id);
+    if (ids.length) {
+      // Delete in chunks to avoid oversized IN lists / long locks.
+      const chunk = 500;
+      for (let i = 0; i < ids.length; i += chunk) {
+        const slice = ids.slice(i, i + chunk);
+        await tx.journalLine.deleteMany({ where: { journalEntryId: { in: slice } } });
+        await tx.journalEntry.deleteMany({ where: { id: { in: slice } } });
+      }
+    }
+
+    for (const s of sales) {
+      const paid = Math.max(0, Number(s.amountPaid || 0));
+      const due = Math.max(0, Number(s.amountDue || 0));
+      // Keep books balanced: credit revenue to match cash + AR actually posted.
+      const revenue = Math.round((paid + due) * 100) / 100;
+      if (revenue <= 0) continue;
+      const lines = [];
+      if (paid > 0) lines.push({ accountId: by("1000"), debit: paid, credit: 0 });
+      if (due > 0) lines.push({ accountId: by("1100"), debit: due, credit: 0 });
+      lines.push({
+        accountId: by(s.channel === "WHOLESALE" ? "4010" : "4000"),
+        debit: 0,
+        credit: revenue,
+      });
+      await tx.journalEntry.create({
+        data: {
+          organizationId: orgId,
+          branchId: s.branchId,
+          entryDate: s.createdAt,
+          description: `Sale ${s.id}`,
+          sourceType: "SALE",
+          sourceId: s.id,
+          autoGenerated: true,
+          lines: {
+            create: lines.map((l) => ({
+              organizationId: orgId,
+              accountId: l.accountId,
+              debit: new Prisma.Decimal(Number(l.debit).toFixed(2)),
+              credit: new Prisma.Decimal(Number(l.credit).toFixed(2)),
+            })),
+          },
+        },
+      });
+    }
+
+    for (const r of refunds) {
+      const total = Number(r.total || 0);
+      if (total <= 0) continue;
+      await tx.journalEntry.create({
+        data: {
+          organizationId: orgId,
+          branchId: r.branchId,
+          entryDate: r.createdAt,
+          description: `Refund ${r.id}`,
+          sourceType: "REFUND",
+          sourceId: r.id,
+          autoGenerated: true,
+          lines: {
+            create: [
+              {
+                organizationId: orgId,
+                accountId: by("4020"),
+                debit: new Prisma.Decimal(total.toFixed(2)),
+                credit: new Prisma.Decimal(0),
+              },
+              {
+                organizationId: orgId,
+                accountId: by("1000"),
+                debit: new Prisma.Decimal(0),
+                credit: new Prisma.Decimal(total.toFixed(2)),
+              },
+            ],
+          },
+        },
+      });
+    }
+
+    const expenseAccountMap = {
+      PAYROLL: "5100",
+      RENT: "5200",
+      ELECTRICITY: "5300",
+      INTERNET: "5400",
+      OTHER: "5000",
+    };
+
+    for (const ex of expenses) {
+      const amt = Number(ex.amount || 0);
+      if (amt <= 0) continue;
+      const expCode = expenseAccountMap[ex.category] || "5000";
+      await tx.journalEntry.create({
+        data: {
+          organizationId: orgId,
+          entryDate: ex.expenseDate,
+          description: `Expense ${ex.category} ${ex.id}`,
+          sourceType: "EXPENSE",
+          sourceId: ex.id,
+          autoGenerated: true,
+          lines: {
+            create: [
+              {
+                organizationId: orgId,
+                accountId: by(expCode),
+                debit: new Prisma.Decimal(amt.toFixed(2)),
+                credit: new Prisma.Decimal(0),
+              },
+              {
+                organizationId: orgId,
+                accountId: by("1000"),
+                debit: new Prisma.Decimal(0),
+                credit: new Prisma.Decimal(amt.toFixed(2)),
+              },
+            ],
+          },
+        },
+      });
+    }
+  },
+    { timeout: 120000, maxWait: 15000 },
+  );
+
+  res.json({
+    ok: true,
+    from,
+    to,
+    createdFrom: { sales: sales.length, refunds: refunds.length, expenses: expenses.length },
+  });
+});
+
+router.get("/journals", async (req, res) => {
+  const orgId = req.user.organizationId;
+  const from = parseDateOrNull(req.query.from);
+  const to = parseDateOrNull(req.query.to);
+  const manualOnly = String(req.query.manualOnly || "") === "1";
+  const rows = await prisma.journalEntry.findMany({
+    where: {
+      organizationId: orgId,
+      ...(manualOnly ? { autoGenerated: false } : {}),
+      ...(from || to
+        ? {
+            entryDate: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
+    },
+    include: {
+      lines: { include: { account: true } },
+      branch: { select: { id: true, name: true, nameEn: true } },
+    },
+    orderBy: [{ entryDate: "desc" }, { createdAt: "desc" }],
+    take: 200,
+  });
+  res.json(rows);
+});
+
+router.post("/journals", async (req, res) => {
+  const orgId = req.user.organizationId;
+  const b = req.body || {};
+  const description =
+    b.description != null && String(b.description).trim()
+      ? String(b.description).trim().slice(0, 240)
+      : "";
+  if (!description) return res.status(400).json({ error: "الوصف مطلوب" });
+  const entryDate = parseDateOrNull(b.entryDate) || new Date();
+  const branchId =
+    b.branchId != null && String(b.branchId).trim() ? String(b.branchId).trim() : null;
+  if (branchId) {
+    const br = await prisma.branch.findFirst({
+      where: { id: branchId, organizationId: orgId },
+      select: { id: true },
+    });
+    if (!br) return res.status(400).json({ error: "فرع غير صالح" });
+  }
+  if (!Array.isArray(b.lines) || b.lines.length < 2) {
+    return res.status(400).json({ error: "يلزم سطران على الأقل (مدين/دائن)" });
+  }
+
+  const accountIds = [
+    ...new Set(
+      b.lines
+        .map((l) => (l?.accountId != null ? String(l.accountId).trim() : ""))
+        .filter(Boolean)
+    ),
+  ];
+  const accounts = await prisma.account.findMany({
+    where: { organizationId: orgId, id: { in: accountIds }, active: true },
+  });
+  if (accounts.length !== accountIds.length) {
+    return res.status(400).json({ error: "حساب غير صالح أو غير نشط" });
+  }
+
+  const lines = [];
+  let debitSum = 0;
+  let creditSum = 0;
+  for (const raw of b.lines) {
+    const accountId = String(raw?.accountId || "").trim();
+    if (!accountId) continue;
+    const debit = Math.round((Number(raw?.debit) || 0) * 100) / 100;
+    const credit = Math.round((Number(raw?.credit) || 0) * 100) / 100;
+    if (debit < 0 || credit < 0 || Number.isNaN(debit) || Number.isNaN(credit)) {
+      return res.status(400).json({ error: "مبالغ غير صالحة" });
+    }
+    if (debit > 0 && credit > 0) {
+      return res.status(400).json({ error: "لا يجمع السطر بين مدين ودائن" });
+    }
+    if (debit <= 0 && credit <= 0) continue;
+    lines.push({ accountId, debit, credit });
+    debitSum += debit;
+    creditSum += credit;
+  }
+  debitSum = Math.round(debitSum * 100) / 100;
+  creditSum = Math.round(creditSum * 100) / 100;
+  if (lines.length < 2) {
+    return res.status(400).json({ error: "يلزم سطران على الأقل بمبالغ" });
+  }
+  if (Math.abs(debitSum - creditSum) > 0.01) {
+    return res.status(400).json({
+      error: "القيد غير متوازن",
+      code: "JOURNAL_UNBALANCED",
+      debitSum,
+      creditSum,
+    });
+  }
+
+  const created = await prisma.journalEntry.create({
+    data: {
+      organizationId: orgId,
+      branchId,
+      entryDate,
+      description,
+      sourceType: "MANUAL",
+      sourceId: null,
+      autoGenerated: false,
+      lines: {
+        create: lines.map((l) => ({
+          organizationId: orgId,
+          accountId: l.accountId,
+          debit: new Prisma.Decimal(l.debit.toFixed(2)),
+          credit: new Prisma.Decimal(l.credit.toFixed(2)),
+        })),
+      },
+    },
+    include: {
+      lines: { include: { account: true } },
+      branch: { select: { id: true, name: true, nameEn: true } },
+    },
+  });
+
+  res.status(201).json(created);
+});
+
+export default router;

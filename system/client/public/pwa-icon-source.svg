@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e3a8a"/>
+    </linearGradient>
+    <linearGradient id="hx" x1="80" y1="64" x2="432" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563EB"/>
+      <stop offset="0.55" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#bg)"/>
+  <!-- Open hexagon (scaled from favicon.svg 64→512) -->
+  <g transform="translate(0,0) scale(8)">
+    <path
+      d="M18 16 L34 7 L50 16 V30"
+      stroke="url(#hx)"
+      stroke-width="6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M50 38 V48 L34 57 L18 48 V16"
+      stroke="url(#hx)"
+      stroke-width="6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <rect x="24" y="18" width="12" height="3" rx="1.5" fill="#38BDF8"/>
+    <rect x="38" y="18" width="8" height="3" rx="1.5" fill="#F8FAFC"/>
+    <path d="M26 28 L21 33.5 L26 39" stroke="#38BDF8" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M33.5 26.5 L30 40.5" stroke="#F8FAFC" stroke-width="3.2" stroke-linecap="round"/>
+    <path d="M37.5 28 L42.5 33.5 L37.5 39" stroke="#38BDF8" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="24" y="44" width="12" height="3" rx="1.5" fill="#38BDF8"/>
+    <rect x="38" y="44" width="7" height="3" rx="1.5" fill="#F8FAFC"/>
+  </g>
+</svg>

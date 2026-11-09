@@ -1,0 +1,14 @@
+{
+  "name": "nennus-catio-repo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Nennus Catio \u2014 pet store website + POS (forked from POS platform).",
+  "scripts": {
+    "dev": "npm run dev --prefix system",
+    "start": "npm run start --prefix system",
+    "install:all": "npm run install:all --prefix system",
+    "build": "npm run build:vercel --prefix system",
+    "vercel-build": "npm run build:vercel --prefix system",
+    "vercel:prod": "npx vercel deploy --prod --yes system"
+  }
+}

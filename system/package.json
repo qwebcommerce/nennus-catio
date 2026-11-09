@@ -1,0 +1,34 @@
+{
+  "name": "nennus-catio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "dev:api": "npm run dev --prefix server",
+    "dev:web": "npm run dev --prefix client",
+    "start": "npm run build:client && node server/src/index.js",
+    "build": "npm run build:vercel",
+    "install:deps": "npm install --prefix client && npm install --prefix server && node server/scripts/ensure-pg-schema.mjs",
+    "install:all": "npm run install:deps && npm run db:generate --prefix server",
+    "prisma:generate": "npm run db:generate --prefix server",
+    "prisma:push": "npm run db:push --prefix server",
+    "prisma:validate": "npm run db:validate --prefix server",
+    "build:client": "npm run build --prefix client",
+    "build:vercel": "npm run db:generate --prefix server && npm run build --prefix client",
+    "build:vercel:migrate": "npm run db:generate --prefix server && npm run db:deploy --prefix server && npm run build --prefix client",
+    "vercel-build": "npm run build:vercel",
+    "db:generate": "npm run db:generate --prefix server",
+    "db:generate:clean": "npm run db:generate:clean --prefix server",
+    "db:deploy": "npm run db:deploy --prefix server",
+    "db:migrate": "npm run db:migrate --prefix server",
+    "db:push": "npm run db:push --prefix server",
+    "db:seed": "npm run db:seed --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

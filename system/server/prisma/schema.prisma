@@ -1,0 +1,1405 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+/// مجال النشاط التجاري (يُختار عند إنشاء المؤسسة أو التسجيل الذاتي)
+enum BusinessVertical {
+  GROCERY
+  RESTAURANT
+  CAFE
+  PHONE_STORE
+  AUTO_DEALER
+  BOOKING_SERVICES
+  RETAIL_GENERAL
+  PHARMACY
+  CLOTHING
+  HARDWARE_ELECTRONICS
+  BEAUTY_SALON
+  PET_STORE
+  HOTEL
+  FITNESS
+  WHOLESALE
+  SERVICES_OTHER
+}
+
+/// مستأجر SaaS — عزل منطقي داخل نفس قاعدة PostgreSQL
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  /// للدخول عند تعدد المؤسسات: نفس البريد + slug
+  slug      String?  @unique
+  /// نشاط المنشأة (بقالة، مطعم، …)
+  businessVertical BusinessVertical?
+  /// FREE | PREMIUM — يتحكم بحد الفروع والميزات لاحقاً
+  plan             String   @default("FREE")
+  /// أقصى عدد فروع حسب الخطة (الافتراضي 3 للخطة المجانية)
+  maxBranches      Int      @default(3)
+  /// صلاحيات دور المدير (JSON object of permissionKey → boolean)
+  managerPermissions String?
+  /// صلاحيات دور الموظف/الكاشير (JSON)
+  cashierPermissions String?
+  /// هل يُسمح لبائع الأرضية بإتمام الدفع من الجوال (وإلا يُرسل السلة للكاشير)
+  associateCanAcceptPayment Boolean @default(true)
+
+  /// Onboarding: account created → profile/docs → Stripe payment → complete
+  profileDocsDone Boolean @default(false)
+  paymentDone     Boolean @default(false)
+
+  /// Legal / KYC profile (Gulf businesses)
+  legalName             String?
+  country               String?
+  city                  String?
+  addressText           String?
+  crNumber              String?
+  licenseNumber         String?
+  ownerFullName         String?
+  ownerIdNumber         String?
+  ownerPhone            String?
+  vatNumber             String?
+  taxNumber             String?
+  iban                  String?
+  authorizedPersonName  String?
+  termsAcceptedAt       DateTime?
+
+  /// Platform KYC review: NOT_SUBMITTED | PENDING_REVIEW | APPROVED | REJECTED
+  onboardingReviewStatus String    @default("NOT_SUBMITTED")
+  onboardingReviewedAt   DateTime?
+  onboardingReviewedBy   String?
+  onboardingReviewNote   String?
+
+  /// Stripe billing
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  selectedPlanInterval String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                    User[]
+  branches                 Branch[]
+  planPurchases            OrganizationPlanPurchase[]
+  onboardingDocuments      OrganizationDocument[]
+  productImages            ProductImage[]
+  products                 Product[]
+  brands                   Brand[]
+  categories               Category[]
+  subcategories            Subcategory[]
+  catalogSkus              CatalogSku[]
+  customers                Customer[]
+  suppliers                Supplier[]
+  syncSettings             SyncSettings?
+  taxSettings              OrganizationTaxSettings?
+  offlineInventoryReceipts OfflineInventoryReceipt[]
+  notificationReads       NotificationRead[]
+  loyaltyProgramSettings  LoyaltyProgramSettings?
+  coupons                 Coupon[]
+  loyaltyLedgers          LoyaltyLedger[]
+  employees               Employee[]
+  payrollPeriods          PayrollPeriod[]
+  employeeLoans           EmployeeLoan[]
+  customerAccountLedgers  CustomerAccountLedger[]
+  expenses                Expense[]
+  groomingServices        GroomingService[]
+  appointments            Appointment[]
+  accounts                Account[]
+  journalEntries          JournalEntry[]
+  journalLines            JournalLine[]
+  automationRules         AutomationRule[]
+  automationRuns          AutomationRun[]
+  automationLogs          AutomationLog[]
+  commissionRules         CommissionRule[]
+  commissionEntries       CommissionEntry[]
+  deliveryOrders          DeliveryOrder[]
+  deliveryRoutes          DeliveryRoute[]
+  deliveryStops           DeliveryStop[]
+  inventoryLots           InventoryLot[]
+  purchaseDrafts          PurchaseDraft[]
+  promoDrafts             PromoDraft[]
+  saleItemLots            SaleItemLot[]
+}
+
+/// GCC VAT / tax pack per organization (default rate + receipt currency)
+model OrganizationTaxSettings {
+  id               String       @id @default(cuid())
+  organizationId   String       @unique
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// QA | SA | AE | KW | BH | OM
+  countryCode      String       @default("QA")
+  /// SAR | QAR | AED | KWD | BHD | OMR
+  currency         String       @default("QAR")
+  /// Standard VAT percent applied at POS (e.g. 15, 5, 0)
+  standardRate     Decimal      @default(0)
+  pricesIncludeTax Boolean      @default(false)
+  enabled          Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+}
+
+/// Uploaded KYC / business documents for organization onboarding
+model OrganizationDocument {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// CR | OWNER_ID | VAT | LICENSE | IBAN
+  docType        String
+  fileName       String
+  mimeType       String
+  size           Int
+  data           Bytes
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, docType])
+  @@index([organizationId])
+}
+
+/// Product photos stored in the database (no external object storage required)
+model ProductImage {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Set when the image is attached to a product (may be null right after upload)
+  productId      String?
+  product        Product?     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  fileName       String
+  mimeType       String
+  size           Int
+  data           Bytes
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([productId])
+}
+
+/// Organization subscription purchases and renewals shown in the Plan page.
+model OrganizationPlanPurchase {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan           String
+  amount         Decimal?
+  currency       String       @default("SAR")
+  reference      String?
+  note           String?
+  purchasedAt    DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, purchasedAt])
+}
+
+/// فئات مصاريف تشغيلية قابلة للتوسعة
+enum ExpenseCategory {
+  RENT
+  PAYROLL
+  ELECTRICITY
+  INTERNET
+  OTHER
+}
+
+/// مصروف مسجّل (يومية / شهرية — حسب تاريخ الانتماء)
+model Expense {
+  id               String          @id @default(cuid())
+  organizationId   String
+  organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category         ExpenseCategory
+  amount           Decimal
+  description      String?
+  /// تاريخ انتماء المصروف للتقارير (يوم/شهر/سنة)
+  expenseDate      DateTime
+  createdByUserId  String
+  createdBy        User            @relation("ExpenseCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([organizationId, expenseDate])
+  @@index([organizationId, category])
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum PayrollPeriodStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+enum EmployeeLoanStatus {
+  OPEN
+  SETTLED
+}
+
+enum AppointmentStatus {
+  BOOKED
+  CONFIRMED
+  CHECKED_IN
+  DONE
+  NO_SHOW
+  CANCELLED
+}
+
+enum ReminderChannel {
+  SMS
+  EMAIL
+  WHATSAPP
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum AutomationTrigger {
+  INACTIVE_CUSTOMERS
+  MISSED_APPOINTMENTS
+}
+
+enum AutomationChannel {
+  SMS
+  EMAIL
+  WHATSAPP
+}
+
+enum CommissionBase {
+  APPOINTMENT_SERVICE_AMOUNT
+}
+
+enum DeliveryStatus {
+  PENDING
+  ROUTED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+}
+
+/// موظف — قد يرتبط بحساب مستخدم للنظام
+model Employee {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  userId         String?      @unique
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name           String
+  nameEn         String?
+  phone          String?
+  email          String?
+  nationalId     String?
+  jobTitle       String?
+  hireDate       DateTime?
+  status         EmployeeStatus @default(ACTIVE)
+  /// راتب أساسي افتراضي لنسخ كشوف الرواتب
+  defaultBaseSalary Decimal?
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  payrollLines   PayrollLine[]
+  loans          EmployeeLoan[]
+  appointments   Appointment[] @relation("AppointmentGroomer")
+  commissionRules CommissionRule[]
+  commissions     CommissionEntry[]
+
+  @@index([organizationId, status])
+}
+
+/// فترة راتب شهرية
+model PayrollPeriod {
+  id                 String              @id @default(cuid())
+  organizationId     String
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  year               Int
+  month              Int
+  status             PayrollPeriodStatus @default(DRAFT)
+  approvedAt         DateTime?
+  approvedByUserId   String?
+  approvedBy         User?               @relation("PayrollApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  paidAt             DateTime?
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  lines              PayrollLine[]
+
+  @@unique([organizationId, year, month])
+}
+
+/// سطر راتب لموظف ضمن فترة
+model PayrollLine {
+  id                String        @id @default(cuid())
+  payrollPeriodId   String
+  payrollPeriod     PayrollPeriod @relation(fields: [payrollPeriodId], references: [id], onDelete: Cascade)
+  employeeId        String
+  employee          Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  baseAmount        Decimal
+  allowancesTotal   Decimal       @default(0)
+  deductionsTotal   Decimal       @default(0)
+  loanDeduction     Decimal       @default(0)
+  netAmount         Decimal
+  notes             String?
+  loanRepayments    LoanRepayment[]
+
+  @@unique([payrollPeriodId, employeeId])
+}
+
+/// سلفة / دين للموظف تجاه المحل
+model EmployeeLoan {
+  id             String             @id @default(cuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  principal      Decimal
+  paidAmount     Decimal            @default(0)
+  status         EmployeeLoanStatus @default(OPEN)
+  description    String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  repayments     LoanRepayment[]
+
+  @@index([organizationId, employeeId])
+}
+
+/// سداد من خصم راتب (يُنشأ عند تعليم الفترة «مدفوعة»)
+model LoanRepayment {
+  id               String       @id @default(cuid())
+  employeeLoanId   String
+  employeeLoan     EmployeeLoan @relation(fields: [employeeLoanId], references: [id], onDelete: Cascade)
+  amount           Decimal
+  payrollLineId    String?
+  payrollLine      PayrollLine? @relation(fields: [payrollLineId], references: [id], onDelete: SetNull)
+  note             String?
+  createdAt        DateTime     @default(now())
+
+  @@index([payrollLineId])
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+  /// Floor sales associate — scan & checkout only (mobile)
+  ASSOCIATE
+}
+
+enum PetType {
+  CAT
+  DOG
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  ONLINE
+  SPLIT
+  /// الدفع عند الاستلام — نقاط الولاء تُمنح بعد تأكيد الاستلام إذا كان الإعداد ON_DELIVERY
+  ON_DELIVERY
+  /// بيع كامل على حساب الزبون (ذمّة)
+  ON_ACCOUNT
+}
+
+enum LoyaltyEarnBase {
+  /// نقاط من مبلغ كل فاتورة (بعد الخصومات اليدوية والكوبون، قبل استبدال النقاط)
+  PER_ORDER_TOTAL
+  /// نقاط من «سلم» مجموع مشتريات العميل (كلما زاد المجموع زادت النقاط المستحقة من الفاتورة الحالية)
+  LIFETIME_SPEND
+}
+
+enum LoyaltyAwardTiming {
+  /// منح النقاط عند إتمام الدفع (فوراً مع الفاتورة)
+  ON_PAYMENT
+  /// منح النقاط بعد تأكيد استلام الطلب (للدفع عند الاستلام أو عند تفعيل هذا الخيار)
+  ON_DELIVERY
+}
+
+enum LoyaltyAwardStatus {
+  NONE
+  PENDING
+  AWARDED
+}
+
+enum LoyaltyLedgerType {
+  EARN
+  REDEEM
+  ADJUST
+  REVERSE
+}
+
+enum CouponKind {
+  PERCENT
+  FIXED
+}
+
+enum CouponChannel {
+  RETAIL
+  WHOLESALE
+  BOTH
+}
+
+enum SaleChannel {
+  RETAIL
+  WHOLESALE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIAL
+  CANCELLED
+}
+
+enum CustomerLedgerEntryType {
+  /// زيادة ذمّة الزبون (بيع آجل)
+  SALE_CREDIT
+  /// تسديد (يقلّل الذمّة)
+  PAYMENT
+  /// تعديل يدوي (إداري)
+  ADJUSTMENT
+}
+
+model Customer {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  phone          String?
+  email          String?
+  notes          String?
+  /// عنوان التوصيل الافتراضي (اختياري)
+  address        String?
+  /// رصيد نقاط الولاء الحالي
+  loyaltyPoints   Int          @default(0)
+  /// مجموع المشتريات المؤهّلة (لنمط LIFETIME_SPEND)
+  lifetimeSpend   Decimal      @default(0)
+  /// رصيد ذمّة (ما للمحل على الزبون) — يُحدَّث مع CustomerAccountLedger
+  accountBalance  Decimal      @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  sales          Sale[]
+  loyaltyLedgers LoyaltyLedger[]
+  accountLedgers CustomerAccountLedger[]
+  appointments   Appointment[]
+  automationLogs AutomationLog[]
+  deliveryOrders DeliveryOrder[]
+  deliveryStops  DeliveryStop[]
+}
+
+/// حركات ذمم الزبائن
+model CustomerAccountLedger {
+  id               String                  @id @default(cuid())
+  organizationId   String
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId       String
+  customer         Customer                @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  branchId         String?
+  branch           Branch?                 @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  entryType        CustomerLedgerEntryType
+  /// موجب = يزيد ما يستحقه المحل على الزبون؛ سالب = تسديد
+  amount           Decimal
+  saleId           String?
+  sale             Sale?                   @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  paymentMethod    PaymentMethod?
+  note             String?
+  createdByUserId  String
+  createdBy        User                    @relation("CustomerLedgerCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt        DateTime                @default(now())
+
+  @@index([organizationId, customerId])
+  @@index([saleId])
+}
+
+/// إعدادات برنامج الولاء والاستبدال لكل مؤسسة
+model LoyaltyProgramSettings {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  enabled        Boolean      @default(true)
+  earnBase       LoyaltyEarnBase @default(PER_ORDER_TOTAL)
+  /// كل قدر من العملة يمنح earnPoints (مثلاً 10 = نقطة واحدة لكل 10 من العملة)
+  earnEveryAmount   Decimal   @default(10)
+  earnPoints        Int       @default(1)
+  minOrderForEarn   Decimal   @default(0)
+  excludeWholesale  Boolean   @default(true)
+  awardTiming       LoyaltyAwardTiming @default(ON_PAYMENT)
+  redemptionEnabled Boolean   @default(true)
+  /// كم نقطة = وحدة عملة واحدة عند الاستبدال
+  redeemPointsPerCurrency Decimal @default(10)
+  /// أقصى نسبة من صافي الفاتورة (بعد الخصومات وقبل الضريبة) يمكن دفعها بالنقاط
+  maxRedemptionPercentOfInvoice Int @default(50)
+  allowCouponWithPoints Boolean @default(true)
+  /// يتطلب رقم هاتف لربط «زائر» بسجل ولاء
+  guestPhoneRequired    Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Coupon {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code           String
+  kind           CouponKind   @default(PERCENT)
+  /// نسبة أو مبلغ ثابت حسب kind
+  value          Decimal
+  minOrderAmount Decimal?
+  maxDiscountAmount Decimal?
+  maxUsesTotal   Int?
+  maxUsesPerCustomer Int?
+  usesCount      Int          @default(0)
+  validFrom      DateTime     @default(now())
+  validUntil     DateTime?
+  active         Boolean      @default(true)
+  channel        CouponChannel @default(BOTH)
+  note           String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  sales          Sale[]
+  promoDrafts    PromoDraft[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
+}
+
+model LoyaltyLedger {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  saleId         String?
+  sale           Sale?        @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  type           LoyaltyLedgerType
+  points         Int
+  balanceAfter   Int
+  note           String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, customerId])
+  @@index([saleId])
+}
+
+model Brand {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supabaseId     String?
+  name           String
+  nameEn         String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  products       Product[]
+
+  @@unique([organizationId, supabaseId])
+}
+
+model Category {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supabaseId     String?
+  name           String
+  nameEn         String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  products       Product[]     @relation("ProductCategory")
+  subcategories  Subcategory[]
+
+  @@unique([organizationId, supabaseId])
+  @@index([organizationId])
+}
+
+model Subcategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  categoryId     String
+  category       Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name           String
+  nameEn         String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  products       Product[]    @relation("ProductSubcategory")
+  catalogSkus    CatalogSku[]
+
+  @@index([organizationId])
+  @@index([categoryId])
+  @@unique([categoryId, name])
+}
+
+/// قائمة رموز SKU القابلة للاختيار عند إنشاء/تعديل المنتج
+model CatalogSku {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code           String
+  name           String?
+  subcategoryId  String?
+  subcategory    Subcategory?  @relation(fields: [subcategoryId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@index([subcategoryId])
+}
+
+model Branch {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  nameEn         String?
+  address        String?
+  supabaseId     String?
+  createdAt      DateTime     @default(now())
+  users          User[]
+  inventories    Inventory[]
+  sales          Sale[]
+  refunds        Refund[]
+  purchases      Purchase[]
+  purchaseDrafts PurchaseDraft[]
+  promoDrafts    PromoDraft[]
+  cashSessions   CashSession[]
+  auditLogs      AuditLog[]
+  heldCarts      HeldCart[]
+  employees      Employee[]
+  customerAccountLedgers CustomerAccountLedger[]
+  appointments   Appointment[]
+  groomingServices GroomingService[]
+  journalEntries JournalEntry[]
+  deliveryOrders DeliveryOrder[]
+  deliveryRoutes DeliveryRoute[]
+  deliveryStops  DeliveryStop[]
+  inventoryLots  InventoryLot[]
+
+  @@unique([organizationId, supabaseId])
+}
+
+model Supplier {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  phone          String?
+  note           String?
+  createdAt      DateTime     @default(now())
+  purchases      Purchase[]
+  purchaseDrafts PurchaseDraft[]
+}
+
+model Account {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  code           String
+  name           String
+  type           String
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  lines          JournalLine[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, type, active])
+}
+
+model JournalEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  entryDate      DateTime
+  description    String
+  sourceType     String?
+  sourceId       String?
+  autoGenerated  Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  lines          JournalLine[]
+
+  @@index([organizationId, entryDate])
+  @@index([organizationId, sourceType, sourceId])
+}
+
+model JournalLine {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  journalEntryId String
+  journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  accountId      String
+  account        Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  debit          Decimal      @default(0)
+  credit         Decimal      @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, accountId])
+  @@index([journalEntryId])
+}
+
+model AutomationRule {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  trigger        AutomationTrigger
+  channel        AutomationChannel
+  active         Boolean           @default(true)
+  delayHours     Int               @default(0)
+  cooldownDays   Int               @default(14)
+  criteriaJson   Json?
+  messageTemplate String
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  runs           AutomationRun[]
+  logs           AutomationLog[]
+
+  @@index([organizationId, active, trigger])
+}
+
+model AutomationRun {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ruleId         String
+  rule           AutomationRule  @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  startedAt      DateTime        @default(now())
+  finishedAt     DateTime?
+  processed      Int             @default(0)
+  sent           Int             @default(0)
+  failed         Int             @default(0)
+  logs           AutomationLog[]
+
+  @@index([organizationId, startedAt])
+  @@index([ruleId, startedAt])
+}
+
+model AutomationLog {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ruleId         String
+  rule           AutomationRule    @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  runId          String?
+  run            AutomationRun?    @relation(fields: [runId], references: [id], onDelete: SetNull)
+  customerId     String?
+  customer       Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  trigger        AutomationTrigger
+  channel        AutomationChannel
+  status         ReminderStatus    @default(SENT)
+  message        String
+  error          String?
+  createdAt      DateTime          @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([ruleId, customerId, createdAt])
+}
+
+model CommissionRule {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeId     String
+  employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  base           CommissionBase @default(APPOINTMENT_SERVICE_AMOUNT)
+  percent        Decimal
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  entries        CommissionEntry[]
+
+  @@index([organizationId, employeeId, active])
+}
+
+model CommissionEntry {
+  id               String         @id @default(cuid())
+  organizationId   String
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employee         Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  ruleId           String?
+  rule             CommissionRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  appointmentId    String?
+  appointment      Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  baseAmount       Decimal
+  percent          Decimal
+  commissionAmount Decimal
+  note             String?
+  createdAt        DateTime       @default(now())
+
+  @@index([organizationId, employeeId, createdAt])
+  @@index([appointmentId])
+}
+
+model DeliveryOrder {
+  id               String         @id @default(cuid())
+  organizationId   String
+  organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId         String
+  branch           Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  customerId       String?
+  customer         Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  sourceSaleId     String?
+  addressText      String
+  lat              Float?
+  lng              Float?
+  priority         Int            @default(0)
+  /// Minutes from day start (0..1439) - optional delivery window start
+  windowStartMin   Int?
+  /// Minutes from day start (0..1439) - optional delivery window end
+  windowEndMin     Int?
+  status           DeliveryStatus @default(PENDING)
+  scheduledDate    DateTime
+  note             String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  stop             DeliveryStop?
+
+  @@index([organizationId, branchId, scheduledDate, status])
+}
+
+model DeliveryRoute {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  routeDate      DateTime
+  driverName     String?
+  vehicleName    String?
+  lastDriverLat  Float?
+  lastDriverLng  Float?
+  lastDriverAt   DateTime?
+  status         DeliveryStatus @default(ROUTED)
+  totalStops     Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  stops          DeliveryStop[]
+
+  @@index([organizationId, branchId, routeDate, status])
+}
+
+model DeliveryStop {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  routeId         String
+  route           DeliveryRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  deliveryOrderId String       @unique
+  deliveryOrder   DeliveryOrder @relation(fields: [deliveryOrderId], references: [id], onDelete: Cascade)
+  branchId        String
+  branch          Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  customerId      String?
+  customer        Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  sequence        Int
+  etaAt           DateTime?
+  deliveredAt     DateTime?
+  status          DeliveryStatus @default(ROUTED)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([routeId, sequence])
+  @@index([organizationId, status, createdAt])
+}
+
+model GroomingService {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  name           String
+  durationMin    Int          @default(60)
+  price          Decimal
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  appointments   Appointment[]
+
+  @@index([organizationId, active])
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  passwordHash   String
+  name           String
+  nameEn         String?
+  role           Role
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  sales          Sale[]
+  refunds        Refund[]
+  purchases      Purchase[]
+  purchaseDrafts PurchaseDraft[]
+  promoDrafts    PromoDraft[]
+  cashSessionsOpened CashSession[] @relation("CashSessionOpenedBy")
+  cashSessionsClosed CashSession[] @relation("CashSessionClosedBy")
+  auditLogs          AuditLog[]
+  heldCarts      HeldCart[]
+  notificationReads NotificationRead[]
+  employee          Employee?
+  payrollPeriodsApproved PayrollPeriod[] @relation("PayrollApprovedBy")
+  customerLedgerEntriesCreated CustomerAccountLedger[] @relation("CustomerLedgerCreatedBy")
+  expensesCreated Expense[] @relation("ExpenseCreatedBy")
+  appointmentsCreated Appointment[] @relation("AppointmentCreatedBy")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, email])
+}
+
+model Product {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  nameEn         String?
+  description    String?
+  sku            String?
+  barcode        String?
+  price            Decimal
+  /// سعر الجملة (اختياري) — يُستخدم في POS عند تفعيل وضع الجملة
+  wholesalePrice   Decimal?
+  cost             Decimal?
+  petType        PetType      @default(OTHER)
+  category       String?
+  brandId        String?
+  brand          Brand?       @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  categoryId     String?
+  productCategory Category?   @relation("ProductCategory", fields: [categoryId], references: [id], onDelete: SetNull)
+  subcategoryId  String?
+  productSubcategory Subcategory? @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
+  imageUrl       String?
+  productImages  ProductImage[]
+  isActive       Boolean      @default(true)
+  externalId     String?
+  /// اختياري: إضافات/خيارات للكافيه والمطاعم [{key,label,labelAr?,priceDelta}]
+  modifiers      Json?
+  /// تاريخ انتهاء الصلاحية (اختياري)
+  expiryDate            DateTime?
+  /// عدد الأيام قبل التاريخ لبدء التنبيه (إن وُجد تاريخ؛ الافتراضي في المنطق 14)
+  expiryAlertDaysBefore Int?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  inventories    Inventory[]
+  saleItems      SaleItem[]
+  refundItems    RefundItem[]
+  purchaseItems  PurchaseItem[]
+  purchaseDraftItems PurchaseDraftItem[]
+  promoDraftItems PromoDraftItem[]
+  inventoryLots  InventoryLot[]
+
+  @@unique([organizationId, sku])
+  @@unique([organizationId, externalId])
+  @@unique([organizationId, barcode])
+}
+
+model Inventory {
+  id            String   @id @default(cuid())
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branchId      String
+  branch        Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  quantity      Int      @default(0)
+  minStockLevel Int      @default(5)
+  lots          InventoryLot[]
+
+  @@unique([productId, branchId])
+}
+
+model Appointment {
+  id              String            @id @default(cuid())
+  organizationId  String
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId        String?
+  branch          Branch?           @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  customerId      String?
+  customer        Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  serviceId       String?
+  service         GroomingService?  @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  groomerId       String?
+  groomer         Employee?         @relation("AppointmentGroomer", fields: [groomerId], references: [id], onDelete: SetNull)
+  petName         String?
+  petType         PetType           @default(OTHER)
+  notes           String?
+  status          AppointmentStatus @default(BOOKED)
+  startAt         DateTime
+  endAt           DateTime
+  reminder24hAt   DateTime?
+  reminder2hAt    DateTime?
+  createdByUserId String
+  createdBy       User              @relation("AppointmentCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  reminders       AppointmentReminder[]
+  commissionEntries CommissionEntry[]
+
+  @@index([organizationId, branchId, startAt])
+  @@index([organizationId, groomerId, startAt])
+  @@index([organizationId, status])
+}
+
+model AppointmentReminder {
+  id            String         @id @default(cuid())
+  appointmentId String
+  appointment   Appointment    @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  channel       ReminderChannel
+  status        ReminderStatus @default(PENDING)
+  scheduledAt   DateTime
+  sentAt        DateTime?
+  error         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([status, scheduledAt])
+}
+
+model Sale {
+  id               String          @id @default(cuid())
+  branchId         String
+  branch           Branch          @relation(fields: [branchId], references: [id])
+  userId           String
+  user             User            @relation(fields: [userId], references: [id])
+  customerId       String?
+  customer         Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  /// تجزئة (POS) أو جملة (قسم الجملة)
+  channel          SaleChannel     @default(RETAIL)
+  clientMutationId String?         @unique
+  total            Decimal
+  discountAmount   Decimal         @default(0)
+  taxAmount        Decimal         @default(0)
+  /// VAT percent applied on this sale (snapshot)
+  taxPercent       Decimal?
+  paymentMethod    PaymentMethod
+  paymentSplits    Json?
+  cashSessionId    String?
+  cashSession      CashSession?    @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  couponId         String?
+  coupon           Coupon?         @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  couponDiscountAmount Decimal     @default(0)
+  loyaltyPointsRedeemed Int        @default(0)
+  loyaltyDiscountAmount Decimal    @default(0)
+  loyaltyPointsEarned   Int?
+  loyaltyAwardStatus    LoyaltyAwardStatus @default(NONE)
+  /// صافي المبلغ المؤهل لاحتساب النقاط (بعد خصم الفاتورة والكوبون، قبل استبدال النقاط)
+  loyaltyEligibleBase   Decimal?
+  /// ما دُفع فعلياً في هذه العملية (نقد/بطاقة/…)
+  amountPaid       Decimal         @default(0)
+  /// المتبقي على ذمّة الزبون لهذه الفاتورة
+  amountDue        Decimal         @default(0)
+  invoiceNumber    String?
+  invoiceStatus    InvoiceStatus   @default(ISSUED)
+  dueDate          DateTime?
+  paidAt           DateTime?
+  /// رقم الطاولة (كافيه / مطعم)
+  tableNumber      String?
+  /// ملاحظات الطلب
+  orderNote        String?
+  /// عنوان التوصيل (للبيع عند الاستلام)
+  deliveryAddress  String?
+  createdAt        DateTime        @default(now())
+  items            SaleItem[]
+  refunds          Refund[]
+  loyaltyLedgers   LoyaltyLedger[]
+  customerAccountLedgers CustomerAccountLedger[]
+
+  @@unique([invoiceNumber])
+}
+
+model HeldCart {
+  id        String   @id @default(cuid())
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String?
+  payload   Json
+  lineCount Int      @default(0)
+  subtotal  Decimal  @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([branchId, userId])
+}
+
+model CashSession {
+  id                 String    @id @default(cuid())
+  branchId           String
+  branch             Branch    @relation(fields: [branchId], references: [id])
+  openedByUserId     String
+  openedBy           User      @relation("CashSessionOpenedBy", fields: [openedByUserId], references: [id])
+  closedByUserId     String?
+  closedBy           User?     @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
+  openedAt           DateTime  @default(now())
+  closedAt           DateTime?
+  openingFloat       Decimal   @default(0)
+  closingCountedCash Decimal?
+  expectedCash       Decimal?
+  cashVariance       Decimal?
+  note               String?
+  sales              Sale[]
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String?
+  entityId   String?
+  branchId   String?
+  branch     Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  summary    String?
+  meta       String?
+  createdAt  DateTime @default(now())
+}
+
+model Refund {
+  id               String       @id @default(cuid())
+  branchId         String
+  branch           Branch       @relation(fields: [branchId], references: [id])
+  userId           String
+  user             User         @relation(fields: [userId], references: [id])
+  saleId           String?
+  sale             Sale?        @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  clientMutationId String?      @unique
+  total            Decimal
+  note             String?
+  createdAt        DateTime     @default(now())
+  items            RefundItem[]
+}
+
+model OfflineInventoryReceipt {
+  clientMutationId String       @id
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  payload          Json
+  createdAt        DateTime     @default(now())
+}
+
+model RefundItem {
+  id        String  @id @default(cuid())
+  refundId  String
+  refund    Refund  @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Decimal
+  subtotal  Decimal
+}
+
+model Purchase {
+  id         String         @id @default(cuid())
+  supplierId String?
+  supplier   Supplier?      @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  branchId   String
+  branch     Branch         @relation(fields: [branchId], references: [id])
+  userId     String
+  user       User           @relation(fields: [userId], references: [id])
+  note       String?
+  createdAt  DateTime       @default(now())
+  items      PurchaseItem[]
+  fromDraft  PurchaseDraft?
+}
+
+model PurchaseItem {
+  id         String   @id @default(cuid())
+  purchaseId String
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id])
+  quantity   Int
+  unitCost   Decimal
+  subtotal   Decimal
+  expiryDate DateTime?
+}
+
+/// Smart Reorder draft PO — review before converting to a real Purchase receipt
+model PurchaseDraft {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  supplierId     String?
+  supplier       Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User                @relation(fields: [userId], references: [id])
+  /// OPEN | CONVERTED | CANCELLED
+  status         String              @default("OPEN")
+  note           String?
+  /// REORDER | MANUAL | MIXED
+  source         String              @default("REORDER")
+  purchaseId     String?             @unique
+  purchase       Purchase?           @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  items          PurchaseDraftItem[]
+
+  @@index([organizationId, branchId, status])
+}
+
+model PurchaseDraftItem {
+  id        String        @id @default(cuid())
+  draftId   String
+  draft     PurchaseDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product       @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitCost  Decimal?
+  /// Why this line was suggested (severity / dailySales snapshot)
+  reason    String?
+  createdAt DateTime      @default(now())
+
+  @@index([draftId])
+}
+
+/// Module 2: Intelligent Pricing & Promo Engine — review before applying price/coupon changes
+model PromoDraft {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id])
+  /// OPEN | APPLIED | CANCELLED
+  status         String           @default("OPEN")
+  /// MARKDOWN | PRICE_CHANGE | COUPON | BUNDLE
+  kind           String           @default("MARKDOWN")
+  /// PRICE | COUPON — how convert applies
+  applyMode      String           @default("PRICE")
+  /// WASTE | VELOCITY | MARGIN | BUNDLE | MANUAL | SIMULATOR
+  source         String           @default("MANUAL")
+  title          String?
+  note           String?
+  couponId       String?
+  coupon         Coupon?          @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  items          PromoDraftItem[]
+
+  @@index([organizationId, status])
+  @@index([organizationId, branchId, status])
+}
+
+model PromoDraftItem {
+  id              String     @id @default(cuid())
+  draftId         String
+  draft           PromoDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product    @relation(fields: [productId], references: [id])
+  /// PERCENT_OFF | SET_PRICE | BUNDLE
+  action          String     @default("PERCENT_OFF")
+  currentPrice    Decimal?
+  cost            Decimal?
+  suggestedPrice  Decimal?
+  discountPercent Decimal?
+  /// Snapshot of price before apply (for audit / future revert)
+  previousPrice   Decimal?
+  buyQty          Int?
+  freeQty         Int?
+  pairedProductId String?
+  reason          String?
+  createdAt       DateTime   @default(now())
+
+  @@index([draftId])
+}
+
+model SaleItem {
+  id        String   @id @default(cuid())
+  saleId    String
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Decimal
+  subtotal  Decimal
+  /// الإضافات المختارة للسطر [{key,label,priceDelta}]
+  modifiers Json?
+  lotUsages SaleItemLot[]
+}
+
+/// لوتات المخزون (دفعات استلام منفصلة) لتتبع الصلاحية واستهلاك FEFO
+model InventoryLot {
+  id               String        @id @default(cuid())
+  organizationId   String
+  organization     Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branchId         String
+  branch           Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  inventoryId      String?
+  inventory        Inventory?    @relation(fields: [inventoryId], references: [id], onDelete: SetNull)
+  receivedAt       DateTime      @default(now())
+  expiryDate       DateTime?
+  quantityReceived Int
+  quantityOnHand   Int
+  unitCost         Decimal?
+  note             String?
+  saleItemLots     SaleItemLot[]
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([organizationId, branchId, productId, expiryDate])
+  @@index([organizationId, branchId, productId, quantityOnHand])
+}
+
+/// تتبع أي SaleItem سحب كم كمية من أي Lot
+model SaleItemLot {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  saleItemId     String
+  saleItem       SaleItem     @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  inventoryLotId String
+  inventoryLot   InventoryLot @relation(fields: [inventoryLotId], references: [id], onDelete: Cascade)
+  quantity       Int
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, saleItemId])
+  @@index([inventoryLotId])
+}
+
+/// تتبع قراءة عناصر تغذية التنبيهات (مفتاح مستقر لكل عنصر)
+model NotificationRead {
+  id               String       @id @default(cuid())
+  userId           String
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  notificationKey  String
+  readAt           DateTime     @default(now())
+
+  @@unique([userId, notificationKey])
+  @@index([organizationId])
+}
+
+model SyncSettings {
+  id                     String       @id @default(cuid())
+  organizationId       String       @unique
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  websiteBaseUrl       String?
+  apiKey               String?
+  /// POST JSON عند تغيّر المخزون (Next.js أو أي API) — يُرسل Authorization: Bearer من apiKey إن وُجد
+  inventoryWebhookUrl  String?
+  lastProductSyncAt    DateTime?
+  lastOrderSyncAt      DateTime?
+  lastSupabaseSyncAt   DateTime?
+  updatedAt            DateTime     @updatedAt
+}
