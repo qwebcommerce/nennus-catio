@@ -1,6 +1,6 @@
 # Nennus Catio
 
-Pet store website + POS, forked from the ICODO POS platform.
+Public website and staff tools for Nennus Catio — pet villas, products, and grooming in Qatar.
 
 **Public site (this phase):** single-page marketing site — hero, categories, products, services, contact — with static data and the Nennus Catio palette (`#f6f2e9` cream, `#1e3e2f` forest, `#9cb29a` sage).
 
