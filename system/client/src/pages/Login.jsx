@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { getPostAuthPath } from "../lib/onboardingPath.js";
@@ -93,10 +93,6 @@ export default function Login() {
         <button type="submit" className="mkt-btn mkt-btn-primary mkt-btn-block">
           {t("login.submit")}
         </button>
-        <p className="mkt-auth-link">
-          {c.auth.noAccount}{" "}
-          <Link to="/register">{c.auth.createOne}</Link>
-        </p>
       </form>
     </AuthShell>
   );

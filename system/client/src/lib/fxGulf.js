@@ -78,13 +78,13 @@ const COUNTRY_CURRENCY = Object.fromEntries(
 );
 
 export function normalizeCurrency(code) {
-  const c = String(code || "SAR").trim().toUpperCase();
-  return LOCAL_PER_SAR[c] != null ? c : "SAR";
+  const c = String(code || "QAR").trim().toUpperCase();
+  return LOCAL_PER_SAR[c] != null ? c : "QAR";
 }
 
 export function currencyFromCountry(countryCode) {
-  const mapped = COUNTRY_CURRENCY[String(countryCode || "SA").toUpperCase()];
-  return normalizeCurrency(mapped || "SAR");
+  const mapped = COUNTRY_CURRENCY[String(countryCode || "QA").toUpperCase()];
+  return normalizeCurrency(mapped || "QAR");
 }
 
 export function currencyLabel(code, locale = "ar") {

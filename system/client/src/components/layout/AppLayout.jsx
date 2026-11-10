@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { useI18n } from "../../context/LanguageContext.jsx";
-import { useTheme } from "../../context/ThemeContext.jsx";
 import { useBranchContext } from "../../context/BranchContext.jsx";
 import { formatUserBranchLine, branchDisplayName } from "../../utils/displayLabels.js";
 import { OfflineBanner } from "../OfflineBanner.jsx";
@@ -135,7 +134,6 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
 
 export function AppLayout() {
   const { user, logout, isAdmin, isManager, can } = useAuth();
-  const { isDark } = useTheme();
   const {
     branches,
     activeBranchId,
@@ -143,10 +141,8 @@ export function AppLayout() {
     canSwitchBranch,
   } = useBranchContext();
   const bv = user?.businessVertical;
+  const featureOn = (name) => isAdmin || isVerticalFeatureEnabled(name, bv);
   const { t, locale } = useI18n();
-  const sidebarLogoSrc = isDark
-    ? "/icodo-icon-dark.png?v=3"
-    : "/icodo-sidebar-light.png?v=3";
   const nav = useNavigate();
   const location = useLocation();
   const { count: alertsBadge } = useAlertsBadgeCount();
@@ -173,12 +169,13 @@ export function AppLayout() {
       <aside className="app-sidebar" aria-label={t("nav.brand")}>
         <div className="app-sidebar-header">
           <div className="app-sidebar-brand">
-            <img
-              src={sidebarLogoSrc}
-              alt="Icodo"
-              className={`app-sidebar-logo${isDark ? " app-sidebar-logo--dark" : " app-sidebar-logo--light"}`}
-              decoding="async"
-            />
+            <span className="app-sidebar-avatar" aria-hidden="true">
+              <img src="/brand/logo.png" alt="" />
+            </span>
+            <span className="app-sidebar-word">
+              <strong>Nennus</strong>
+              <span>Catio</span>
+            </span>
           </div>
           {canSwitchBranch ? (
             <div className="app-sidebar-branch">
@@ -228,7 +225,7 @@ export function AppLayout() {
               <span>{t("nav.analytics")}</span>
             </NavLink>
             {(isAdmin || isManager) &&
-            isVerticalFeatureEnabled("ownerBrief", bv) ? (
+            featureOn("ownerBrief", bv) ? (
               <NavLink to="/command-center" className={sidebarLinkClass}>
                 <SidebarIcon name="spark" />
                 <span>{t("nav.commandCenter")}</span>
@@ -269,21 +266,6 @@ export function AppLayout() {
               <span>{t("nav.pos")}</span>
             </NavLink>
           ) : null}
-          {/* Floor associate POS — coming soon (ASSOCIATE role still uses /floor-pos) */}
-          {can("floorPos") ? (
-            <span
-              className="app-sidebar-link"
-              style={{ opacity: 0.55, cursor: "default" }}
-              title={t("common.comingSoon")}
-              aria-disabled="true"
-            >
-              <SidebarIcon name="pos" />
-              <span>
-                {t("nav.floorPos")}{" "}
-                <small style={{ fontWeight: 600 }}>({t("common.comingSoon")})</small>
-              </span>
-            </span>
-          ) : null}
 
           <SidebarNavSection
             sectionId="inventory"
@@ -299,7 +281,7 @@ export function AppLayout() {
                 <span>{t("nav.products")}</span>
               </NavLink>
             ) : null}
-            {can("productsView") && isVerticalFeatureEnabled("lotsExpiry", bv) ? (
+            {can("productsView") && featureOn("lotsExpiry", bv) ? (
               <NavLink to="/inventory-lots" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />
                 <span>{t("nav.lots")}</span>
@@ -317,7 +299,7 @@ export function AppLayout() {
                 <span>{t("nav.purchases")}</span>
               </NavLink>
             ) : null}
-            {can("purchases") && isVerticalFeatureEnabled("stockBrain", bv) ? (
+            {can("purchases") && featureOn("stockBrain", bv) ? (
               <NavLink to="/stock-brain" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />
                 <span>{t("nav.stockBrain")}</span>
@@ -325,7 +307,7 @@ export function AppLayout() {
             ) : null}
             {(isAdmin || isManager) &&
             can("productsEdit") &&
-            isVerticalFeatureEnabled("priceBrain", bv) ? (
+            featureOn("priceBrain", bv) ? (
               <NavLink to="/pricing-brain" className={sidebarLinkClass}>
                 <SidebarIcon name="coupons" />
                 <span>{t("nav.priceBrain")}</span>
@@ -333,7 +315,7 @@ export function AppLayout() {
             ) : null}
             {(isAdmin || isManager) &&
             can("purchases") &&
-            isVerticalFeatureEnabled("costBrain", bv) ? (
+            featureOn("costBrain", bv) ? (
               <NavLink to="/cost-brain" className={sidebarLinkClass}>
                 <SidebarIcon name="purchases" />
                 <span>{t("nav.costBrain")}</span>
@@ -341,7 +323,7 @@ export function AppLayout() {
             ) : null}
             {(isAdmin || isManager) &&
             can("transfer") &&
-            isVerticalFeatureEnabled("stockBalancer", bv) ? (
+            featureOn("stockBalancer", bv) ? (
               <NavLink to="/stock-balancer" className={sidebarLinkClass}>
                 <SidebarIcon name="transfer" />
                 <span>{t("nav.stockBalancer")}</span>
@@ -389,13 +371,13 @@ export function AppLayout() {
             ) : null}
             {(isAdmin || isManager) &&
             can("customers") &&
-            isVerticalFeatureEnabled("customerRfm", bv) ? (
+            featureOn("customerRfm", bv) ? (
               <NavLink to="/customers-brain" className={sidebarLinkClass}>
                 <SidebarIcon name="spark" />
                 <span>{t("nav.customersBrain")}</span>
               </NavLink>
             ) : null}
-            {can("receivables") && isVerticalFeatureEnabled("customerAccounts", bv) ? (
+            {can("receivables") && featureOn("customerAccounts", bv) ? (
               <NavLink to="/customer-accounts" className={sidebarLinkClass}>
                 <SidebarIcon name="accounts" />
                 <span>{t("nav.accounts")}</span>
@@ -407,7 +389,7 @@ export function AppLayout() {
                 <span>{t("nav.coupons")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) && isVerticalFeatureEnabled("appointments", bv) ? (
+            {(isAdmin || isManager) && featureOn("appointments", bv) ? (
               <NavLink to="/appointments" className={sidebarLinkClass}>
                 <SidebarIcon name="appointments" />
                 <span>{t("nav.appointments")}</span>
@@ -435,7 +417,7 @@ export function AppLayout() {
                 <span>{t("nav.zakat")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) && isVerticalFeatureEnabled("appointments", bv) ? (
+            {(isAdmin || isManager) && featureOn("appointments", bv) ? (
               <NavLink to="/commissions" className={sidebarLinkClass}>
                 <SidebarIcon name="commissions" />
                 <span>{t("nav.commissions")}</span>
@@ -471,6 +453,12 @@ export function AppLayout() {
             onToggle={() => toggleNavSection("admin")}
             t={t}
           >
+            {user?.isPlatformAdmin ? (
+              <NavLink to="/platform/organizations" className={sidebarLinkClass}>
+                <SidebarIcon name="admin" />
+                <span>{t("nav.platform")}</span>
+              </NavLink>
+            ) : null}
             {isAdmin ? (
               <NavLink to="/users" className={sidebarLinkClass}>
                 <SidebarIcon name="users" />

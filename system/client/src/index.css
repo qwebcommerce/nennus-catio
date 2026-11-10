@@ -43,20 +43,20 @@
 
 /* الوضع الفاتح */
 [data-theme="light"] {
-  --bg: #f1f5f9;
-  --surface: #ffffff;
-  --surface2: #e2e8f0;
-  --text: #0f172a;
-  --muted: #64748b;
-  --accent: #0284c7;
-  --accent2: #7c3aed;
-  --accent-deep: #0369a1;
+  --bg: #f6f2e9;
+  --surface: #fffcf6;
+  --surface2: #dde5d6;
+  --text: #2a3428;
+  --muted: #5c6b5a;
+  --accent: #1e3e2f;
+  --accent2: #9cb29a;
+  --accent-deep: #152a20;
   --success: #059669;
   --warning: #d97706;
   --danger: #dc2626;
-  --border: rgba(15, 23, 42, 0.12);
-  --chart-grid: #cbd5e1;
-  --login-gradient: radial-gradient(circle at top, #bae6fd, #f1f5f9);
+  --border: rgba(30, 62, 47, 0.14);
+  --chart-grid: #dde5d6;
+  --login-gradient: radial-gradient(circle at top, #dde5d6, #f6f2e9);
   --pay-btn-bg: var(--surface);
   --pay-btn-bg-hover: color-mix(in srgb, var(--surface) 90%, var(--accent) 10%);
   --pay-btn-border: var(--border);
@@ -288,16 +288,16 @@ html:not([data-theme="light"]) .toast--info .toast__icon {
   }
 }
 
-/* ── Premium dashboard (ICODO) ── */
+/* ── Dashboard ── */
 .dash-page {
-  --dash-font: "Poppins", "Tajawal", system-ui, sans-serif;
-  --dash-display: "Poppins", "Tajawal", system-ui, sans-serif;
+  --dash-font: "Manrope", "Tajawal", system-ui, sans-serif;
+  --dash-display: "Cormorant Garamond", "Noto Naskh Arabic", Georgia, serif;
   --dash-radius: 28px;
   --dash-radius-sm: 18px;
-  --dash-ink: #0f172a;
-  --dash-blue: #2563eb;
-  --dash-sky: #38bdf8;
-  --dash-paper: #f8fafc;
+  --dash-ink: #1e3e2f;
+  --dash-blue: #1e3e2f;
+  --dash-sky: #9cb29a;
+  --dash-paper: #fffcf6;
   font-family: var(--dash-font);
   display: flex;
   flex-direction: column;
@@ -463,8 +463,8 @@ html:not([data-theme="light"]) .dash-btn-primary {
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(145deg, #38bdf8, #2563eb);
-  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.28);
+  background: linear-gradient(145deg, #2a5340, #1e3e2f);
+  box-shadow: 0 10px 22px rgba(30, 62, 47, 0.28);
 }
 
 .dash-kpi-icon svg,
@@ -915,7 +915,7 @@ html:not([data-theme="light"]) .dash-btn-primary {
 
 .app-sidebar {
   --sidebar-radius: 12px;
-  --sidebar-accent: #2563eb;
+  --sidebar-accent: #1e3e2f;
   --sidebar-pad: 0.85rem;
   width: 272px;
   flex-shrink: 0;
@@ -947,9 +947,9 @@ html[data-theme="light"] .app-sidebar {
   background:
     linear-gradient(
       180deg,
-      #eef3f9 0%,
-      #f4f7fb 38%,
-      #f7f9fc 100%
+      #fffcf6 0%,
+      #f6f2e9 42%,
+      #f3eee4 100%
     );
 }
 
@@ -976,13 +976,54 @@ html:not([data-theme="light"]) .app-sidebar {
 .app-sidebar-brand {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   width: 100%;
-  gap: 0.5rem;
-  padding: 0.2rem 0;
+  gap: 0.7rem;
+  padding: 0.2rem 0.35rem;
   color: var(--text);
-  line-height: 1.2;
+  line-height: 1;
   min-width: 0;
+}
+
+.app-sidebar-avatar {
+  position: relative;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: none;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid rgba(30, 62, 47, 0.12);
+}
+
+.app-sidebar-avatar img {
+  position: absolute;
+  top: 13%;
+  left: 4%;
+  width: 94%;
+  max-width: none;
+  height: auto;
+}
+
+.app-sidebar-word {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+  font-family: "Cormorant Garamond", Georgia, serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.app-sidebar-word strong {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.app-sidebar-word span {
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0.18em;
 }
 
 .app-sidebar-logo {
@@ -1860,6 +1901,36 @@ a.app-sidebar-link.is-active .app-sidebar-badge {
   margin-top: 8px;
   font-size: 15px;
   font-weight: 700;
+}
+
+.products-table__loading {
+  padding: 28px 12px !important;
+  text-align: center !important;
+  color: var(--muted);
+}
+
+.products-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 8px;
+  border: 2px solid rgba(30, 62, 47, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  vertical-align: -3px;
+  animation: products-spin 0.7s linear infinite;
+}
+
+.products-spinner--light {
+  margin-inline-end: 0;
+  border-color: rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+}
+
+@keyframes products-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .products-table__sub {

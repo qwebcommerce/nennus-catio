@@ -8,6 +8,7 @@ import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
  */
 export function VerticalFeatureGate({ feature, children }) {
   const { user } = useAuth();
+  if (user?.role === "ADMIN") return children;
   if (!isVerticalFeatureEnabled(feature, user?.businessVertical)) {
     return <Navigate to="/dashboard" replace />;
   }

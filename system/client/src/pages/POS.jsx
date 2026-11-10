@@ -400,9 +400,12 @@ export default function POS() {
   }, [softRefreshCatalog]);
 
   const discountRisk = useMemo(() => {
-    if (!showCopilot || discountNum <= 0) return null;
+    if (discountNum <= 0) return null;
     return assessDiscountRiskLocal(cartSubtotal, discountNum, Boolean(discountReason.trim()));
-  }, [showCopilot, discountNum, cartSubtotal, discountReason]);
+  }, [discountNum, cartSubtotal, discountReason]);
+  const needsDiscountReason = Boolean(
+    discountRisk && (discountRisk.pct >= 20 || discountNum >= 50)
+  );
 
   const onScan = useCallback(
     (code) => {
@@ -670,7 +673,7 @@ export default function POS() {
     if (!items.length) return;
     const bid = branchId;
 
-    if (showCopilot && discountRisk && !discountRisk.canProceed) {
+    if (discountRisk && !discountRisk.canProceed) {
       setMsg(t("copilot.discountReasonNeeded", { pct: String(discountRisk.pct) }));
       return;
     }
@@ -770,7 +773,7 @@ export default function POS() {
       if (tableNumber.trim()) body.tableNumber = tableNumber.trim();
       if (orderNote.trim()) body.orderNote = orderNote.trim();
     }
-    if (showCopilot && discountNum > 0 && discountReason.trim()) {
+    if (discountNum > 0 && discountReason.trim()) {
       body.discountReason = discountReason.trim();
     }
     const cTrim = couponInput.trim();
@@ -1492,6 +1495,32 @@ export default function POS() {
                 }}
               />
             </label>
+            {needsDiscountReason ? (
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                  {t("copilot.discountReason")} *
+                </span>
+                <input
+                  type="text"
+                  value={discountReason}
+                  onChange={(e) => setDiscountReason(e.target.value)}
+                  placeholder={t("copilot.discountReasonPh")}
+                  style={{
+                    minHeight: 44,
+                    padding: "0 12px",
+                    borderRadius: 12,
+                    border: "1px solid var(--border)",
+                    background: "var(--bg)",
+                    color: "var(--text)",
+                  }}
+                />
+                {!discountReason.trim() ? (
+                  <span style={{ fontSize: 12, color: "var(--danger)" }}>
+                    {t("copilot.discountReasonNeeded", { pct: String(discountRisk.pct) })}
+                  </span>
+                ) : null}
+              </label>
+            ) : null}
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 14 }}>
               <span>{t("pos.subtotal")}</span>
               <span>

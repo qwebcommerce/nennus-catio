@@ -7,6 +7,7 @@ import { findBranchInOrg } from "../lib/orgScope.js";
 import { normalizeProductModifiers } from "../lib/productModifiers.js";
 import {
   buildProductsExcelBuffer,
+  buildProductSampleExcelBuffer,
   readFirstSheetRows,
   normalizeImportPreviewRows,
   parseYesNo,
@@ -202,7 +203,7 @@ async function resolveCatalogFromExcel(orgId, { categoryName, subcategoryName, s
 }
 
 /** Shared Excel / confirmed-row product upsert + inventory sync. */
-async function runProductImportFromRows({ orgId, branchId, rows }) {
+async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false }) {
   const errors = [];
   let created = 0;
   let updated = 0;
@@ -212,7 +213,12 @@ async function runProductImportFromRows({ orgId, branchId, rows }) {
     const r = rows[i] || {};
     const rowNum = Number(r.rowNum) > 0 ? Number(r.rowNum) : i + 2;
     const name = String(r.name ?? "").trim();
-    if (!name) continue;
+    const nameEn = String(r.nameEn ?? "").trim();
+    if (!name && !nameEn) continue;
+    if (!name || !nameEn) {
+      errors.push({ row: rowNum, message: "English and Arabic names are required" });
+      continue;
+    }
 
     const priceNum = parseNumber(r.price);
     if (priceNum === null || priceNum < 0) {
@@ -225,10 +231,16 @@ async function runProductImportFromRows({ orgId, branchId, rows }) {
     const sku = r.sku != null && String(r.sku).trim() ? String(r.sku).trim() : null;
     const barcode = r.barcode != null && String(r.barcode).trim() ? String(r.barcode).trim() : null;
     const petType = parsePetType(r.petType);
-    const isActive = parseYesNo(r.isActive);
+    const isActive = asDraft ? false : parseYesNo(r.isActive);
     const stockQty = Math.max(0, Math.floor(parseNumber(r.stockQty) ?? 0));
     const minStock = Math.max(0, Math.floor(parseNumber(r.minStock) ?? 5));
     const expDate = parseExpiryCell(r.expiryDate);
+    const imageRaw = r.imageUrl != null ? String(r.imageUrl).trim() : "";
+    const imageUrl =
+      imageRaw && (/^https?:\/\/\S+/i.test(imageRaw) || imageRaw.startsWith("/")) ? imageRaw : null;
+    const height = optionalDimension(r.heightCm);
+    const width = optionalDimension(r.widthCm);
+    const depth = optionalDimension(r.depthCm);
 
     const catalog = await resolveCatalogFromExcel(orgId, {
       categoryName: r.category,
@@ -238,11 +250,16 @@ async function runProductImportFromRows({ orgId, branchId, rows }) {
 
     const baseData = {
       name,
-      nameEn: r.nameEn != null && String(r.nameEn).trim() ? String(r.nameEn).trim() : null,
-      description:
-        r.description != null && String(r.description).trim()
-          ? String(r.description).trim()
-          : null,
+      nameEn,
+      description: cleanOptionalText(r.description),
+      descriptionEn: cleanOptionalText(r.descriptionEn),
+      shortTitle: cleanOptionalText(r.shortTitle),
+      shortTitleEn: cleanOptionalText(r.shortTitleEn),
+      heightCm: height.ok ? height.value : null,
+      widthCm: width.ok ? width.value : null,
+      depthCm: depth.ok ? depth.value : null,
+      features: cleanOptionalText(r.features),
+      featuresEn: cleanOptionalText(r.featuresEn),
       sku: catalog.sku,
       barcode,
       price: new Prisma.Decimal(priceNum),
@@ -253,7 +270,7 @@ async function runProductImportFromRows({ orgId, branchId, rows }) {
       category: catalog.category,
       categoryId: catalog.categoryId,
       subcategoryId: catalog.subcategoryId,
-      imageUrl: r.imageUrl != null && String(r.imageUrl).trim() ? String(r.imageUrl).trim() : null,
+      ...(imageUrl ? { imageUrl } : {}),
       isActive,
       expiryDate: expDate,
       expiryAlertDaysBefore: null,
@@ -343,10 +360,12 @@ const isSqlite = () => {
 };
 
 router.get("/", async (req, res) => {
-  const { search, petType, branchId, page, pageSize, includeInactive } = req.query;
+  const { search, petType, branchId, page, pageSize, includeInactive, status } = req.query;
   const where = { organizationId: req.user.organizationId };
-  const showInactive = includeInactive === "1" || includeInactive === "true";
-  if (!showInactive) where.isActive = true;
+  const statusFilter = String(status || "").trim().toLowerCase();
+  if (statusFilter === "draft") where.isActive = false;
+  else if (statusFilter === "published") where.isActive = true;
+  else if (!(includeInactive === "1" || includeInactive === "true")) where.isActive = true;
   const ins = isSqlite() ? {} : { mode: "insensitive" };
   if (search) {
     const q = String(search);
@@ -490,6 +509,20 @@ router.get("/generate-barcode", requireRole("ADMIN", "MANAGER"), async (req, res
   }
 });
 
+router.get("/import/excel/sample", requireRole("ADMIN", "MANAGER"), async (_req, res, next) => {
+  try {
+    const buffer = buildProductSampleExcelBuffer();
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", 'attachment; filename="products-sample.xlsx"');
+    res.send(buffer);
+  } catch (e) {
+    next(e);
+  }
+});
+
 router.get("/export/excel", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
   try {
     const orgId = req.user.organizationId;
@@ -597,6 +630,7 @@ router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req
       orgId,
       branchId,
       rows,
+      asDraft: req.body?.asDraft === true,
     });
 
     if (touchedProductIds.size > 0) {
@@ -755,6 +789,43 @@ router.get("/:id/lots", async (req, res) => {
   res.json({ product, branchId, lots });
 });
 
+function cleanOptionalText(value) {
+  const s = value == null ? "" : String(value).trim();
+  return s || null;
+}
+
+function optionalDimension(value) {
+  if (value == null || String(value).trim() === "") return { ok: true, value: null };
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return { ok: false };
+  return { ok: true, value: new Prisma.Decimal(n) };
+}
+
+function catalogFieldsFromBody(body) {
+  const fields = {};
+  if ("shortTitle" in body) fields.shortTitle = cleanOptionalText(body.shortTitle);
+  if ("shortTitleEn" in body) fields.shortTitleEn = cleanOptionalText(body.shortTitleEn);
+  if ("description" in body) fields.description = cleanOptionalText(body.description);
+  if ("descriptionEn" in body) fields.descriptionEn = cleanOptionalText(body.descriptionEn);
+  if ("features" in body) fields.features = cleanOptionalText(body.features);
+  if ("featuresEn" in body) fields.featuresEn = cleanOptionalText(body.featuresEn);
+  for (const key of ["heightCm", "widthCm", "depthCm"]) {
+    if (!(key in body)) continue;
+    const dim = optionalDimension(body[key]);
+    if (!dim.ok) {
+      return { error: "Height, width, and depth must be zero or a positive number" };
+    }
+    fields[key] = dim.value;
+  }
+  if ("status" in body) {
+    const status = String(body.status || "").trim().toLowerCase();
+    if (status === "draft" || status === "published") {
+      fields.isActive = status === "published";
+    }
+  }
+  return { fields };
+}
+
 router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("productsEdit"), async (req, res) => {
   const {
     name,
@@ -776,10 +847,12 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     modifiers: modifiersRaw,
   } = req.body || {};
   if (!nameEn?.trim()) return res.status(400).json({ error: "English product name is required" });
+  if (!name?.trim()) return res.status(400).json({ error: "Arabic product name is required" });
   if (!categoryId) return res.status(400).json({ error: "Category is required" });
   const imageTrim = imageUrl != null ? String(imageUrl).trim() : "";
-  if (!imageTrim) return res.status(400).json({ error: "Image URL is required" });
-  if (!/^https?:\/\/\S+/i.test(imageTrim) && !imageTrim.startsWith("/")) {
+  const isDraft = String((req.body || {}).status || "").trim().toLowerCase() === "draft";
+  if (!imageTrim && !isDraft) return res.status(400).json({ error: "Image URL is required" });
+  if (imageTrim && !/^https?:\/\/\S+/i.test(imageTrim) && !imageTrim.startsWith("/")) {
     return res.status(400).json({ error: "Image URL must be http(s) or a path starting with /" });
   }
   const nameLocal = name?.trim() || "";
@@ -814,6 +887,8 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
   }
 
   const modifiers = normalizeProductModifiers(modifiersRaw);
+  const catalogCopy = catalogFieldsFromBody(req.body || {});
+  if (catalogCopy.error) return res.status(400).json({ error: catalogCopy.error });
 
   const barcodeTrim = barcode?.trim() || null;
   try {
@@ -832,7 +907,16 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
           organizationId: req.user.organizationId,
           name: nameLocal || nameEn.trim(),
           nameEn: nameEn.trim(),
-          description: description?.trim() || null,
+          description: catalogCopy.fields.description,
+          descriptionEn: catalogCopy.fields.descriptionEn,
+          shortTitle: catalogCopy.fields.shortTitle,
+          shortTitleEn: catalogCopy.fields.shortTitleEn,
+          heightCm: catalogCopy.fields.heightCm,
+          widthCm: catalogCopy.fields.widthCm,
+          depthCm: catalogCopy.fields.depthCm,
+          features: catalogCopy.fields.features,
+          featuresEn: catalogCopy.fields.featuresEn,
+          isActive: catalogCopy.fields.isActive !== false,
           sku: catalog.sku,
           barcode: barcodeTrim,
           price: new Prisma.Decimal(priceNum),
@@ -850,7 +934,7 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
           category: catalog.category,
           categoryId: catalog.categoryId,
           subcategoryId: catalog.subcategoryId,
-          imageUrl: imageTrim,
+          imageUrl: imageTrim || null,
           expiryDate,
           expiryAlertDaysBefore: null,
           ...(modifiers ? { modifiers } : {}),
@@ -933,9 +1017,27 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
     update.nameEn = String(data.nameEn).trim();
   }
   if (data.name !== undefined) {
-    update.name = String(data.name || "").trim();
+    if (!String(data.name || "").trim()) {
+      return res.status(400).json({ error: "Arabic product name is required" });
+    }
+    update.name = String(data.name).trim();
   }
-  if (data.description !== undefined) update.description = data.description?.trim() || null;
+  if (
+    data.description !== undefined ||
+    data.descriptionEn !== undefined ||
+    data.shortTitle !== undefined ||
+    data.shortTitleEn !== undefined ||
+    data.heightCm !== undefined ||
+    data.widthCm !== undefined ||
+    data.depthCm !== undefined ||
+    data.features !== undefined ||
+    data.featuresEn !== undefined ||
+    data.status !== undefined
+  ) {
+    const catalogCopy = catalogFieldsFromBody(data);
+    if (catalogCopy.error) return res.status(400).json({ error: catalogCopy.error });
+    Object.assign(update, catalogCopy.fields);
+  }
   if (data.barcode !== undefined) update.barcode = data.barcode?.trim() || null;
   if (data.price != null) update.price = new Prisma.Decimal(Number(data.price));
   if (data.cost !== undefined) {
@@ -955,11 +1057,12 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
   }
   if (data.imageUrl !== undefined) {
     const img = data.imageUrl != null ? String(data.imageUrl).trim() : "";
-    if (!img) return res.status(400).json({ error: "Image URL is required" });
-    if (!/^https?:\/\/\S+/i.test(img) && !img.startsWith("/")) {
+    const isDraft = String(data.status || "").trim().toLowerCase() === "draft";
+    if (!img && !isDraft) return res.status(400).json({ error: "Image URL is required" });
+    if (img && !/^https?:\/\/\S+/i.test(img) && !img.startsWith("/")) {
       return res.status(400).json({ error: "Image URL must be http(s) or a path starting with /" });
     }
-    update.imageUrl = img;
+    update.imageUrl = img || null;
   }
   if (data.externalId !== undefined) update.externalId = data.externalId?.trim() || null;
   if (data.brandId !== undefined) update.brandId = data.brandId || null;
@@ -1078,13 +1181,29 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
   }
 });
 
+async function deleteStoredProductImages(tx, orgId, product) {
+  const imageId = extractProductImageId(product?.imageUrl);
+  await tx.productImage.deleteMany({
+    where: {
+      organizationId: orgId,
+      OR: [
+        { productId: product.id },
+        ...(imageId ? [{ id: imageId }] : []),
+      ],
+    },
+  });
+}
+
 router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
   try {
     const existing = await prisma.product.findFirst({
       where: { id: req.params.id, organizationId: req.user.organizationId },
     });
     if (!existing) return res.status(404).json({ error: "المنتج غير موجود" });
-    await prisma.product.delete({ where: { id: existing.id } });
+    await prisma.$transaction(async (tx) => {
+      await deleteStoredProductImages(tx, req.user.organizationId, existing);
+      await tx.product.delete({ where: { id: existing.id } });
+    });
     await writeAudit({
       userId: req.user.sub,
       action: "PRODUCT_DELETE",

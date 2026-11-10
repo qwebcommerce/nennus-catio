@@ -4,7 +4,7 @@
  */
 export function getPostAuthPath(user) {
   if (!user) return "/login";
-  if (user.isPlatformAdmin) return "/platform/analytics";
+  if (user.isPlatformAdmin) return "/dashboard";
   if (user.role === "ASSOCIATE") return "/floor-pos";
 
   if (isOnboardingComplete(user)) return "/dashboard";

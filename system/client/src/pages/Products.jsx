@@ -10,31 +10,28 @@ import { BarcodeLabelPrint } from "../components/BarcodeLabelPrint.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 
-function todayISO() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
 function emptyProductForm() {
   return {
     name: "",
     nameEn: "",
     price: "",
-    wholesalePrice: "",
-    cost: "",
     categoryId: "",
     subcategoryId: "",
     imageUrl: "",
+    shortTitle: "",
+    shortTitleEn: "",
+    description: "",
+    descriptionEn: "",
+    heightCm: "",
+    widthCm: "",
+    depthCm: "",
+    features: "",
+    featuresEn: "",
+    status: "draft",
     sku: "",
     barcode: "",
-    initialStock: "",
-    minStockLevel: "",
-    expiryDate: todayISO(),
-    /** @type {{ key: string, label: string, labelAr: string, priceDelta: string }[]} */
-    modifiers: [],
+    stock: "",
+    minStockLevel: "5",
   };
 }
 
@@ -44,6 +41,7 @@ export default function Products() {
   const { showToast } = useToast();
   const { classFor } = usePrintSettings();
   const [list, setList] = useState([]);
+  const [listLoading, setListLoading] = useState(true);
   const [printProduct, setPrintProduct] = useState(null);
   const [printBarcodeCode, setPrintBarcodeCode] = useState("");
   const [low, setLow] = useState([]);
@@ -63,6 +61,7 @@ export default function Products() {
   const [total, setTotal] = useState(0);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [excelBusy, setExcelBusy] = useState(false);
   const [importRows, setImportRows] = useState(null); // null | array
   const [importBusy, setImportBusy] = useState(false);
@@ -74,7 +73,6 @@ export default function Products() {
   const activeBranchId = useActiveBranchId();
   const canEditProducts = can("productsEdit");
   const showLots = isVerticalFeatureEnabled("lotsExpiry", user?.businessVertical);
-  const showCafeModifiers = isVerticalFeatureEnabled("cafePosExtras", user?.businessVertical);
 
   const catalogLabel = (row) => {
     if (!row) return "";
@@ -97,27 +95,33 @@ export default function Products() {
   };
 
   const load = async () => {
-    const bid = activeBranchId;
-    const qs = new URLSearchParams();
-    if (bid) qs.set("branchId", bid);
-    if (search) qs.set("search", search);
-    qs.set("includeInactive", "1");
-    qs.set("page", String(page));
-    qs.set("pageSize", String(pageSize));
-    qs.set("paginate", "1");
-    const q = qs.toString() ? `?${qs.toString()}` : "";
-    const [res, l] = await Promise.all([
-      api(`/api/products${q}`),
-      api(`/api/inventory/low-stock${bid ? `?branchId=${bid}` : ""}`),
-    ]);
-    if (res && Array.isArray(res.items)) {
-      setList(res.items);
-      setTotal(res.total ?? 0);
-    } else {
-      setList(Array.isArray(res) ? res : []);
-      setTotal(Array.isArray(res) ? res.length : 0);
+    setListLoading(true);
+    try {
+      const bid = activeBranchId;
+      const qs = new URLSearchParams();
+      if (bid) qs.set("branchId", bid);
+      if (search) qs.set("search", search);
+      if (statusFilter === "draft" || statusFilter === "published") qs.set("status", statusFilter);
+      qs.set("includeInactive", "1");
+      qs.set("page", String(page));
+      qs.set("pageSize", String(pageSize));
+      qs.set("paginate", "1");
+      const q = qs.toString() ? `?${qs.toString()}` : "";
+      const [res, l] = await Promise.all([
+        api(`/api/products${q}`),
+        api(`/api/inventory/low-stock${bid ? `?branchId=${bid}` : ""}`),
+      ]);
+      if (res && Array.isArray(res.items)) {
+        setList(res.items);
+        setTotal(res.total ?? 0);
+      } else {
+        setList(Array.isArray(res) ? res : []);
+        setTotal(Array.isArray(res) ? res.length : 0);
+      }
+      setLow(l);
+    } finally {
+      setListLoading(false);
     }
-    setLow(l);
   };
 
   useEffect(() => {
@@ -141,7 +145,7 @@ export default function Products() {
 
   useEffect(() => {
     load().catch(() => {});
-  }, [activeBranchId, page, pageSize, search]);
+  }, [activeBranchId, page, pageSize, search, statusFilter]);
 
   const closeFormModal = () => {
     setFormMode(null);
@@ -158,30 +162,30 @@ export default function Products() {
   };
 
   const openEditModal = (p) => {
-    const mods = Array.isArray(p.modifiers)
-      ? p.modifiers.map((m) => ({
-          key: String(m.key || ""),
-          label: String(m.label || ""),
-          labelAr: String(m.labelAr || ""),
-          priceDelta: String(m.priceDelta ?? "0"),
-        }))
-      : [];
-    const inv = Array.isArray(p.inventories) ? p.inventories[0] : null;
+    const inv = Array.isArray(p.inventories)
+      ? p.inventories.find((row) => !activeBranchId || row.branchId === activeBranchId) || p.inventories[0]
+      : null;
     setForm({
       name: p.name && p.nameEn && p.name === p.nameEn ? "" : p.name || "",
       nameEn: p.nameEn || "",
       price: String(p.price ?? ""),
-      wholesalePrice: p.wholesalePrice != null ? String(p.wholesalePrice) : "",
-      cost: p.cost != null ? String(p.cost) : "",
       categoryId: p.categoryId || "",
       subcategoryId: p.subcategoryId || "",
       imageUrl: p.imageUrl || "",
+      shortTitle: p.shortTitle || "",
+      shortTitleEn: p.shortTitleEn || "",
+      description: p.description || "",
+      descriptionEn: p.descriptionEn || "",
+      heightCm: p.heightCm != null ? String(p.heightCm) : "",
+      widthCm: p.widthCm != null ? String(p.widthCm) : "",
+      depthCm: p.depthCm != null ? String(p.depthCm) : "",
+      features: p.features || "",
+      featuresEn: p.featuresEn || "",
+      status: p.isActive === false ? "draft" : "published",
       sku: p.sku || "",
       barcode: p.barcode || "",
-      initialStock: "",
+      stock: inv?.quantity != null ? String(inv.quantity) : "",
       minStockLevel: inv?.minStockLevel != null ? String(inv.minStockLevel) : "5",
-      expiryDate: p.expiryDate ? String(p.expiryDate).slice(0, 10) : todayISO(),
-      modifiers: mods,
     });
     setEditId(p.id);
     setFormError("");
@@ -190,29 +194,29 @@ export default function Products() {
 
   const validateProductFields = (data) => {
     const nameEn = String(data.nameEn || "").trim();
+    const nameAr = String(data.name || "").trim();
     if (!nameEn || nameEn.length < 2) return t("products.nameEnRequired");
-    if (data.name && String(data.name).trim().length > 120) return t("products.errNameLong");
+    if (!nameAr) return t("products.nameArRequired");
+    if (nameAr.length > 120 || nameEn.length > 120) return t("products.errNameLong");
     const price = Number(data.price);
     if (data.price === "" || Number.isNaN(price) || price < 0) return t("products.errPrice");
-    if (data.cost !== "" && data.cost != null) {
-      const c = Number(data.cost);
-      if (Number.isNaN(c) || c < 0) return t("products.errCost");
-    }
-    if (data.wholesalePrice !== "" && data.wholesalePrice != null) {
-      const w = Number(data.wholesalePrice);
-      if (Number.isNaN(w) || w < 0) return t("products.errWholesale");
-    }
     if (!data.categoryId) return t("products.categoryRequired");
-    const img = String(data.imageUrl || "").trim();
-    if (!img) return t("products.imageRequired");
-    if (!/^https?:\/\/\S+/i.test(img) && !img.startsWith("/")) return t("products.errImageUrl");
-    if (data.initialStock != null && data.initialStock !== "") {
-      const s = Number(data.initialStock);
-      if (Number.isNaN(s) || s < 0 || !Number.isInteger(s)) return t("products.errStock");
+    for (const key of ["heightCm", "widthCm", "depthCm"]) {
+      if (data[key] === "" || data[key] == null) continue;
+      const n = Number(data[key]);
+      if (Number.isNaN(n) || n < 0) return t("products.errDimension");
     }
-    if (data.minStockLevel != null && data.minStockLevel !== "") {
-      const m = Number(data.minStockLevel);
-      if (Number.isNaN(m) || m < 0 || !Number.isInteger(m)) return t("products.errMinStock");
+    const img = String(data.imageUrl || "").trim();
+    const publishing = data.status === "published";
+    if (publishing && !img) return t("products.imageRequired");
+    if (img && !/^https?:\/\/\S+/i.test(img) && !img.startsWith("/")) return t("products.errImageUrl");
+    if (data.stock !== "" && data.stock != null) {
+      const stock = Number(data.stock);
+      if (Number.isNaN(stock) || stock < 0 || !Number.isInteger(stock)) return t("products.errStock");
+    }
+    if (data.minStockLevel !== "" && data.minStockLevel != null) {
+      const threshold = Number(data.minStockLevel);
+      if (Number.isNaN(threshold) || threshold < 0 || !Number.isInteger(threshold)) return t("products.errMinStock");
     }
     return "";
   };
@@ -227,16 +231,28 @@ export default function Products() {
     }
     setFormBusy(true);
     try {
-      const modifiersPayload = showCafeModifiers
-        ? (form.modifiers || [])
-            .map((m) => ({
-              key: String(m.key || "").trim(),
-              label: String(m.label || m.key || "").trim(),
-              labelAr: String(m.labelAr || "").trim() || null,
-              priceDelta: Number(String(m.priceDelta).replace(",", ".")) || 0,
-            }))
-            .filter((m) => m.key)
-        : undefined;
+      const catalogBody = {
+        name: form.name.trim(),
+        nameEn: form.nameEn.trim(),
+        price: Number(form.price),
+        categoryId: form.categoryId || null,
+        subcategoryId: form.subcategoryId || null,
+        imageUrl: String(form.imageUrl || "").trim(),
+        shortTitle: form.shortTitle.trim(),
+        shortTitleEn: form.shortTitleEn.trim(),
+        description: form.description.trim(),
+        descriptionEn: form.descriptionEn.trim(),
+        heightCm: form.heightCm,
+        widthCm: form.widthCm,
+        depthCm: form.depthCm,
+        features: form.features,
+        featuresEn: form.featuresEn,
+        status: form.status === "published" ? "published" : "draft",
+        sku: form.sku || null,
+        barcode: form.barcode.trim() || null,
+      };
+      const stockQty = form.stock === "" ? 0 : Number(form.stock);
+      const stockThreshold = form.minStockLevel === "" ? 5 : Number(form.minStockLevel);
       if (formMode === "create") {
         const bid = activeBranchId;
         if (!bid) {
@@ -246,49 +262,24 @@ export default function Products() {
         await api("/api/products", {
           method: "POST",
           body: {
-            name: form.name?.trim() || "",
-            nameEn: form.nameEn.trim(),
-            price: Number(form.price),
-            wholesalePrice: form.wholesalePrice === "" ? null : Number(form.wholesalePrice),
-            cost: form.cost === "" ? null : Number(form.cost),
-            categoryId: form.categoryId || null,
-            subcategoryId: form.subcategoryId || null,
-            sku: form.sku || null,
-            barcode: form.barcode || null,
-            imageUrl: form.imageUrl.trim(),
+            ...catalogBody,
             branchId: bid,
             petType: "OTHER",
-            initialStock: form.initialStock === "" ? 0 : Number(form.initialStock),
-            minStockLevel: form.minStockLevel === "" ? 5 : Number(form.minStockLevel),
-            expiryDate: form.expiryDate?.trim() || null,
-            ...(modifiersPayload !== undefined ? { modifiers: modifiersPayload } : {}),
+            initialStock: stockQty,
+            minStockLevel: stockThreshold,
           },
         });
         showToast(t("products.toastCreated"), "success");
       } else if (formMode === "edit" && editId) {
         await api(`/api/products/${editId}`, {
           method: "PATCH",
-          body: {
-            name: form.name?.trim() || "",
-            nameEn: form.nameEn.trim(),
-            price: Number(form.price),
-            wholesalePrice: form.wholesalePrice === "" ? null : Number(form.wholesalePrice),
-            cost: form.cost === "" ? null : Number(form.cost),
-            expiryDate: form.expiryDate === "" ? null : form.expiryDate,
-            petType: "OTHER",
-            categoryId: form.categoryId || null,
-            subcategoryId: form.subcategoryId || null,
-            imageUrl: String(form.imageUrl || "").trim(),
-            sku: form.sku || null,
-            barcode: form.barcode,
-            ...(modifiersPayload !== undefined ? { modifiers: modifiersPayload } : {}),
-          },
+          body: catalogBody,
         });
         const bid = activeBranchId;
-        if (bid && form.minStockLevel !== "" && form.minStockLevel != null) {
+        if (bid) {
           await api(`/api/inventory/${editId}/${bid}`, {
             method: "PATCH",
-            body: { minStockLevel: Number(form.minStockLevel) },
+            body: { quantity: stockQty, minStockLevel: stockThreshold },
           });
         }
         showToast(t("products.toastUpdated"), "success");
@@ -327,6 +318,20 @@ export default function Products() {
     }
   };
 
+  const generateBarcode = async () => {
+    try {
+      const qs =
+        formMode === "edit" && editId
+          ? `?excludeProductId=${encodeURIComponent(editId)}`
+          : "";
+      const { barcode: code } = await api(`/api/products/generate-barcode${qs}`);
+      setForm((current) => ({ ...current, barcode: code }));
+      showToast(t("products.toastBarcode"), "success");
+    } catch (e) {
+      showToast(e?.message || t("products.generateBarcodeFailed"), "error");
+    }
+  };
+
   const idsOnPage = list.map((p) => p.id);
   const allSelectedOnPage =
     idsOnPage.length > 0 && idsOnPage.every((id) => selectedIds.includes(id));
@@ -335,20 +340,6 @@ export default function Products() {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
-  };
-
-  const generateBarcode = async () => {
-    try {
-      const qs =
-        formMode === "edit" && editId
-          ? `?excludeProductId=${encodeURIComponent(editId)}`
-          : "";
-      const { barcode: b } = await api(`/api/products/generate-barcode${qs}`);
-      setForm((f) => ({ ...f, barcode: b }));
-      showToast(t("products.toastBarcode"), "success");
-    } catch (e) {
-      showToast(e?.message || t("products.generateBarcodeFailed"), "error");
-    }
   };
 
   const printBarcode = (p) => {
@@ -452,12 +443,20 @@ export default function Products() {
 
   const pages = Math.max(1, Math.ceil(total / pageSize) || 1);
 
-  const fmtExpiry = (iso) => {
-    if (!iso) return "—";
+  const downloadSampleExcel = async () => {
+    setExcelBusy(true);
     try {
-      return new Date(iso).toLocaleDateString(locale === "en" ? "en-GB" : "ar-SA");
-    } catch {
-      return "—";
+      const blob = await apiBlob("/api/products/import/excel/sample");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "products-sample.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      showToast(e.message || "Download failed", "error");
+    } finally {
+      setExcelBusy(false);
     }
   };
 
@@ -528,7 +527,7 @@ export default function Products() {
     try {
       const r = await api(`/api/products/import/excel/confirm?branchId=${encodeURIComponent(activeBranchId)}`, {
         method: "POST",
-        body: { rows: importRows, branchId: activeBranchId },
+        body: { rows: importRows, branchId: activeBranchId, asDraft: true },
       });
       const msg = t("products.excelResult", {
         created: r.created ?? 0,
@@ -574,6 +573,27 @@ export default function Products() {
             color: "var(--text)",
           }}
         />
+        <select
+          value={statusFilter}
+          aria-label={t("products.statusFilter")}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+          style={{
+            minHeight: 44,
+            minWidth: 160,
+            padding: "0.55rem 0.85rem",
+            borderRadius: "var(--radius)",
+            border: "1px solid var(--border)",
+            background: "var(--surface)",
+            color: "var(--text)",
+          }}
+        >
+          <option value="all">{t("products.statusAll")}</option>
+          <option value="draft">{t("products.draft")}</option>
+          <option value="published">{t("products.published")}</option>
+        </select>
         {canEditProducts ? (
           <button
             type="button"
@@ -591,6 +611,15 @@ export default function Products() {
           <strong>{t("products.excelTitle")}</strong>
           <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>{t("products.excelHint")}</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+            <button
+              type="button"
+              className="btn-touch"
+              disabled={excelBusy}
+              onClick={downloadSampleExcel}
+              style={{ background: "var(--surface2)", color: "var(--text)", minHeight: 44 }}
+            >
+              {t("products.excelSample")}
+            </button>
             <button
               type="button"
               className="btn-touch"
@@ -712,17 +741,30 @@ export default function Products() {
               <th className="products-table__name">{t("products.name")}</th>
               <th>{t("products.sku")}</th>
               <th>{t("products.category")}</th>
-              <th className="products-table__num">{t("products.colPurchase")}</th>
               <th className="products-table__num">{t("products.colRetail")}</th>
-              <th className="products-table__num">{t("products.colWholesale")}</th>
-              <th>{t("products.colExpiry")}</th>
               <th className="products-table__num">{t("products.colStock")}</th>
               <th>{t("products.colStatus")}</th>
               <th className="products-table__actions">{t("products.colActions")}</th>
             </tr>
           </thead>
           <tbody>
-            {list.map((p) => {
+            {listLoading ? (
+              <tr>
+                <td colSpan={canEditProducts ? 9 : 8} className="products-table__loading">
+                  <span className="products-spinner" aria-hidden="true" />
+                  {t("products.loading")}
+                </td>
+              </tr>
+            ) : null}
+            {!listLoading && list.length === 0 ? (
+              <tr>
+                <td colSpan={canEditProducts ? 9 : 8} className="products-table__loading">
+                  {t("products.empty")}
+                </td>
+              </tr>
+            ) : null}
+            {!listLoading
+              ? list.map((p) => {
               const inv = p.inventories?.[0];
               return (
                 <tr key={p.id}>
@@ -748,12 +790,7 @@ export default function Products() {
                       <div className="products-table__sub">{catalogLabel(p.productSubcategory)}</div>
                     ) : null}
                   </td>
-                  <td className="products-table__num">{p.cost != null ? Number(p.cost).toFixed(2) : "—"}</td>
                   <td className="products-table__num">{Number(p.price).toFixed(2)}</td>
-                  <td className="products-table__num">
-                    {p.wholesalePrice != null ? Number(p.wholesalePrice).toFixed(2) : "—"}
-                  </td>
-                  <td>{fmtExpiry(p.expiryDate)}</td>
                   <td className="products-table__num">{inv?.quantity ?? t("common.none")}</td>
                   <td>{p.isActive ? t("products.statusActive") : t("products.statusInactive")}</td>
                   <td className="products-table__actions">
@@ -805,7 +842,8 @@ export default function Products() {
                   </td>
                 </tr>
               );
-            })}
+            })
+              : null}
           </tbody>
         </table>
         <div
@@ -901,69 +939,59 @@ export default function Products() {
               }}
               className="product-form-grid"
             >
-              <label style={fld}>
-                <span>{t("products.nameEnField")} *</span>
+              <label style={{ ...fld, gridColumn: "1 / -1" }}>
+                <span>
+                  {t("products.imageFile")}
+                  {form.status === "published" ? " *" : ""}
+                </span>
                 <input
+                  ref={imageFileRef}
                   style={inp}
-                  required
-                  minLength={2}
-                  maxLength={120}
-                  value={form.nameEn}
-                  onChange={(e) => setForm({ ...form, nameEn: e.target.value })}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  disabled={formBusy || imageUploading}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    if (file.size > 2 * 1024 * 1024) {
+                      setFormError(t("products.imageTooLarge"));
+                      return;
+                    }
+                    setFormError("");
+                    setImageUploading(true);
+                    try {
+                      const res = await apiUploadImage(
+                        "/api/products/upload-image",
+                        file,
+                        formMode === "edit" && editId ? { productId: editId } : {}
+                      );
+                      if (!res?.url) throw new Error(t("products.imageUploadFailed"));
+                      setForm((f) => ({ ...f, imageUrl: res.url }));
+                      showToast(t("products.imageUploaded"), "success");
+                    } catch (err) {
+                      setFormError(err.message || t("products.imageUploadFailed"));
+                    } finally {
+                      setImageUploading(false);
+                    }
+                  }}
                 />
+                <span style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                  {imageUploading ? t("products.imageUploading") : t("products.imageFileHint")}
+                </span>
               </label>
-              <label style={fld}>
-                <span>{t("products.nameLocalOptional")}</span>
-                <input
-                  style={inp}
-                  maxLength={120}
-                  value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
-                />
-              </label>
-              <label style={fld}>
-                <span>{t("products.purchasePrice")}</span>
-                <input
-                  style={inp}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={form.cost}
-                  onChange={(e) => setForm({ ...form, cost: e.target.value })}
-                />
-              </label>
-              <label style={fld}>
-                <span>{t("products.retailPrice")} *</span>
-                <input
-                  style={inp}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  required
-                  value={form.price}
-                  onChange={(e) => setForm({ ...form, price: e.target.value })}
-                />
-              </label>
-              <label style={fld}>
-                <span>{t("products.wholesalePrice")}</span>
-                <input
-                  style={inp}
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={form.wholesalePrice}
-                  onChange={(e) => setForm({ ...form, wholesalePrice: e.target.value })}
-                />
-              </label>
-              <label style={fld}>
-                <span>{t("products.expiryDate")}</span>
-                <input
-                  style={inp}
-                  type="date"
-                  value={form.expiryDate}
-                  onChange={(e) => setForm({ ...form, expiryDate: e.target.value })}
-                />
-              </label>
+              {String(form.imageUrl || "").trim() ? (
+                <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "flex-start", gap: 12 }}>
+                  <ProductImagePreview url={form.imageUrl} alt="" width={140} height={140} />
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, imageUrl: "" }))}
+                    style={{ ...btnSm, background: "var(--surface2)" }}
+                  >
+                    {t("products.removeImage")}
+                  </button>
+                </div>
+              ) : null}
               <label style={fld}>
                 <span>{t("products.category")} *</span>
                 <select
@@ -1037,176 +1065,161 @@ export default function Products() {
                   ) : null}
                 </div>
               </label>
-              {formMode === "create" ? (
-                <label style={fld}>
-                  <span>{t("products.initialStock")}</span>
-                  <input
-                    style={inp}
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={form.initialStock}
-                    onChange={(e) => setForm({ ...form, initialStock: e.target.value })}
-                  />
-                </label>
-              ) : null}
               <label style={fld}>
-                <span>{t("products.minLevel")}</span>
+                <span>{t("products.stockValue")}</span>
+                <input
+                  style={inp}
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={form.stock}
+                  disabled={formMode === "edit" && !activeBranchId}
+                  onChange={(e) => setForm({ ...form, stock: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.stockThreshold")}</span>
                 <input
                   style={inp}
                   type="number"
                   min={0}
                   step={1}
                   value={form.minStockLevel}
-                  onChange={(e) => setForm({ ...form, minStockLevel: e.target.value })}
                   disabled={formMode === "edit" && !activeBranchId}
+                  onChange={(e) => setForm({ ...form, minStockLevel: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.nameEnField")} *</span>
+                <input
+                  style={inp}
+                  required
+                  minLength={2}
+                  maxLength={120}
+                  value={form.nameEn}
+                  onChange={(e) => setForm({ ...form, nameEn: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.nameArField")} *</span>
+                <input
+                  style={inp}
+                  required
+                  maxLength={120}
+                  dir="rtl"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.price")} *</span>
+                <input
+                  style={inp}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  required
+                  value={form.price}
+                  onChange={(e) => setForm({ ...form, price: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.status")}</span>
+                <select
+                  style={inp}
+                  value={form.status}
+                  onChange={(e) => setForm({ ...form, status: e.target.value })}
+                >
+                  <option value="draft">{t("products.draft")}</option>
+                  <option value="published">{t("products.published")}</option>
+                </select>
+              </label>
+              <label style={fld}>
+                <span>{t("products.shortTitleEn")}</span>
+                <input
+                  style={inp}
+                  maxLength={160}
+                  value={form.shortTitleEn}
+                  onChange={(e) => setForm({ ...form, shortTitleEn: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.shortTitleAr")}</span>
+                <input
+                  style={inp}
+                  maxLength={160}
+                  dir="rtl"
+                  value={form.shortTitle}
+                  onChange={(e) => setForm({ ...form, shortTitle: e.target.value })}
                 />
               </label>
               <label style={{ ...fld, gridColumn: "1 / -1" }}>
-                <span>{t("products.imageFile")} *</span>
-                <input
-                  ref={imageFileRef}
-                  style={inp}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  disabled={formBusy || imageUploading}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (!file) return;
-                    if (file.size > 2 * 1024 * 1024) {
-                      setFormError(t("products.imageTooLarge"));
-                      return;
-                    }
-                    setFormError("");
-                    setImageUploading(true);
-                    try {
-                      const res = await apiUploadImage(
-                        "/api/products/upload-image",
-                        file,
-                        formMode === "edit" && editId ? { productId: editId } : {}
-                      );
-                      if (!res?.url) throw new Error(t("products.imageUploadFailed"));
-                      setForm((f) => ({ ...f, imageUrl: res.url }));
-                      showToast(t("products.imageUploaded"), "success");
-                    } catch (err) {
-                      setFormError(err.message || t("products.imageUploadFailed"));
-                    } finally {
-                      setImageUploading(false);
-                    }
-                  }}
+                <span>{t("products.descriptionEn")}</span>
+                <textarea
+                  style={{ ...inp, minHeight: 88, resize: "vertical" }}
+                  value={form.descriptionEn}
+                  onChange={(e) => setForm({ ...form, descriptionEn: e.target.value })}
                 />
-                <span style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                  {imageUploading ? t("products.imageUploading") : t("products.imageFileHint")}
-                </span>
               </label>
-              {String(form.imageUrl || "").trim() ? (
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <span style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 8 }}>
-                    {t("products.imagePreview")}
-                  </span>
-                  <ProductImagePreview url={form.imageUrl} alt="" width={140} height={140} />
-                </div>
-              ) : null}
-              {showCafeModifiers ? (
-                <div style={{ gridColumn: "1 / -1", display: "grid", gap: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <strong style={{ fontSize: 14 }}>{t("products.modifiersTitle")}</strong>
-                    <button
-                      type="button"
-                      className="btn-touch"
-                      style={{ background: "var(--surface2)", maxWidth: 180 }}
-                      onClick={() =>
-                        setForm({
-                          ...form,
-                          modifiers: [
-                            ...(form.modifiers || []),
-                            { key: "", label: "", labelAr: "", priceDelta: "0" },
-                          ],
-                        })
-                      }
-                    >
-                      {t("products.addModifier")}
-                    </button>
-                  </div>
-                  <p style={{ margin: 0, fontSize: 12, color: "var(--muted)" }}>
-                    {t("products.modifiersHint")}
-                  </p>
-                  {(form.modifiers || []).map((m, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-                        gap: 8,
-                        alignItems: "end",
-                      }}
-                    >
-                      <label style={fld}>
-                        <span>{t("products.modKey")}</span>
-                        <input
-                          style={inp}
-                          value={m.key}
-                          onChange={(e) => {
-                            const modifiers = [...form.modifiers];
-                            modifiers[idx] = { ...modifiers[idx], key: e.target.value };
-                            setForm({ ...form, modifiers });
-                          }}
-                        />
-                      </label>
-                      <label style={fld}>
-                        <span>{t("products.modLabelEn")}</span>
-                        <input
-                          style={inp}
-                          value={m.label}
-                          onChange={(e) => {
-                            const modifiers = [...form.modifiers];
-                            modifiers[idx] = { ...modifiers[idx], label: e.target.value };
-                            setForm({ ...form, modifiers });
-                          }}
-                        />
-                      </label>
-                      <label style={fld}>
-                        <span>{t("products.modLabelAr")}</span>
-                        <input
-                          style={inp}
-                          value={m.labelAr}
-                          onChange={(e) => {
-                            const modifiers = [...form.modifiers];
-                            modifiers[idx] = { ...modifiers[idx], labelAr: e.target.value };
-                            setForm({ ...form, modifiers });
-                          }}
-                        />
-                      </label>
-                      <label style={fld}>
-                        <span>{t("products.modDelta")}</span>
-                        <input
-                          style={inp}
-                          type="number"
-                          step="0.01"
-                          value={m.priceDelta}
-                          onChange={(e) => {
-                            const modifiers = [...form.modifiers];
-                            modifiers[idx] = { ...modifiers[idx], priceDelta: e.target.value };
-                            setForm({ ...form, modifiers });
-                          }}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        className="btn-touch"
-                        style={{ background: "var(--danger)", color: "#fff", maxWidth: 100 }}
-                        onClick={() => {
-                          const modifiers = form.modifiers.filter((_, i) => i !== idx);
-                          setForm({ ...form, modifiers });
-                        }}
-                      >
-                        {t("common.delete")}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+              <label style={{ ...fld, gridColumn: "1 / -1" }}>
+                <span>{t("products.descriptionAr")}</span>
+                <textarea
+                  style={{ ...inp, minHeight: 88, resize: "vertical" }}
+                  dir="rtl"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.height")}</span>
+                <input
+                  style={inp}
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={form.heightCm}
+                  onChange={(e) => setForm({ ...form, heightCm: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.width")}</span>
+                <input
+                  style={inp}
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={form.widthCm}
+                  onChange={(e) => setForm({ ...form, widthCm: e.target.value })}
+                />
+              </label>
+              <label style={fld}>
+                <span>{t("products.depth")}</span>
+                <input
+                  style={inp}
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={form.depthCm}
+                  onChange={(e) => setForm({ ...form, depthCm: e.target.value })}
+                />
+              </label>
+              <label style={{ ...fld, gridColumn: "1 / -1" }}>
+                <span>{t("products.featuresEn")}</span>
+                <textarea
+                  style={{ ...inp, minHeight: 96, resize: "vertical" }}
+                  value={form.featuresEn}
+                  onChange={(e) => setForm({ ...form, featuresEn: e.target.value })}
+                />
+              </label>
+              <label style={{ ...fld, gridColumn: "1 / -1" }}>
+                <span>{t("products.featuresAr")}</span>
+                <textarea
+                  style={{ ...inp, minHeight: 96, resize: "vertical" }}
+                  dir="rtl"
+                  value={form.features}
+                  onChange={(e) => setForm({ ...form, features: e.target.value })}
+                />
+              </label>
             </div>
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
@@ -1223,9 +1236,22 @@ export default function Products() {
                 type="submit"
                 className="btn-touch"
                 disabled={formBusy}
-                style={{ background: "var(--accent)", color: "#fff" }}
+                aria-busy={formBusy}
+                style={{
+                  background: "var(--accent)",
+                  color: "#fff",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
               >
-                {formMode === "edit" ? t("common.save") : t("products.saveProduct")}
+                {formBusy ? <span className="products-spinner products-spinner--light" aria-hidden="true" /> : null}
+                {formBusy
+                  ? t("products.saving")
+                  : formMode === "edit"
+                    ? t("common.save")
+                    : t("products.saveProduct")}
               </button>
             </div>
           </form>
@@ -1302,15 +1328,17 @@ export default function Products() {
                     <th style={thCell}>{t("products.name")}</th>
                     <th style={thCell}>SKU</th>
                     <th style={thCell}>{t("products.category")}</th>
+                    <th style={thCell}>{t("products.barcode")}</th>
                     <th style={thCell}>{t("products.colRetail")}</th>
                     <th style={thCell}>{t("products.colStock")}</th>
+                    <th style={thCell}>{t("products.status")}</th>
                     <th style={thCell}>{t("products.colActions")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {importRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ padding: 24, textAlign: "center", color: "var(--muted)" }}>
+                      <td colSpan={9} style={{ padding: 24, textAlign: "center", color: "var(--muted)" }}>
                         {t("products.excelNoRows")}
                       </td>
                     </tr>
@@ -1320,7 +1348,7 @@ export default function Products() {
                         key={row.key}
                         style={{
                           borderTop: "1px solid var(--border)",
-                          background: row.invalidPrice
+                          background: row.invalidPrice || row.invalidName
                             ? "color-mix(in srgb, #dc2626 8%, transparent)"
                             : undefined,
                         }}
@@ -1331,6 +1359,9 @@ export default function Products() {
                           {row.nameEn && row.name && row.name !== row.nameEn ? (
                             <div style={{ color: "var(--muted)", fontSize: 12 }}>{row.name}</div>
                           ) : null}
+                          {row.invalidName ? (
+                            <div style={{ color: "var(--danger)", fontSize: 12 }}>{t("products.excelInvalidName")}</div>
+                          ) : null}
                           {row.invalidPrice ? (
                             <div style={{ color: "var(--danger)", fontSize: 12 }}>{t("products.excelInvalidPrice")}</div>
                           ) : null}
@@ -1339,8 +1370,10 @@ export default function Products() {
                         <td style={tdCell}>
                           {[row.category, row.subcategory].filter(Boolean).join(" / ") || "—"}
                         </td>
+                        <td style={tdCell}>{row.barcode || "—"}</td>
                         <td style={tdCell}>{row.price === "" || row.price == null ? "—" : row.price}</td>
                         <td style={tdCell}>{row.stockQty === "" || row.stockQty == null ? "—" : row.stockQty}</td>
+                        <td style={tdCell}>{t("products.draft")}</td>
                         <td style={tdCell}>
                           <button
                             type="button"
@@ -1371,11 +1404,22 @@ export default function Products() {
               <button
                 type="button"
                 className="btn-touch"
-                disabled={importBusy || importRows.length === 0}
-                style={{ background: "var(--accent)", color: "#fff" }}
+                disabled={
+                  importBusy ||
+                  importRows.length === 0 ||
+                  importRows.some((row) => row.invalidPrice || row.invalidName)
+                }
+                style={{
+                  background: "var(--accent)",
+                  color: "#fff",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
                 onClick={submitImportRows}
               >
-                {importBusy ? t("common.loading") : t("products.excelSubmitImport")}
+                {importBusy ? <span className="products-spinner products-spinner--light" aria-hidden="true" /> : null}
+                {importBusy ? t("products.saving") : t("products.excelSaveDrafts")}
               </button>
             </div>
           </div>

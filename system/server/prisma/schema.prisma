@@ -970,7 +970,17 @@ model Product {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
   nameEn         String?
+  shortTitle     String?
+  shortTitleEn   String?
   description    String?
+  descriptionEn  String?
+  /// Centimetres. Optional.
+  heightCm       Decimal?
+  widthCm        Decimal?
+  depthCm        Decimal?
+  /// One feature per line.
+  features       String?
+  featuresEn     String?
   sku            String?
   barcode        String?
   price            Decimal

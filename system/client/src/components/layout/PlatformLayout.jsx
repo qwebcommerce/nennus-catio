@@ -3,12 +3,11 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { useTheme } from "../../context/ThemeContext.jsx";
 import { useI18n } from "../../context/LanguageContext.jsx";
-import { IcodoLogo } from "../../marketing/IcodoLogo.jsx";
 
 /** Platform admin console — English only for now. */
 export default function PlatformLayout() {
   const { logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { toggleTheme, theme } = useTheme();
   const { t, locale, setLocale } = useI18n();
   const nav = useNavigate();
 
@@ -21,14 +20,19 @@ export default function PlatformLayout() {
       <aside className="app-sidebar" aria-label={t("platform.title")}>
         <div className="app-sidebar-header">
           <div className="app-sidebar-brand">
-            <IcodoLogo
-              variant={theme === "light" ? "light" : "dark"}
-              width={148}
-              className="app-sidebar-logo"
-            />
+            <span className="app-sidebar-avatar" aria-hidden="true">
+              <img src="/brand/logo.png" alt="" />
+            </span>
+            <span className="app-sidebar-word">
+              <strong>Nennus</strong>
+              <span>Catio</span>
+            </span>
           </div>
         </div>
         <nav className="app-sidebar-nav">
+          <NavLink to="/dashboard" className={({ isActive }) => `app-sidebar-link${isActive ? " is-active" : ""}`}>
+            {t("nav.dashboard")}
+          </NavLink>
           <NavLink to="/platform/analytics" className={({ isActive }) => `app-sidebar-link${isActive ? " is-active" : ""}`}>
             {t("platform.analytics")}
           </NavLink>

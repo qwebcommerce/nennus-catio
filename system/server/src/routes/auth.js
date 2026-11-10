@@ -49,28 +49,26 @@ router.post("/register-organization", async (req, res, next) => {
       return res.status(401).json({ error: "رمز التسجيل غير صحيح" });
     }
 
-    const businessVertical = normalizeBusinessVertical(businessVerticalRaw, {
-      required: true,
-      mvpOnly: true,
-    });
-    if (!businessVertical) {
-      return res.status(400).json({
-        error:
-          "اختر مجال نشاط مدعوماً حالياً: بقالة، صيدلية، أو مقهى / Choose a supported type: grocery, pharmacy, or café",
-      });
-    }
-    const name = organizationName != null ? String(organizationName).trim() : "";
+    const businessVertical =
+      normalizeBusinessVertical(businessVerticalRaw, {
+        required: false,
+        mvpOnly: false,
+      }) || "PET_STORE";
+    const name =
+      organizationName != null && String(organizationName).trim()
+        ? String(organizationName).trim()
+        : "Nennus Catio";
     const slugRaw =
-      organizationSlug != null ? String(organizationSlug).trim().toLowerCase() : "";
-    if (!name) return res.status(400).json({ error: "اسم الشركة مطلوب" });
-    if (!slugRaw) return res.status(400).json({ error: "رمز المؤسسة (slug) مطلوب" });
+      organizationSlug != null && String(organizationSlug).trim()
+        ? String(organizationSlug).trim().toLowerCase()
+        : "nennus-catio";
     if (!SLUG_RE.test(slugRaw)) {
       return res.status(400).json({
         error: "الرمز يجب أن يكون أحرفاً صغيرة وأرقاماً وشرطات فقط (مثل ezoo أو my-store)",
       });
     }
     if (!adminEmail?.trim() || !adminPassword || !adminName?.trim()) {
-      return res.status(400).json({ error: "البريد واسم المدير وكلمة المرور مطلوبة" });
+      return res.status(400).json({ error: "الاسم والبريد وكلمة المرور مطلوبة" });
     }
     if (String(adminPassword).length < 6) {
       return res.status(400).json({ error: "كلمة المرور يجب أن تكون 6 أحرف على الأقل" });
@@ -87,11 +85,12 @@ router.post("/register-organization", async (req, res, next) => {
     const result = await bootstrapOrganization(prisma, {
       organizationName: name,
       organizationSlug: slugRaw,
-      branchName,
+      branchName: branchName || "Main",
       adminEmail: emailNorm,
       adminPassword,
       adminName,
       businessVertical,
+      onboardingComplete: true,
     });
 
     const token = signToken({

@@ -5,14 +5,14 @@ import { currencyLabel, normalizeCurrency } from "./fxGulf.js";
 
 /**
  * Tenant display currency from org tax pack / country.
- * Falls back to SAR when unset (legacy sessions).
+ * Falls back to QAR when unset.
  */
 export function useOrgCurrency() {
   const { user } = useAuth();
   const { locale } = useI18n();
 
   return useMemo(() => {
-    const code = normalizeCurrency(user?.tax?.currency || "SAR");
+    const code = normalizeCurrency(user?.tax?.currency || "QAR");
     const label =
       (locale === "en" ? user?.tax?.currencyLabelEn : user?.tax?.currencyLabelAr) ||
       currencyLabel(code, locale);

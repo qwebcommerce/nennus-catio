@@ -28,7 +28,7 @@ export function packForCountry(countryCode) {
       labelAr: pack.labelAr,
     };
   }
-  return TAX_PACKS.SA || TAX_PACKS.QA;
+  return TAX_PACKS.QA || TAX_PACKS.SA;
 }
 
 export function currencyLabel(currency, locale = "ar") {
@@ -65,14 +65,14 @@ export function currencyLabel(currency, locale = "ar") {
     SGD: { ar: "S$", en: "SGD" },
     AUD: { ar: "A$", en: "AUD" },
   };
-  const code = String(currency || "SAR").toUpperCase();
+  const code = String(currency || "QAR").toUpperCase();
   const row = map[code] || { ar: code, en: code };
   return locale === "en" ? row.en : row.ar;
 }
 
 export function summarizeTaxSettings(row, org = null) {
   const rate = Number(row?.standardRate ?? 0);
-  const currency = row?.currency || "SAR";
+  const currency = row?.currency || "QAR";
   return {
     enabled: row?.enabled !== false,
     countryCode: row?.countryCode || "SA",
@@ -99,7 +99,7 @@ export async function getOrCreateTaxSettings(prismaClient, organizationId) {
     where: { id: organizationId },
     select: { country: true },
   });
-  const pack = packForCountry(org?.country || "SA");
+  const pack = packForCountry(org?.country || "QA");
   return prismaClient.organizationTaxSettings.create({
     data: {
       organizationId,

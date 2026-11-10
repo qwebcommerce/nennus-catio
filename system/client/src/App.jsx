@@ -5,7 +5,6 @@ import { useI18n } from "./context/LanguageContext.jsx";
 import { AppLayout } from "./components/layout/AppLayout.jsx";
 import { VerticalFeatureGate } from "./components/VerticalFeatureGate.jsx";
 import Login from "./pages/Login.jsx";
-import Register from "./pages/Register.jsx";
 import { MarketingLayout } from "./marketing/MarketingLayout.jsx";
 import Home from "./pages/marketing/Home.jsx";
 import OnboardingProfile from "./pages/onboarding/OnboardingProfile.jsx";
@@ -90,10 +89,6 @@ function Protected({ children, roles, permission, anyPermission }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  // Platform operators stay in the platform console — not a tenant POS session.
-  if (user.isPlatformAdmin) {
-    return <Navigate to="/platform/analytics" replace />;
-  }
   // Floor associates only use /floor-pos
   if (user.role === "ASSOCIATE") {
     return <Navigate to="/floor-pos" replace />;
@@ -127,7 +122,6 @@ function ProtectedFloor({ children }) {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  if (user.isPlatformAdmin) return <Navigate to="/platform/analytics" replace />;
   if (user.role === "ASSOCIATE") return children;
   if (!isOnboardingComplete(user)) return <Navigate to={getPostAuthPath(user)} replace />;
   if (user.role === "ADMIN" || can("floorPos") || can("pos")) return children;
@@ -227,7 +221,7 @@ export default function App() {
           <Route path="/contact" element={<Navigate to="/#contact" replace />} />
         </Route>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/register" element={<Navigate to="/login" replace />} />
         <Route
           path="/onboarding/profile"
           element={

@@ -30,7 +30,7 @@ export function buildReceiptPlainText(sale, branchName, locale, taxInfo) {
   const loc = locale === "en" ? "en-US" : "ar-SA";
   const cur =
     (locale === "en" ? taxInfo?.currencyLabelEn || taxInfo?.currency : taxInfo?.currencyLabelAr) ||
-    (locale === "en" ? "SAR" : "ر.س");
+    (locale === "en" ? "QAR" : "ر.ق");
   const lines = [];
   lines.push(locale === "en" ? "SALES INVOICE" : "فاتورة بيع");
   lines.push("---");
