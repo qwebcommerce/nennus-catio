@@ -16,6 +16,8 @@ const servingClient =
   process.env.SERVE_CLIENT === "1" ||
   fs.existsSync(clientIndex);
 
+export default app;
+
 if (!isVercel) {
   app.listen(port, () => {
     console.log(`API: http://localhost:${port}`);

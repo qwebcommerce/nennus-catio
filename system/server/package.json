@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
+    "build": "prisma generate",
     "db:generate": "prisma generate",
     "db:generate:clean": "node scripts/prisma-generate-clean.mjs",
     "db:validate": "prisma validate",
