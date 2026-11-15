@@ -1,10 +1,18 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireRole, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use((req, res, next) => requireModule("warehouses", req.method === "GET" ? "view" : "edit")(req, res, next));
+
+const LOCATION_KINDS = new Set(["WAREHOUSE", "SHOP", "VAN"]);
+
+function locationKind(value, fallback = "SHOP") {
+  const kind = String(value || "").trim().toUpperCase();
+  return LOCATION_KINDS.has(kind) ? kind : fallback;
+}
 
 router.get("/", async (req, res) => {
   const branches = await prisma.branch.findMany({
@@ -15,7 +23,7 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/", requireRole("ADMIN"), async (req, res) => {
-  const { name, nameEn, address } = req.body || {};
+  const { name, nameEn, address, kind, isActive } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ error: "Branch name is required", code: "BRANCH_NAME_REQUIRED" });
 
   const org = await prisma.organization.findUnique({
@@ -42,6 +50,8 @@ router.post("/", requireRole("ADMIN"), async (req, res) => {
       name: name.trim(),
       nameEn: nameEn?.trim() || null,
       address: address?.trim() || null,
+      kind: locationKind(kind),
+      isActive: isActive === false ? false : true,
     },
   });
   await writeAudit({
@@ -57,7 +67,7 @@ router.post("/", requireRole("ADMIN"), async (req, res) => {
 });
 
 router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
-  const { name, nameEn, address, supabaseId } = req.body || {};
+  const { name, nameEn, address, supabaseId, kind, isActive } = req.body || {};
   const existing = await prisma.branch.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -66,6 +76,8 @@ router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
     ...(name != null && { name: String(name).trim() }),
     ...(nameEn !== undefined && { nameEn: nameEn?.trim() || null }),
     ...(address !== undefined && { address: address?.trim() || null }),
+    ...(kind !== undefined && { kind: locationKind(kind, existing.kind || "SHOP") }),
+    ...(isActive !== undefined && { isActive: isActive !== false }),
   };
   if (supabaseId !== undefined) {
     const s = supabaseId != null && String(supabaseId).trim() ? String(supabaseId).trim() : null;

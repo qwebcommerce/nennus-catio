@@ -299,6 +299,54 @@ export function AppLayout() {
                 <span>{t("nav.purchases")}</span>
               </NavLink>
             ) : null}
+            {can("purchases") ? (
+              <NavLink to="/purchase-orders" className={sidebarLinkClass}>
+                <SidebarIcon name="purchases" />
+                <span>{t("po.title")}</span>
+              </NavLink>
+            ) : null}
+            {can("productsView") ? (
+              <NavLink to="/online-orders" className={sidebarLinkClass}>
+                <SidebarIcon name="products" />
+                <span>{t("shop.staffOrders")}</span>
+              </NavLink>
+            ) : null}
+            {(isAdmin || isManager) ? (
+              <NavLink to="/promotions" className={sidebarLinkClass}>
+                <SidebarIcon name="coupons" />
+                <span>{t("shop.promotions")}</span>
+              </NavLink>
+            ) : null}
+            {(isAdmin || isManager) ? (
+              <NavLink to="/finance" className={sidebarLinkClass}>
+                <SidebarIcon name="purchases" />
+                <span>{t("shop.finance")}</span>
+              </NavLink>
+            ) : null}
+            {(isAdmin || isManager) ? (
+              <NavLink to="/vehicles" className={sidebarLinkClass}>
+                <SidebarIcon name="inventory" />
+                <span>{t("shop.vehicles")}</span>
+              </NavLink>
+            ) : null}
+            {(isAdmin || isManager) ? (
+              <NavLink to="/grooming" className={sidebarLinkClass}>
+                <SidebarIcon name="categories" />
+                <span>{t("shop.grooming")}</span>
+              </NavLink>
+            ) : null}
+            {(isAdmin || isManager) ? (
+              <NavLink to="/relocation" className={sidebarLinkClass}>
+                <SidebarIcon name="categories" />
+                <span>{t("shop.relocation")}</span>
+              </NavLink>
+            ) : null}
+            {can("catalogEdit") ? (
+              <NavLink to="/pet-types" className={sidebarLinkClass}>
+                <SidebarIcon name="categories" />
+                <span>{t("shop.catalogueSetup")}</span>
+              </NavLink>
+            ) : null}
             {can("purchases") && featureOn("stockBrain", bv) ? (
               <NavLink to="/stock-brain" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />

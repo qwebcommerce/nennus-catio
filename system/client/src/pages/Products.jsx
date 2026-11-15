@@ -32,6 +32,15 @@ function emptyProductForm() {
     barcode: "",
     stock: "",
     minStockLevel: "5",
+    sellBy: "PIECE",
+    petTypeIds: [],
+    galleryText: "",
+    variants: [],
+    preferredSupplierId: "",
+    isPetHouse: false,
+    leadTimeDays: "",
+    houseDeliveryFee: "0",
+    takesStock: true,
   };
 }
 
@@ -41,6 +50,8 @@ export default function Products() {
   const { showToast } = useToast();
   const { classFor } = usePrintSettings();
   const [list, setList] = useState([]);
+  const [petTypes, setPetTypes] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [listLoading, setListLoading] = useState(true);
   const [printProduct, setPrintProduct] = useState(null);
   const [printBarcodeCode, setPrintBarcodeCode] = useState("");
@@ -141,6 +152,8 @@ export default function Products() {
 
   useEffect(() => {
     loadCatalog().catch(() => {});
+    api("/api/pet-types").then(setPetTypes).catch(() => setPetTypes([]));
+    api("/api/suppliers").then(setSuppliers).catch(() => setSuppliers([]));
   }, []);
 
   useEffect(() => {
@@ -186,6 +199,25 @@ export default function Products() {
       barcode: p.barcode || "",
       stock: inv?.quantity != null ? String(inv.quantity) : "",
       minStockLevel: inv?.minStockLevel != null ? String(inv.minStockLevel) : "5",
+      sellBy: p.sellBy || "PIECE",
+      petTypeIds: Array.isArray(p.petLinks) ? p.petLinks.map((link) => link.petTypeId || link.petType?.id).filter(Boolean) : [],
+      galleryText: Array.isArray(p.gallery) ? p.gallery.join("\n") : "",
+      preferredSupplierId: p.preferredSupplierId || "",
+      isPetHouse: p.isPetHouse === true,
+      leadTimeDays: p.leadTimeDays != null ? String(p.leadTimeDays) : "",
+      houseDeliveryFee: p.houseDeliveryFee != null ? String(p.houseDeliveryFee) : "0",
+      takesStock: p.takesStock !== false,
+      variants: Array.isArray(p.variants)
+        ? p.variants.map((v) => ({
+            id: v.id,
+            label: v.label || "",
+            labelEn: v.labelEn || "",
+            sku: v.sku || "",
+            price: String(v.price ?? ""),
+            packWeight: v.packWeight != null ? String(v.packWeight) : "",
+            isActive: v.isActive !== false,
+          }))
+        : [],
     });
     setEditId(p.id);
     setFormError("");
@@ -250,6 +282,28 @@ export default function Products() {
         status: form.status === "published" ? "published" : "draft",
         sku: form.sku || null,
         barcode: form.barcode.trim() || null,
+        sellBy: form.sellBy || "PIECE",
+        preferredSupplierId: form.preferredSupplierId || null,
+        isPetHouse: Boolean(form.isPetHouse),
+        leadTimeDays: form.leadTimeDays,
+        houseDeliveryFee: form.houseDeliveryFee,
+        takesStock: form.takesStock !== false,
+        petTypeIds: form.petTypeIds || [],
+        gallery: String(form.galleryText || "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean),
+        variants: (form.variants || [])
+          .filter((v) => String(v.label || v.labelEn || "").trim() && v.price !== "")
+          .map((v) => ({
+            id: v.id,
+            label: v.label || v.labelEn,
+            labelEn: v.labelEn,
+            sku: v.sku || null,
+            price: Number(v.price),
+            packWeight: v.packWeight === "" ? null : Number(v.packWeight),
+            isActive: v.isActive !== false,
+          })),
       };
       const stockQty = form.stock === "" ? 0 : Number(form.stock);
       const stockThreshold = form.minStockLevel === "" ? 5 : Number(form.minStockLevel);
@@ -1123,6 +1177,129 @@ export default function Products() {
                   onChange={(e) => setForm({ ...form, price: e.target.value })}
                 />
               </label>
+              <label style={fld}>
+                <span>{t("po.supplier")}</span>
+                <select style={inp} value={form.preferredSupplierId || ""} onChange={(e) => setForm({ ...form, preferredSupplierId: e.target.value })}>
+                  <option value="">—</option>
+                  {suppliers.filter((row) => row.isActive !== false).map((row) => (
+                    <option key={row.id} value={row.id}>{row.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={fld}>
+                <span>{t("shop.petHouse")}</span>
+                <input type="checkbox" checked={Boolean(form.isPetHouse)} onChange={(e) => setForm({ ...form, isPetHouse: e.target.checked })} />
+              </label>
+              {form.isPetHouse ? (
+                <>
+                  <label style={fld}>
+                    <span>{t("shop.leadTime")}</span>
+                    <input style={inp} type="number" min="0" value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })} />
+                  </label>
+                  <label style={fld}>
+                    <span>{t("shop.houseFee")}</span>
+                    <input style={inp} type="number" min="0" step="0.01" value={form.houseDeliveryFee} onChange={(e) => setForm({ ...form, houseDeliveryFee: e.target.value })} />
+                  </label>
+                  <label style={fld}>
+                    <span>{t("shop.takesStock")}</span>
+                    <input type="checkbox" checked={form.takesStock !== false} onChange={(e) => setForm({ ...form, takesStock: e.target.checked })} />
+                  </label>
+                </>
+              ) : null}
+              <label style={fld}>
+                <span>{t("products.sellBy")}</span>
+                <select style={inp} value={form.sellBy || "PIECE"} onChange={(e) => setForm({ ...form, sellBy: e.target.value })}>
+                  <option value="PIECE">{t("products.sellPiece")}</option>
+                  <option value="WEIGHT">{t("products.sellWeight")}</option>
+                </select>
+              </label>
+              <label style={fld}>
+                <span>{t("products.petTypes")}</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {petTypes.filter((row) => row.isActive !== false).map((row) => (
+                    <label key={row.id} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={(form.petTypeIds || []).includes(row.id)}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            petTypeIds: e.target.checked
+                              ? [...(f.petTypeIds || []), row.id]
+                              : (f.petTypeIds || []).filter((id) => id !== row.id),
+                          }))
+                        }
+                      />
+                      <span>{locale === "en" ? row.nameEn || row.name : row.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </label>
+              <label style={fld}>
+                <span>{t("products.gallery")}</span>
+                <textarea
+                  style={{ ...inp, minHeight: 72 }}
+                  value={form.galleryText || ""}
+                  onChange={(e) => setForm({ ...form, galleryText: e.target.value })}
+                  placeholder={t("products.galleryHint")}
+                />
+              </label>
+              <div style={fld}>
+                <span>{t("products.variants")}</span>
+                {(form.variants || []).map((variant, index) => (
+                  <div key={variant.id || index} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 6, marginTop: 6 }}>
+                    <input
+                      style={inp}
+                      placeholder={t("products.variantLabel")}
+                      value={variant.label}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          variants: f.variants.map((row, i) => (i === index ? { ...row, label: e.target.value } : row)),
+                        }))
+                      }
+                    />
+                    <input
+                      style={inp}
+                      placeholder={t("products.variantLabelEn")}
+                      value={variant.labelEn}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          variants: f.variants.map((row, i) => (i === index ? { ...row, labelEn: e.target.value } : row)),
+                        }))
+                      }
+                    />
+                    <input
+                      style={inp}
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      placeholder={t("products.price")}
+                      value={variant.price}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          variants: f.variants.map((row, i) => (i === index ? { ...row, price: e.target.value } : row)),
+                        }))
+                      }
+                    />
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn-touch"
+                  style={{ background: "var(--surface2)", marginTop: 8 }}
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      variants: [...(f.variants || []), { label: "", labelEn: "", sku: "", price: f.price || "", packWeight: "", isActive: true }],
+                    }))
+                  }
+                >
+                  {t("products.addVariant")}
+                </button>
+              </div>
               <label style={fld}>
                 <span>{t("products.status")}</span>
                 <select

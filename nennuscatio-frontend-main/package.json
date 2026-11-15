@@ -1,0 +1,20 @@
+{
+  "name": "nennuscatio-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.12.0 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @nennus-catio/web dev",
+    "build": "pnpm --filter @nennus-catio/web build",
+    "start": "pnpm --filter @nennus-catio/web start",
+    "lint": "pnpm --filter @nennus-catio/web lint",
+    "typecheck": "pnpm --filter @nennus-catio/web typecheck",
+    "test": "pnpm --filter @nennus-catio/web test",
+    "check": "pnpm contracts:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "contracts:build": "pnpm --filter @nennus-catio/contracts build",
+    "contracts:check": "pnpm --filter @nennus-catio/contracts check"
+  }
+}

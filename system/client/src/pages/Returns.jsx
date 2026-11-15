@@ -4,13 +4,10 @@ import { api } from "../api/client.js";
 import { useOffline } from "../context/OfflineContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import {
-  applyOfflineRefundToInventory,
   hydrateInventoryFromProducts,
   loadProductsForBranch,
   saveProductsForBranch,
 } from "../offline/cache.js";
-import { getOrCreateDeviceId, SYNC_TYPES } from "../offline/db.js";
-import { enqueue } from "../offline/syncQueue.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 
 const inp = {
@@ -24,12 +21,13 @@ const inp = {
 export default function Returns() {
   const { t } = useI18n();
   const location = useLocation();
-  const { refreshPending, online } = useOffline();
+  const { online } = useOffline();
   const branchId = useActiveBranchId();
   const [products, setProducts] = useState([]);
   const [lines, setLines] = useState([{ productId: "", quantity: "1" }]);
   const [saleId, setSaleId] = useState("");
   const [note, setNote] = useState("");
+  const [restock, setRestock] = useState(true);
   const [list, setList] = useState([]);
   const [msg, setMsg] = useState("");
 
@@ -108,28 +106,7 @@ export default function Returns() {
     }
     try {
       if (typeof navigator !== "undefined" && !navigator.onLine) {
-        const cached = await loadProductsForBranch(bid);
-        if (cached.length === 0) {
-          setMsg(t("offline.needCache"));
-          return;
-        }
-        const clientMutationId = crypto.randomUUID();
-        const deviceId = await getOrCreateDeviceId();
-        const body = {
-          branchId: bid,
-          saleId: saleId.trim() || undefined,
-          note: note.trim() || undefined,
-          items,
-          clientMutationId,
-          deviceId,
-        };
-        await enqueue(SYNC_TYPES.REFUND, clientMutationId, body);
-        await applyOfflineRefundToInventory(bid, items);
-        await refreshPending();
-        setLines([{ productId: "", quantity: "1" }]);
-        setSaleId("");
-        setNote("");
-        setMsg(t("offline.savedLocal"));
+        setMsg(t("pos.offlineBlocked"));
         return;
       }
       await api("/api/refunds", {
@@ -139,6 +116,7 @@ export default function Returns() {
           saleId: saleId.trim() || undefined,
           note: note.trim() || undefined,
           items,
+          restock,
         },
       });
       setLines([{ productId: "", quantity: "1" }]);
@@ -213,6 +191,10 @@ export default function Returns() {
             </button>
           </div>
         ))}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14 }}>
+          <input type="checkbox" checked={restock} onChange={(e) => setRestock(e.target.checked)} />
+          <span>{t("returns.restock")}</span>
+        </label>
         <button
           type="button"
           className="btn-touch"

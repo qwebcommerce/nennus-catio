@@ -5,8 +5,12 @@ import { writeAudit } from "../lib/auditLog.js";
 import {
   DEFAULT_CASHIER_PERMISSIONS,
   DEFAULT_MANAGER_PERMISSIONS,
+  MODULES,
+  MODULE_ACTIONS,
+  defaultModuleMap,
   normalizePermissionMap,
   orgPermissionMatrices,
+  resolveModulePermissions,
 } from "../lib/permissions.js";
 
 const router = Router();
@@ -23,6 +27,12 @@ router.get("/", async (req, res) => {
     plan: org.plan || "FREE",
     maxBranches: org.maxBranches ?? 3,
     matrices: orgPermissionMatrices(org),
+    modules: {
+      MANAGER: resolveModulePermissions(org, "MANAGER"),
+      CASHIER: resolveModulePermissions(org, "CASHIER"),
+    },
+    moduleKeys: MODULES,
+    moduleActions: MODULE_ACTIONS,
     defaults: {
       MANAGER: { ...DEFAULT_MANAGER_PERMISSIONS },
       CASHIER: { ...DEFAULT_CASHIER_PERMISSIONS },
@@ -52,6 +62,8 @@ router.put("/", async (req, res) => {
       normalizePermissionMap(body.CASHIER, DEFAULT_CASHIER_PERMISSIONS)
     );
   }
+  if (body.modules?.MANAGER) data.managerModules = JSON.stringify(body.modules.MANAGER);
+  if (body.modules?.CASHIER) data.cashierModules = JSON.stringify(body.modules.CASHIER);
   if (Object.keys(data).length === 0) {
     return res.status(400).json({ error: "No permission updates provided" });
   }
@@ -76,6 +88,10 @@ router.put("/", async (req, res) => {
   res.json({
     ok: true,
     matrices: orgPermissionMatrices(updated),
+    modules: {
+      MANAGER: resolveModulePermissions(updated, "MANAGER"),
+      CASHIER: resolveModulePermissions(updated, "CASHIER"),
+    },
   });
 });
 

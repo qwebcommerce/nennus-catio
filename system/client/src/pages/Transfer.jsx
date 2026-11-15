@@ -19,7 +19,7 @@ export default function Transfer() {
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [products, setProducts] = useState([]);
-  const [lines, setLines] = useState([{ productId: "", quantity: "1" }]);
+  const [lines, setLines] = useState([{ productId: "", variantId: "", quantity: "1" }]);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const canSubmit = can("transfer");
@@ -56,6 +56,7 @@ export default function Transfer() {
       .filter((l) => l.productId)
       .map((l) => ({
         productId: l.productId,
+        variantId: l.variantId || null,
         quantity: Math.max(1, parseInt(String(l.quantity), 10) || 1),
       }));
     if (!items.length) {
@@ -68,7 +69,7 @@ export default function Transfer() {
         method: "POST",
         body: { fromBranchId: fromId, toBranchId: toId, items },
       });
-      setLines([{ productId: "", quantity: "1" }]);
+      setLines([{ productId: "", variantId: "", quantity: "1" }]);
       setMsg(t("transfer.done"));
     } catch (x) {
       setMsg(x.message || t("transfer.failed"));
@@ -112,7 +113,7 @@ export default function Transfer() {
               value={line.productId}
               onChange={(e) => {
                 const next = [...lines];
-                next[i] = { ...next[i], productId: e.target.value };
+                next[i] = { ...next[i], productId: e.target.value, variantId: "" };
                 setLines(next);
               }}
               style={{ ...inp, flex: 1, minWidth: 200, minHeight: 44 }}
@@ -120,10 +121,28 @@ export default function Transfer() {
               <option value="">{t("returns.pickProduct")}</option>
               {products.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({t("productCard.stock")} {p.inventories?.[0]?.quantity ?? 0})
+                  {p.name} ({t("productCard.stock")} {p.variants?.length ? p.variants.length : p.inventories?.[0]?.quantity ?? 0})
                 </option>
               ))}
             </select>
+            {(products.find((p) => p.id === line.productId)?.variants || []).length ? (
+              <select
+                value={line.variantId}
+                onChange={(e) => {
+                  const next = [...lines];
+                  next[i] = { ...next[i], variantId: e.target.value };
+                  setLines(next);
+                }}
+                style={{ ...inp, minWidth: 160, minHeight: 44 }}
+              >
+                <option value="">{t("shop.offerProduct")}</option>
+                {products.find((p) => p.id === line.productId).variants.map((variant) => (
+                  <option key={variant.id} value={variant.id}>
+                    {variant.label} · {variant.stocks?.[0]?.quantity ?? 0}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <input
               type="number"
               min={1}
@@ -149,7 +168,7 @@ export default function Transfer() {
         <button
           type="button"
           className="btn-touch"
-          onClick={() => setLines([...lines, { productId: "", quantity: "1" }])}
+          onClick={() => setLines([...lines, { productId: "", variantId: "", quantity: "1" }])}
           style={{ background: "var(--surface2)", maxWidth: 200 }}
         >
           {t("returns.addLine")}

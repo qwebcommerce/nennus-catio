@@ -5,7 +5,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 
-const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "" });
+const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "", creditApproved: false, creditLimit: "" });
 
 export default function Customers() {
   const { t } = useI18n();
@@ -18,6 +18,9 @@ export default function Customers() {
   const [form, setForm] = useState(emptyForm);
   const [editing, setEditing] = useState(null);
   const [msg, setMsg] = useState("");
+  const [recordId, setRecordId] = useState("");
+  const [record, setRecord] = useState(null);
+  const [petForm, setPetForm] = useState({ name: "", breed: "", ageText: "", notes: "" });
 
   const load = () => {
     const params = new URLSearchParams();
@@ -44,6 +47,8 @@ export default function Customers() {
           ...(showOpeningBalance && balRaw !== ""
             ? { accountBalance: Number(balRaw.replace(",", ".")) }
             : {}),
+          creditApproved: Boolean(form.creditApproved),
+          creditLimit: form.creditLimit === "" ? null : Number(form.creditLimit),
         },
       });
       setForm(emptyForm());
@@ -68,6 +73,8 @@ export default function Customers() {
           email: editing.email || null,
           notes: editing.notes || null,
           accountBalance: Number(String(balRaw).replace(",", ".") || "0"),
+          creditApproved: Boolean(editing.creditApproved),
+          creditLimit: editing.creditLimit === "" ? null : Number(editing.creditLimit),
         },
       });
       setEditing(null);
@@ -140,6 +147,15 @@ export default function Customers() {
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
           />
+          <label>
+            <input type="checkbox" checked={Boolean(form.creditApproved)} onChange={(e) => setForm({ ...form, creditApproved: e.target.checked })} />
+            {t("shop.credit")}
+          </label>
+          <input
+            placeholder={t("shop.creditLimit")}
+            value={form.creditLimit}
+            onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
+          />
         </div>
         <button type="submit" className="btn-touch customers-form__submit">
           {t("common.add")}
@@ -147,6 +163,54 @@ export default function Customers() {
       </form>
 
       {msg ? <div className="customers-msg">{msg}</div> : null}
+
+      {isManager ? (
+        <section className="card" style={{ display: "grid", gap: 8 }}>
+          <strong>{t("shop.pets")}</strong>
+          <select
+            value={recordId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setRecordId(id);
+              if (!id) return setRecord(null);
+              api(`/api/customers/${id}/record`).then(setRecord).catch(() => setRecord(null));
+            }}
+          >
+            <option value="">{t("customers.name")}</option>
+            {list.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {(record?.pets || []).map((pet) => (
+            <div key={pet.id}>{pet.name} · {pet.breed || "—"} · {pet.ageText || "—"}{pet.notes ? ` · ${pet.notes}` : ""}</div>
+          ))}
+          {(record?.addresses || []).map((row) => <div key={row.id}>{row.line1} {row.area} {row.city}</div>)}
+          {(record?.sales || []).map((row) => <div key={row.id}>{row.invoiceNumber || row.id.slice(0, 8)} · {row.orderChannel || ""} · {Number(row.total).toFixed(2)}</div>)}
+          {(record?.appointments || []).map((row) => <div key={row.id}>{row.service?.name || t("shop.grooming")} · {row.status}</div>)}
+          {(record?.relocationRequests || []).map((row) => <div key={row.id}>{row.destination} · {row.status}</div>)}
+          {recordId && record ? (
+            <form onSubmit={async (e) => { e.preventDefault(); await api(`/api/customers/${recordId}`, { method: "PATCH", body: { tags: record.tags || "" } }); setMsg(t("customers.saved")); }} style={{ display: "flex", gap: 8 }}>
+              <input placeholder={t("shop.tags")} value={record.tags || ""} onChange={(e) => setRecord({ ...record, tags: e.target.value })} />
+              <button className="btn-touch" type="submit">{t("common.save")}</button>
+            </form>
+          ) : null}
+          {recordId ? (
+            <form
+              style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await api(`/api/customers/${recordId}/pets`, { method: "POST", body: petForm });
+                setPetForm({ name: "", breed: "", ageText: "", notes: "" });
+                setRecord(await api(`/api/customers/${recordId}/record`));
+              }}
+            >
+              <input required placeholder={t("shop.petName")} value={petForm.name} onChange={(e) => setPetForm({ ...petForm, name: e.target.value })} />
+              <input placeholder={t("shop.breed")} value={petForm.breed} onChange={(e) => setPetForm({ ...petForm, breed: e.target.value })} />
+              <input placeholder={t("shop.age")} value={petForm.ageText} onChange={(e) => setPetForm({ ...petForm, ageText: e.target.value })} />
+              <input placeholder={t("customers.notes")} value={petForm.notes} onChange={(e) => setPetForm({ ...petForm, notes: e.target.value })} />
+              <button className="btn-touch" type="submit">{t("common.add")}</button>
+            </form>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="card customers-table-wrap">
         <table className="customers-table">
@@ -204,6 +268,15 @@ export default function Customers() {
                         value={editing.notes || ""}
                         onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
                       />
+                      <label>
+                        <input type="checkbox" checked={Boolean(editing.creditApproved)} onChange={(e) => setEditing({ ...editing, creditApproved: e.target.checked })} />
+                        {t("shop.credit")}
+                      </label>
+                      <input
+                        value={editing.creditLimit || ""}
+                        onChange={(e) => setEditing({ ...editing, creditLimit: e.target.value })}
+                        placeholder={t("shop.creditLimit")}
+                      />
                     </td>
                     {showReceivable ? <td>—</td> : null}
                     {isManager ? (
@@ -243,6 +316,7 @@ export default function Customers() {
                               setEditing({
                                 ...c,
                                 accountBalance: Number(c.accountBalance ?? 0).toFixed(2),
+                                creditLimit: c.creditLimit != null ? String(c.creditLimit) : "",
                               })
                             }
                           >

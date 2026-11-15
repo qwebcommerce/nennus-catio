@@ -1,0 +1,935 @@
+/* Client Catalogue reference, scoped to the existing administration shell. */
+.admin-shell--catalogue .admin-header {
+  min-height: 54px;
+  padding: 8px 20px;
+  background: transparent;
+  border: 0;
+}
+.admin-shell--catalogue .admin-main {
+  padding: 5px 20px 24px;
+}
+.admin-shell--catalogue .op-heading {
+  margin-bottom: 20px;
+}
+.admin-shell--catalogue .op-heading h1 {
+  font-size: 32px;
+  letter-spacing: -0.7px;
+  line-height: 1.1;
+}
+.admin-shell--catalogue .op-heading p {
+  font-size: 14px;
+  color: #7190b2;
+  margin-top: 4px;
+}
+.admin-catalogue-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.admin-catalogue-layout--detail {
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+.admin-catalogue-workspace {
+  min-width: 0;
+}
+.admin-catalogue-toolbar {
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 15px;
+  position: relative;
+}
+.admin-catalogue-tabs {
+  display: flex;
+  background: #fff;
+  border: 1px solid #eef0f3;
+  border-radius: 6px;
+  min-width: 0;
+}
+.admin-catalogue-tabs button {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 17px 20px;
+  position: relative;
+  color: #183b6c;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.admin-catalogue-tabs button + button::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 13px;
+  bottom: 13px;
+  width: 1px;
+  background: #e5eaf0;
+}
+.admin-catalogue-tabs button[aria-pressed="true"] {
+  font-weight: 600;
+}
+.admin-catalogue-tabs button[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 5px;
+  bottom: 0;
+  height: 3px;
+  background: #1680e3;
+  border-radius: 3px;
+}
+.admin-catalogue-tabs svg {
+  color: #143d76;
+}
+.admin-catalogue-tabs button[aria-pressed="true"] svg {
+  color: #1680e3;
+}
+.admin-catalogue-create {
+  position: relative;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.admin-catalogue-create summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 5px;
+  padding: 10px 16px;
+  background: #102d46;
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.admin-catalogue-create summary::-webkit-details-marker {
+  display: none;
+}
+.admin-catalogue-create > div {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 2px);
+  width: 240px;
+  padding: 8px 0;
+  background: white;
+  border: 1px solid #e6ebf0;
+  border-radius: 5px;
+  box-shadow: 0 6px 16px #14294316;
+  z-index: 20;
+}
+.admin-catalogue-create button {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 16px;
+  text-align: start;
+  color: #254976;
+  cursor: pointer;
+}
+.admin-catalogue-create button:hover {
+  background: #eff6fd;
+}
+.admin-catalogue-card,
+.admin-catalogue-detail {
+  line-height: 1.4;
+  background: #fff;
+  border: 1px solid #edf0f4;
+  border-radius: 7px;
+}
+.admin-catalogue-card {
+  padding: 14px 14px 0;
+}
+.admin-catalogue-card h2 {
+  font-size: 21px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #11316a;
+}
+.admin-catalogue-subtitle {
+  font-size: 12px;
+  color: #7190b2;
+  margin: 4px 0 18px;
+}
+.admin-catalogue-filters {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.admin-catalogue-filters select,
+.admin-catalogue-filter-button,
+.admin-catalogue-search,
+.admin-catalogue-pagination select {
+  height: 34px;
+  border: 1px solid #dfe6ef;
+  background: #fff;
+  border-radius: 5px;
+  color: #254976;
+  font-size: 11px;
+}
+.admin-catalogue-filters select {
+  padding: 0 9px;
+  max-width: 160px;
+  flex: 1;
+  min-width: 78px;
+}
+.admin-catalogue-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline: 10px;
+  flex: 2;
+  min-width: 150px;
+  color: #7190b2;
+}
+.admin-catalogue-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+  outline: none;
+}
+.admin-catalogue-filter-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-inline: 10px;
+  color: #147ee4;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.admin-catalogue-extra {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.admin-catalogue-extra .field {
+  flex: 1;
+  min-width: 130px;
+  max-width: 230px;
+}
+.admin-catalogue-extra input {
+  min-height: 34px;
+  font-size: 12px;
+}
+.admin-catalogue-selection {
+  font-size: 11px;
+  color: #6582a8;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.admin-catalogue-table-scroll {
+  /* Holds the table's hidden "Actions" label (absolute) inside the box; without it the label
+     widened the whole page on a phone (766 px at 390 px, found in #14's browser check). */
+  position: relative;
+  overflow-x: auto;
+  max-width: 100%;
+  scrollbar-width: thin;
+}
+.admin-catalogue-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 690px;
+  font-size: 11px;
+  color: #315985;
+}
+.admin-catalogue-table th {
+  font-size: 10px;
+  font-weight: 500;
+  background: #f4f5fa;
+  padding: 9px 7px;
+  text-align: start;
+  white-space: nowrap;
+}
+.admin-catalogue-table th button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #204878;
+  cursor: pointer;
+}
+.admin-catalogue-table td {
+  padding: 5px 7px;
+  border-bottom: 1px solid #eef1f5;
+  height: 50px;
+}
+.admin-catalogue-table th:first-child,
+.admin-catalogue-table td:first-child {
+  width: 24px;
+  padding-inline: 5px;
+}
+.admin-catalogue-table th:nth-child(2) {
+  min-width: 168px;
+}
+.admin-catalogue-table td:nth-child(3) {
+  font-size: 10px;
+  max-width: 90px;
+  overflow-wrap: anywhere;
+}
+.admin-catalogue-table tr[data-selected="true"] {
+  background: #f0f8ff;
+}
+.admin-catalogue-table tr:hover {
+  background: #f7fbff;
+}
+.admin-catalogue-table input[type="checkbox"],
+.admin-catalogue-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: #1680e3;
+  cursor: pointer;
+}
+.admin-catalogue-product {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: start;
+  width: 100%;
+  cursor: pointer;
+}
+.admin-catalogue-product strong {
+  white-space: nowrap;
+  font-weight: 500;
+  font-size: 11px;
+  color: #153875;
+  display: block;
+  line-height: 1.4;
+}
+.admin-catalogue-product small {
+  font-size: 10px;
+  color: #7890ac;
+  display: block;
+  margin-top: 1px;
+}
+.admin-catalogue-thumb {
+  width: 35px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: #f6f5f1;
+}
+.admin-catalogue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 5px 8px;
+  white-space: nowrap;
+  line-height: 1;
+}
+.admin-catalogue-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.admin-catalogue-badge--in {
+  background: #e5f9ef;
+  color: #078765;
+}
+.admin-catalogue-badge--low {
+  background: #fff1e3;
+  color: #e77c14;
+}
+.admin-catalogue-badge--out {
+  background: #ffe7e9;
+  color: #f04451;
+}
+.admin-catalogue-badge--inactive {
+  background: #eef1f5;
+  color: #75869b;
+}
+.admin-catalogue-stock-good {
+  color: #078765;
+}
+.admin-catalogue-stock-number {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #e77c14;
+  flex-wrap: wrap;
+}
+.admin-catalogue-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 17px 0;
+  color: #7190b2;
+  font-size: 10px;
+  flex-wrap: wrap;
+}
+.admin-catalogue-pagination > div {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.admin-catalogue-pagination button {
+  width: 28px;
+  height: 30px;
+  border: 1px solid #e5ebf2;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: #214b83;
+  cursor: pointer;
+}
+.admin-catalogue-pagination button[aria-current="page"] {
+  background: #e6f2ff;
+  border-color: #e6f2ff;
+  color: #1680e3;
+}
+.admin-catalogue-pagination button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.admin-catalogue-pagination select {
+  padding-inline: 7px;
+}
+.admin-catalogue-detail {
+  padding: 16px 16px 12px;
+  min-width: 0;
+  color: #234c80;
+  font-size: 11px;
+}
+.admin-catalogue-detail > header {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #edf0f4;
+}
+.admin-catalogue-detail h2 {
+  font-size: 21px;
+  line-height: 1.25;
+  font-weight: 700;
+  flex: 1;
+  color: #11316a;
+}
+.admin-catalogue-detail > header .icon-button {
+  align-self: start;
+  color: #7291b5;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.admin-catalogue-detail > section {
+  padding: 15px 0;
+  border-bottom: 1px solid #edf0f4;
+}
+.admin-catalogue-detail h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: #143473;
+  margin-bottom: 8px;
+}
+.admin-catalogue-info {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 14px;
+}
+.admin-catalogue-detail-photo {
+  width: 132px;
+  height: 190px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #f7f5f2;
+}
+.admin-catalogue-detail dl > div {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  margin: 0 0 6px;
+}
+.admin-catalogue-detail dt {
+  color: #6482a8;
+}
+.admin-catalogue-detail dd {
+  margin: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.admin-catalogue-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.admin-catalogue-section-title h3 {
+  margin: 0;
+}
+.admin-catalogue-detail .text-button {
+  padding: 0;
+  min-height: 20px;
+  font-size: 11px;
+  color: #167cdc;
+}
+.admin-catalogue-variants {
+  min-width: 362px;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+.admin-catalogue-variants th {
+  text-align: start;
+  font-size: 9px;
+  font-weight: 400;
+  background: #f5f6fa;
+  padding: 8px 5px;
+  white-space: nowrap;
+}
+.admin-catalogue-variants td {
+  padding: 8px 5px;
+  border-bottom: 1px solid #eef1f5;
+}
+.admin-catalogue-variants .admin-catalogue-badge {
+  padding: 5px;
+  font-size: 9px;
+}
+.admin-catalogue-toggle {
+  display: grid;
+  grid-template-columns: 108px 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  cursor: pointer;
+}
+.admin-catalogue-toggle > span,
+.admin-catalogue-gallery > span {
+  color: #6482a8;
+}
+.admin-catalogue-toggle small {
+  font-size: 10px;
+  color: #6482a8;
+}
+.admin-catalogue-toggle input[role="switch"] {
+  appearance: none;
+  width: 29px;
+  height: 16px;
+  border-radius: 20px;
+  background: #cdd7e1;
+  position: relative;
+}
+.admin-catalogue-toggle input[role="switch"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  inset-inline-start: 2px;
+  width: 12px;
+  height: 12px;
+  background: white;
+  border-radius: 50%;
+  transition: inset-inline-start 0.15s;
+}
+.admin-catalogue-toggle input[role="switch"]:checked {
+  background: #1680e3;
+}
+.admin-catalogue-toggle input[role="switch"]:checked::after {
+  inset-inline-start: 15px;
+}
+.admin-catalogue-help {
+  font-size: 9px;
+  color: #7890aa;
+  line-height: 1.4;
+  margin: 8px 0 0;
+}
+.admin-catalogue-gallery {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  align-items: start;
+}
+.admin-catalogue-gallery > span {
+  width: 96px;
+  flex-shrink: 0;
+}
+.admin-catalogue-gallery > div {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.admin-catalogue-gallery button {
+  width: 47px;
+  height: 54px;
+  background: #f5f7fa;
+  border: 1px solid #e6ebf2;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  color: #163e7b;
+  cursor: pointer;
+  overflow: hidden;
+}
+.admin-catalogue-gallery button[aria-pressed="true"] {
+  border-color: #1680e3;
+}
+.admin-catalogue-gallery img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.admin-catalogue-section-title select {
+  max-width: 130px;
+  border: 0;
+  background: transparent;
+  color: #315985;
+  font-size: 10px;
+}
+.admin-catalogue-performance {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.admin-catalogue-performance > div {
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr);
+  column-gap: 5px;
+  border: 1px solid #edf1f5;
+  border-radius: 5px;
+  padding: 9px 6px;
+  align-items: center;
+}
+.admin-catalogue-performance svg {
+  grid-row: span 2;
+  color: #1680e3;
+}
+.admin-catalogue-performance strong {
+  font-size: 12px;
+  color: #11316a;
+  overflow-wrap: anywhere;
+}
+.admin-catalogue-performance small {
+  font-size: 10px;
+  color: #7190b2;
+}
+.admin-catalogue-detail footer {
+  display: flex;
+  gap: 12px;
+  padding-top: 15px;
+}
+.admin-catalogue-detail footer > * {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 50%;
+  border-radius: 4px;
+  padding: 11px 5px;
+  background: #102d46;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+.admin-catalogue-detail footer .admin-catalogue-preview {
+  background: white;
+  border: 1px solid #8ab8ed;
+  color: #147adc;
+}
+.admin-catalogue-property-list {
+  margin-top: 10px;
+}
+@media (min-width: 1001px) {
+  .admin-catalogue-detail {
+    margin-top: -72px;
+  }
+}
+@media (min-width: 1500px) {
+  .admin-catalogue-layout--detail {
+    grid-template-columns: minmax(0, 1fr) 460px;
+  }
+  .admin-catalogue-info {
+    grid-template-columns: 145px minmax(0, 1fr);
+  }
+  .admin-catalogue-detail-photo {
+    width: 145px;
+    height: 208px;
+  }
+}
+@media (max-width: 1200px) {
+  .admin-catalogue-layout--detail {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+  .admin-catalogue-info {
+    grid-template-columns: 110px minmax(0, 1fr);
+  }
+  .admin-catalogue-detail-photo {
+    width: 110px;
+    height: 164px;
+  }
+  .admin-catalogue-tabs button {
+    padding: 16px 12px;
+    gap: 8px;
+  }
+  .admin-catalogue-toggle {
+    grid-template-columns: 88px 26px minmax(0, 1fr);
+  }
+  .admin-catalogue-detail dl > div {
+    grid-template-columns: 65px minmax(0, 1fr);
+  }
+}
+@media (max-width: 1000px) {
+  .admin-catalogue-layout--detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .admin-catalogue-detail {
+    max-width: 650px;
+    width: 100%;
+  }
+  .admin-catalogue-info {
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+  .admin-catalogue-detail-photo {
+    width: 132px;
+    height: 190px;
+  }
+  .admin-catalogue-layout--detail .admin-catalogue-detail {
+    grid-row: 1;
+  }
+  .admin-catalogue-toolbar {
+    flex-wrap: wrap;
+  }
+  .admin-catalogue-tabs {
+    flex: 1;
+  }
+  .admin-catalogue-tabs button {
+    flex: 1;
+  }
+  .admin-catalogue-performance strong {
+    font-size: 14px;
+  }
+}
+@media (max-width: 600px) {
+  .admin-shell--catalogue .admin-main {
+    padding: 8px 12px 20px;
+  }
+  .admin-shell--catalogue .op-heading h1 {
+    font-size: 27px;
+  }
+  .admin-shell--catalogue .op-heading p {
+    font-size: 12px;
+  }
+  .admin-catalogue-tabs {
+    width: 100%;
+    flex-basis: 100%;
+  }
+  .admin-catalogue-tabs button {
+    padding: 15px 7px;
+    font-size: 11px;
+    gap: 6px;
+  }
+  .admin-catalogue-tabs svg {
+    width: 18px;
+  }
+  .admin-catalogue-card {
+    padding: 12px 10px 0;
+  }
+  .admin-catalogue-toolbar > .admin-catalogue-create {
+    margin-inline-start: auto;
+  }
+  .admin-catalogue-detail {
+    padding: 14px 12px;
+  }
+  .admin-catalogue-detail h2 {
+    font-size: 19px;
+  }
+  .admin-catalogue-detail-photo {
+    width: 100px;
+    height: 152px;
+  }
+  .admin-catalogue-info {
+    grid-template-columns: 100px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .admin-catalogue-detail dl > div {
+    grid-template-columns: 64px minmax(0, 1fr);
+    font-size: 10px;
+  }
+  .admin-catalogue-toggle {
+    grid-template-columns: 90px 26px minmax(0, 1fr);
+  }
+  .admin-catalogue-pagination {
+    gap: 8px;
+  }
+  .admin-catalogue-pagination > span {
+    order: 3;
+    width: 100%;
+  }
+  .admin-catalogue-filters select {
+    min-width: 85px;
+  }
+  .admin-catalogue-performance strong {
+    font-size: 12px;
+  }
+  .admin-catalogue-gallery > span {
+    width: 85px;
+  }
+}
+html[dir="rtl"] .admin-catalogue-pagination svg {
+  transform: scaleX(-1);
+}
+
+@media (min-width: 1001px) {
+  .admin-shell--catalogue:has(.admin-catalogue-detail) .op-heading {
+    padding-inline-end: 434px;
+  }
+}
+@media (min-width: 1500px) {
+  .admin-shell--catalogue:has(.admin-catalogue-detail) .op-heading {
+    padding-inline-end: 474px;
+  }
+}
+@media (min-width: 1001px) and (max-width: 1200px) {
+  .admin-shell--catalogue:has(.admin-catalogue-detail) .op-heading {
+    padding-inline-end: 374px;
+  }
+}
+
+/* 9a: in API mode the Services tab is a link to the Grooming packages page; it looks like the others. */
+.admin-catalogue-tabs .admin-catalogue-tab-link {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 17px 20px;
+  position: relative;
+  color: #183b6c;
+  font-size: 13px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.admin-catalogue-tabs button + .admin-catalogue-tab-link::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  top: 13px;
+  bottom: 13px;
+  width: 1px;
+  background: #e5eaf0;
+}
+@media (max-width: 1000px) {
+  .admin-catalogue-tabs .admin-catalogue-tab-link {
+    flex: 1;
+    padding: 16px 12px;
+    gap: 8px;
+  }
+}
+
+/* #16 part 2c: the POS items tab, and packs the POS manages in the editor and the details panel. */
+.pos-views {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-block: 4px 12px;
+}
+.pos-views button {
+  border: 1px solid #dfe5ec;
+  background: #fff;
+  color: #183b6c;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pos-views button[aria-pressed="true"] {
+  background: #183b6c;
+  border-color: #183b6c;
+  color: #fff;
+}
+.pos-items-table td {
+  vertical-align: top;
+}
+/* A code reads as one word: never broken at its dashes. */
+.pos-items-table td:first-child strong {
+  white-space: nowrap;
+}
+.pos-item-name {
+  display: block;
+  margin-block-start: 3px;
+  color: #75869b;
+  font-size: 11px;
+  max-width: 260px;
+}
+.pos-item-pack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+}
+.pos-item-pack small {
+  color: #5c6b7d;
+  font-size: 11px;
+}
+.pos-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 220px;
+}
+.pos-item-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  white-space: nowrap;
+}
+.pos-tag {
+  color: #183b6c;
+  font-weight: 600;
+  font-size: 10px;
+}
+.pos-pack-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.pos-pack-note p {
+  margin: 0;
+}
+.pos-pack-note .text-button {
+  align-self: flex-start;
+}
+@media (max-width: 600px) {
+  .pos-views button {
+    font-size: 11px;
+    padding: 5px 9px;
+  }
+  /* With POS items the Catalogue has four tabs: two rows of two on a phone, no divider starting a row. */
+  .admin-catalogue-tabs {
+    flex-wrap: wrap;
+  }
+  .admin-catalogue-tabs > button,
+  .admin-catalogue-tabs > .admin-catalogue-tab-link {
+    flex: 1 1 50%;
+  }
+  .admin-catalogue-tabs > :nth-child(odd)::before {
+    display: none;
+  }
+  /* The Services link reads like the tab buttons beside it. */
+  .admin-catalogue-tabs .admin-catalogue-tab-link {
+    padding: 15px 7px;
+    font-size: 11px;
+    gap: 6px;
+  }
+}
+/* Fields the product editor locks look locked: a POS pack's SKU, price and stock, a saved pack's stock. */
+.variant-editor .field > input:disabled {
+  background: #f3f5f8;
+  color: #5c6b7d;
+  cursor: not-allowed;
+}

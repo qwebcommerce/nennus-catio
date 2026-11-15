@@ -290,11 +290,23 @@ export default function Appointments() {
                   <td style={td}>{a.status}</td>
                   <td style={td}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "CONFIRMED")}>
-                        {t("appointments.confirm")}
+                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "IN_PROGRESS")}>
+                        {t("shop.inProgress")}
                       </button>
                       <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "DONE")}>
                         {t("appointments.done")}
+                      </button>
+                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "NO_SHOW")}>
+                        {t("shop.noShow")}
+                      </button>
+                      <button className="btn-touch" type="button" onClick={() => {
+                        const next = window.prompt(t("shop.moveBooking"), a.startAt.slice(0, 16));
+                        if (!next) return;
+                        const start = new Date(next);
+                        const duration = new Date(a.endAt).getTime() - new Date(a.startAt).getTime();
+                        api(`/api/appointments/${a.id}`, { method: "PATCH", body: { startAt: start.toISOString(), endAt: new Date(start.getTime() + duration).toISOString() } }).then(loadAppointments).catch((x) => setMsg(x.message));
+                      }}>
+                        {t("shop.move")}
                       </button>
                       <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "CANCELLED")}>
                         {t("appointments.cancel")}

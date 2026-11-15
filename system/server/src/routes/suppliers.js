@@ -14,7 +14,7 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
-  const { name, phone, note } = req.body || {};
+  const { name, phone, note, email, address, isActive } = req.body || {};
   const n = String(name || "").trim();
   if (!n) return res.status(400).json({ error: "اسم المورد مطلوب" });
   const row = await prisma.supplier.create({
@@ -22,14 +22,17 @@ router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
       organizationId: req.user.organizationId,
       name: n,
       phone: phone != null && String(phone).trim() ? String(phone).trim() : null,
+      email: email != null && String(email).trim() ? String(email).trim() : null,
+      address: address != null && String(address).trim() ? String(address).trim() : null,
       note: note != null && String(note).trim() ? String(note).trim() : null,
+      isActive: isActive === false ? false : true,
     },
   });
   res.status(201).json(row);
 });
 
 router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
-  const { name, phone, note } = req.body || {};
+  const { name, phone, note, email, address, isActive } = req.body || {};
   const data = {};
   if (name != null) {
     const n = String(name).trim();
@@ -38,6 +41,9 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   }
   if (phone !== undefined) data.phone = phone ? String(phone).trim() : null;
   if (note !== undefined) data.note = note ? String(note).trim() : null;
+  if (email !== undefined) data.email = email ? String(email).trim() : null;
+  if (address !== undefined) data.address = address ? String(address).trim() : null;
+  if (isActive !== undefined) data.isActive = isActive !== false;
   const existing = await prisma.supplier.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });

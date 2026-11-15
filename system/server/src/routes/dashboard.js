@@ -74,6 +74,39 @@ router.get("/summary", async (req, res) => {
     include: { product: true, branch: true },
   });
   const lowStockCount = lowStock.filter((r) => r.quantity <= r.minStockLevel).length;
+  const variantRows = await prisma.variantStock.findMany({
+    where: branchId
+      ? { branchId: String(branchId), branch: { organizationId: req.user.organizationId } }
+      : { branch: { organizationId: req.user.organizationId } },
+    select: { quantity: true, minStockLevel: true },
+  });
+  const variantLow = variantRows.filter((row) => row.quantity <= row.minStockLevel).length;
+  const todayStart = startOfToday();
+  const channelSales = await prisma.sale.groupBy({
+    by: ["orderChannel"],
+    where: {
+      ...branchFilter,
+      createdAt: { gte: todayStart },
+      OR: [{ webStatus: null }, { webStatus: { notIn: ["PENDING_PAYMENT", "CANCELLED"] } }],
+    },
+    _sum: { total: true },
+    _count: true,
+  });
+  const waitingOrders = await prisma.sale.count({
+    where: {
+      ...branchFilter,
+      orderChannel: "WEBSITE",
+      webStatus: { in: ["CONFIRMED", "PREPARING", "OUT_FOR_DELIVERY", "READY_FOR_PICKUP"] },
+    },
+  });
+  const todayGrooming = await prisma.appointment.count({
+    where: {
+      organizationId: req.user.organizationId,
+      ...(branchId ? { branchId: String(branchId) } : {}),
+      startAt: { gte: todayStart },
+      status: { notIn: ["CANCELLED", "PENDING_PAYMENT"] },
+    },
+  });
 
   const monthSalesRows = await prisma.sale.findMany({
     where: { ...branchFilter, createdAt: { gte: startOfMonth() } },
@@ -101,7 +134,10 @@ router.get("/summary", async (req, res) => {
     salesMonthTotal: monthSales._sum.total?.toString() ?? "0",
     wholesaleMonthTotal: wholesaleMonth._sum.total?.toString() ?? "0",
     estimatedProfitMonth: (revenueMonth - costMonth).toFixed(2),
-    lowStockAlerts: lowStockCount,
+    lowStockAlerts: lowStockCount + variantLow,
+    channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: Number(row._sum.total || 0), count: row._count }])),
+    waitingOrders,
+    todayGrooming,
   });
 });
 

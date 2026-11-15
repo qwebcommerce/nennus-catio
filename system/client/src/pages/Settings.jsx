@@ -7,6 +7,7 @@ import { useToast } from "../context/ToastContext.jsx";
 import PrintSettings from "./PrintSettings.jsx";
 import TaxSettingsPanel from "../components/TaxSettingsPanel.jsx";
 import { LanguageSwitcher } from "../components/LanguageSwitcher.jsx";
+import { useBranchContext } from "../context/BranchContext.jsx";
 
 const NOTIF_PREF_KEY = "pos-notifications-enabled";
 
@@ -45,6 +46,11 @@ export default function Settings() {
   );
   const [associatePay, setAssociatePay] = useState(() => user?.associateCanAcceptPayment !== false);
   const [associatePayBusy, setAssociatePayBusy] = useState(false);
+  const { branches } = useBranchContext();
+  const [websiteBranchId, setWebsiteBranchId] = useState("");
+  const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [homeVisitFee, setHomeVisitFee] = useState("0");
+  const [profile, setProfile] = useState({ phone: "", publicEmail: "", publicAddress: "", hoursText: "", hoursTextEn: "", notifyEmail: "", alertOrder: true, alertBooking: true, alertRelocation: true, alertLowStock: false });
 
   useEffect(() => {
     setAssociatePay(user?.associateCanAcceptPayment !== false);
@@ -55,7 +61,24 @@ export default function Settings() {
     let cancelled = false;
     api("/api/org-settings")
       .then((s) => {
-        if (!cancelled) setAssociatePay(s?.associateCanAcceptPayment !== false);
+        if (!cancelled) {
+          setAssociatePay(s?.associateCanAcceptPayment !== false);
+          setWebsiteBranchId(s?.websiteBranchId || "");
+          setWhatsappNumber(s?.whatsappNumber || "");
+          setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
+          setProfile({
+            phone: s?.phone || "",
+            publicEmail: s?.publicEmail || "",
+            publicAddress: s?.publicAddress || "",
+            hoursText: s?.hoursText || "",
+            hoursTextEn: s?.hoursTextEn || "",
+            notifyEmail: s?.notifyEmail || "",
+            alertOrder: s?.alertOrder !== false,
+            alertBooking: s?.alertBooking !== false,
+            alertRelocation: s?.alertRelocation !== false,
+            alertLowStock: s?.alertLowStock === true,
+          });
+        }
       })
       .catch(() => {});
     return () => {
@@ -193,6 +216,71 @@ export default function Settings() {
               </button>
             }
           />
+        </section>
+      ) : null}
+
+      {isAdmin ? (
+        <section className="settings-card">
+          <h2>{t("settings.websiteLocation")}</h2>
+          <p>{t("settings.websiteLocationHint")}</p>
+          <select
+            value={websiteBranchId}
+            onChange={async (e) => {
+              const next = e.target.value;
+              setWebsiteBranchId(next);
+              try {
+                const saved = await api("/api/org-settings", { method: "PATCH", body: { websiteBranchId: next || null } });
+                setWebsiteBranchId(saved.websiteBranchId || "");
+                showToast(t("common.save"), "success");
+              } catch (err) {
+                showToast(err.message, "error");
+              }
+            }}
+          >
+            <option value="">{t("shop.noLocation")}</option>
+            {branches.filter((b) => b.isActive !== false && b.kind !== "VAN").map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+          <label>
+            <span>{t("shop.whatsapp")}</span>
+            <input value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="97433130153" />
+          </label>
+          <label>
+            <span>{t("shop.homeFee")}</span>
+            <input type="number" min="0" step="0.01" value={homeVisitFee} onChange={(e) => setHomeVisitFee(e.target.value)} />
+          </label>
+          {["phone", "publicEmail", "publicAddress", "hoursText", "hoursTextEn", "notifyEmail"].map((key) => (
+            <label key={key}>
+              <span>{t(`shop.${key}`)}</span>
+              <input value={profile[key]} onChange={(e) => setProfile({ ...profile, [key]: e.target.value })} />
+            </label>
+          ))}
+          {["alertOrder", "alertBooking", "alertRelocation", "alertLowStock"].map((key) => (
+            <label key={key}>
+              <input type="checkbox" checked={Boolean(profile[key])} onChange={(e) => setProfile({ ...profile, [key]: e.target.checked })} />
+              <span>{t(`shop.${key}`)}</span>
+            </label>
+          ))}
+          <button
+            type="button"
+            className="btn-touch"
+            onClick={async () => {
+              try {
+                const saved = await api("/api/org-settings", {
+                  method: "PATCH",
+                  body: { whatsappNumber, homeVisitFee: Number(homeVisitFee), ...profile },
+                });
+                setWhatsappNumber(saved.whatsappNumber || "");
+                setHomeVisitFee(String(saved.homeVisitFee ?? 0));
+                showToast(t("common.save"), "success");
+              } catch (err) {
+                showToast(err.message, "error");
+              }
+            }}
+          >
+            {t("common.save")}
+          </button>
         </section>
       ) : null}
 

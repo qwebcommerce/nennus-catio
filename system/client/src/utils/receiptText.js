@@ -4,6 +4,8 @@ const PAY_AR = {
   CASH: "نقدي",
   CARD: "بطاقة",
   ONLINE: "أونلاين",
+  FAWRAN: "فوراً",
+  PAYMENT_LINK: "رابط دفع",
   SPLIT: "تقسيم",
   ON_ACCOUNT: "على الحساب",
   ON_DELIVERY: "عند الاستلام",
@@ -12,6 +14,8 @@ const PAY_EN = {
   CASH: "Cash",
   CARD: "Card",
   ONLINE: "Online",
+  FAWRAN: "Fawran",
+  PAYMENT_LINK: "Payment link",
   SPLIT: "Split",
   ON_ACCOUNT: "On account",
   ON_DELIVERY: "On delivery",
@@ -57,6 +61,9 @@ export function buildReceiptPlainText(sale, branchName, locale, taxInfo) {
   if (sale.channel === "WHOLESALE") {
     lines.push(locale === "en" ? "Channel: Wholesale" : "القناة: بيع بالجملة");
   }
+  if (sale.orderChannel === "VAN") {
+    lines.push(locale === "en" ? "Location: Van" : "الموقع: سيارة");
+  }
   if (sale.paymentMethod === "SPLIT" && Array.isArray(sale.paymentSplits)) {
     lines.push(`${locale === "en" ? "Payment" : "الدفع"}:`);
     for (const row of sale.paymentSplits) {
@@ -68,6 +75,9 @@ export function buildReceiptPlainText(sale, branchName, locale, taxInfo) {
     lines.push(
       `${locale === "en" ? "Payment" : "الدفع"}: ${payLabel(sale.paymentMethod, locale)}`
     );
+  }
+  if (sale.paymentReference) {
+    lines.push(`${locale === "en" ? "Reference" : "المرجع"}: ${sale.paymentReference}`);
   }
   if (sale.customer) {
     lines.push(

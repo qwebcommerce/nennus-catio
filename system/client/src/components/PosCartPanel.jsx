@@ -57,7 +57,9 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
       <ul className="pos-cart-panel__list">
         {lines.map((line) => {
           const key = line.lineKey || line.productId;
-          const lineTotal = line.unitPrice * line.quantity;
+          const weight = line.sellBy === "WEIGHT";
+          const shownQty = weight ? Number((line.quantity / 1000).toFixed(3)) : line.quantity;
+          const lineTotal = weight ? line.unitPrice * (line.quantity / 1000) : line.unitPrice * line.quantity;
           const belowCost = isUnitPriceAtOrBelowCost(line.unitPrice, line.cost);
           const mods = Array.isArray(line.modifiers) ? line.modifiers : [];
           return (
@@ -86,7 +88,7 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
                 ) : null}
                 <div className="pos-cart-line__price">
                   {line.unitPrice.toFixed(2)} {t("common.currency")}
-                  <span className="pos-cart-line__each"> / {t("cart.each")}</span>
+                  <span className="pos-cart-line__each"> / {weight ? t("pos.perKg") : t("cart.each")}</span>
                 </div>
                 {belowCost ? (
                   <div className="pos-cart-line__warn" role="status">
@@ -98,8 +100,8 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
                     <button
                       type="button"
                       className="pos-qty__btn"
-                      disabled={line.quantity <= 1}
-                      onClick={() => onChangeQty(key, line.quantity - 1)}
+                      disabled={weight ? line.quantity <= 100 : line.quantity <= 1}
+                      onClick={() => onChangeQty(key, weight ? line.quantity - 100 : line.quantity - 1)}
                       aria-label="−"
                     >
                       −
@@ -107,16 +109,19 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
                     <input
                       className="pos-qty__input"
                       type="number"
-                      min={1}
-                      max={line.maxStock}
-                      value={line.quantity}
-                      onChange={(e) => onChangeQty(key, Number(e.target.value))}
+                      min={weight ? 0.001 : 1}
+                      step={weight ? 0.001 : 1}
+                      max={weight ? (line.maxStock ?? 0) / 1000 : line.maxStock}
+                      value={shownQty}
+                      onChange={(e) =>
+                        onChangeQty(key, weight ? Math.round(Number(e.target.value) * 1000) : Number(e.target.value))
+                      }
                     />
                     <button
                       type="button"
                       className="pos-qty__btn"
-                      disabled={line.quantity >= (line.maxStock ?? Infinity)}
-                      onClick={() => onChangeQty(key, line.quantity + 1)}
+                      disabled={line.quantity + (weight ? 100 : 1) > (line.maxStock ?? Infinity)}
+                      onClick={() => onChangeQty(key, weight ? line.quantity + 100 : line.quantity + 1)}
                       aria-label="+"
                     >
                       +

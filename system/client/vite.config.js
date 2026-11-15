@@ -40,6 +40,7 @@ export default defineConfig({
         /** لا تعامل طلبات الـ API كصفحة SPA (وإلا يُرجَع index.html وتظهر صفحة الدخول) */
         navigateFallbackDenylist: [/^\/api\b/],
         globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff2}"],
+        globIgnores: ["**/images/**"],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.(?:googleapis|gstatic)\.com\/.*/i,

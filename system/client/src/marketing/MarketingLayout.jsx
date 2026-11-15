@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { LanguageSwitcher } from "../components/LanguageSwitcher.jsx";
+import { api } from "../api/client.js";
 import { CONTACT, COPY } from "./siteData.js";
 import "./marketing.css";
 
@@ -19,6 +20,15 @@ export function MarketingLayout() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const location = useLocation();
+  const [business, setBusiness] = useState(null);
+  useEffect(() => {
+    api("/api/shop/meta").then((meta) => setBusiness(meta.business || null)).catch(() => {});
+  }, []);
+  const digits = String(business?.whatsapp || "").replace(/[^\d]/g, "");
+  const whatsappHref = digits ? `https://wa.me/${digits}` : CONTACT.whatsappHref;
+  const whatsappLabel = business?.whatsapp || CONTACT.whatsapp;
+  const email = business?.email || CONTACT.email;
+  const place = business?.address || (isAr ? CONTACT.locationAr : CONTACT.locationEn);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -68,6 +78,9 @@ export function MarketingLayout() {
                 {c.nav[item.key]}
               </a>
             ))}
+            <Link to="/shop">{c.nav.shop}</Link>
+            <Link to="/shop/grooming">{c.nav.grooming}</Link>
+            <Link to="/shop/houses">{c.nav.houses}</Link>
           </nav>
 
           <div className="nc-nav-actions">
@@ -77,7 +90,7 @@ export function MarketingLayout() {
                 {c.nav.staff}
               </Link>
               <a
-                href={CONTACT.whatsappHref}
+                href={whatsappHref}
                 className="nc-btn nc-btn-forest"
                 target="_blank"
                 rel="noreferrer"
@@ -130,7 +143,7 @@ export function MarketingLayout() {
                   {c.nav.staff}
                 </Link>
                 <a
-                  href={CONTACT.whatsappHref}
+                  href={whatsappHref}
                   className="nc-btn nc-btn-forest nc-btn-block"
                   target="_blank"
                   rel="noreferrer"
@@ -171,8 +184,8 @@ export function MarketingLayout() {
               <ul className="nc-footer-contact">
                 <li>
                   <span>{c.contact.whatsapp}</span>
-                  <a href={CONTACT.whatsappHref} target="_blank" rel="noreferrer">
-                    {CONTACT.whatsapp}
+                  <a href={whatsappHref} target="_blank" rel="noreferrer">
+                    {whatsappLabel}
                   </a>
                 </li>
                 <li>
@@ -183,11 +196,11 @@ export function MarketingLayout() {
                 </li>
                 <li>
                   <span>{c.contact.email}</span>
-                  <a href={CONTACT.emailHref}>{CONTACT.email}</a>
+                  <a href={`mailto:${email}`}>{email}</a>
                 </li>
                 <li>
                   <span>{isAr ? "الموقع" : "Location"}</span>
-                  <em>{isAr ? CONTACT.locationAr : CONTACT.locationEn}</em>
+                  <em>{place}</em>
                 </li>
               </ul>
             </div>
@@ -208,7 +221,7 @@ export function MarketingLayout() {
 
       <a
         className="nc-fab"
-        href={CONTACT.whatsappHref}
+        href={whatsappHref}
         target="_blank"
         rel="noreferrer"
       >

@@ -26,6 +26,9 @@ export default function Permissions() {
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadOk, setLoadOk] = useState(false);
+  const [modules, setModules] = useState({ MANAGER: {}, CASHIER: {} });
+  const [moduleKeys, setModuleKeys] = useState([]);
+  const [moduleActions, setModuleActions] = useState([]);
 
   const load = async () => {
     const data = await api("/api/permissions");
@@ -33,6 +36,12 @@ export default function Permissions() {
       MANAGER: { ...DEFAULT_MANAGER_PERMISSIONS, ...(data?.matrices?.MANAGER || {}) },
       CASHIER: { ...DEFAULT_CASHIER_PERMISSIONS, ...(data?.matrices?.CASHIER || {}) },
     });
+    setModules({
+      MANAGER: data?.modules?.MANAGER || {},
+      CASHIER: data?.modules?.CASHIER || {},
+    });
+    setModuleKeys(data?.moduleKeys || []);
+    setModuleActions(data?.moduleActions || []);
     setDirty(false);
     setLoadOk(true);
   };
@@ -72,6 +81,7 @@ export default function Permissions() {
         body: {
           MANAGER: matrices.MANAGER,
           CASHIER: matrices.CASHIER,
+          modules,
         },
       });
       await refreshUser?.();
@@ -140,6 +150,34 @@ export default function Permissions() {
               style={{ width: 20, height: 20 }}
             />
           </label>
+        ))}
+      </div>
+
+      <div className="card" style={{ display: "grid", gap: 8, overflowX: "auto" }}>
+        <strong>{t("shop.modules")}</strong>
+        {moduleKeys.map((mod) => (
+          <div key={mod} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ minWidth: 110 }}>{mod}</span>
+            {moduleActions.map((action) => (
+              <label key={action}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(modules[tab]?.[mod]?.[action])}
+                  onChange={(e) => {
+                    setModules((prev) => ({
+                      ...prev,
+                      [tab]: {
+                        ...prev[tab],
+                        [mod]: { ...prev[tab]?.[mod], [action]: e.target.checked },
+                      },
+                    }));
+                    setDirty(true);
+                  }}
+                />
+                {action}
+              </label>
+            ))}
+          </div>
         ))}
       </div>
 

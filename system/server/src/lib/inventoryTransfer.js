@@ -31,14 +31,18 @@ export async function executeInventoryTransfer({
     throw err;
   }
 
-  const byProduct = new Map();
+  const grouped = new Map();
   for (const line of items) {
     const productId = String(line.productId || "");
+    const variantId = line.variantId ? String(line.variantId) : "";
     if (!productId) continue;
     const qty = Math.max(1, Math.floor(Number(line.quantity) || 1));
-    byProduct.set(productId, (byProduct.get(productId) || 0) + qty);
+    const key = `${productId}:${variantId}`;
+    const prev = grouped.get(key) || { productId, variantId, qty: 0 };
+    prev.qty += qty;
+    grouped.set(key, prev);
   }
-  const prep = [...byProduct.entries()].map(([productId, qty]) => ({ productId, qty }));
+  const prep = [...grouped.values()];
   if (!prep.length) {
     const err = new Error("No lines");
     err.status = 400;
@@ -47,63 +51,133 @@ export async function executeInventoryTransfer({
     throw err;
   }
 
-  for (const { productId, qty } of prep) {
+  for (const line of prep) {
     const pr = await prisma.product.findFirst({
-      where: { id: productId, organizationId: orgId },
+      where: { id: line.productId, organizationId: orgId },
+      include: { variants: { select: { id: true } } },
     });
     if (!pr) {
-      const err = new Error(`Product not found: ${productId}`);
+      const err = new Error(`Product not found: ${line.productId}`);
       err.status = 400;
-      err.errorAr = `منتج غير موجود: ${productId}`;
-      err.errorEn = `Product not found: ${productId}`;
+      err.errorAr = `منتج غير موجود: ${line.productId}`;
+      err.errorEn = `Product not found: ${line.productId}`;
       throw err;
     }
-    const src = await prisma.inventory.findUnique({
-      where: { productId_branchId: { productId, branchId: from } },
-    });
-    if (!src || src.quantity < qty) {
-      const err = new Error(`Insufficient qty: ${pr.name}`);
+    if (pr.variants.length && !line.variantId) {
+      const err = new Error(`Choose a variant for ${pr.name}`);
       err.status = 400;
-      err.errorAr = `كمية غير كافية: ${pr.name}`;
-      err.errorEn = `Insufficient quantity: ${pr.name}`;
+      err.errorAr = `اختر الحجم لـ ${pr.name}`;
+      err.errorEn = `Choose a variant for ${pr.name}`;
       throw err;
+    }
+    if (line.variantId && !pr.variants.some((variant) => variant.id === line.variantId)) {
+      const err = new Error(`Variant is not on ${pr.name}`);
+      err.status = 400;
+      err.errorAr = `الحجم غير تابع لـ ${pr.name}`;
+      err.errorEn = `Variant is not on ${pr.name}`;
+      throw err;
+    }
+    if (line.variantId) {
+      const src = await prisma.variantStock.findUnique({
+        where: { variantId_branchId: { variantId: line.variantId, branchId: from } },
+      });
+      if (!src || src.quantity < line.qty) {
+        const err = new Error(`Insufficient qty: ${pr.name}`);
+        err.status = 400;
+        err.errorAr = `كمية غير كافية: ${pr.name}`;
+        err.errorEn = `Insufficient quantity: ${pr.name}`;
+        throw err;
+      }
+      line.unitCost = src.unitCost;
+    } else {
+      const src = await prisma.inventory.findUnique({
+        where: { productId_branchId: { productId: line.productId, branchId: from } },
+      });
+      if (!src || src.quantity < line.qty) {
+        const err = new Error(`Insufficient qty: ${pr.name}`);
+        err.status = 400;
+        err.errorAr = `كمية غير كافية: ${pr.name}`;
+        err.errorEn = `Insufficient quantity: ${pr.name}`;
+        throw err;
+      }
     }
   }
 
   await prisma.$transaction(
     async (tx) => {
-      for (const { productId, qty } of prep) {
-        const src = await tx.inventory.findUnique({
-          where: { productId_branchId: { productId, branchId: from } },
-        });
-        if (!src || src.quantity < qty) {
-          const p = await tx.product.findFirst({ where: { id: productId } });
-          const err = new Error(`كمية غير كافية: ${p?.name || productId}`);
-          err.status = 400;
-          err.errorAr = err.message;
-          err.errorEn = `Insufficient quantity: ${p?.name || productId}`;
-          throw err;
-        }
-        await tx.inventory.update({
-          where: { productId_branchId: { productId, branchId: from } },
-          data: { quantity: { decrement: qty } },
-        });
-        await tx.inventory.upsert({
-          where: { productId_branchId: { productId, branchId: to } },
-          create: {
+      for (const line of prep) {
+        const { productId, variantId, qty } = line;
+        if (variantId) {
+          const moved = await tx.variantStock.updateMany({
+            where: { variantId, branchId: from, quantity: { gte: qty } },
+            data: { quantity: { decrement: qty } },
+          });
+          if (moved.count !== 1) {
+            const err = new Error("كمية غير كافية");
+            err.status = 400;
+            throw err;
+          }
+          await tx.variantStock.upsert({
+            where: { variantId_branchId: { variantId, branchId: to } },
+            create: {
+              variantId,
+              branchId: to,
+              quantity: qty,
+              minStockLevel: 5,
+              unitCost: line.unitCost ?? null,
+            },
+            update: { quantity: { increment: qty } },
+          });
+        } else {
+          const src = await tx.inventory.findUnique({
+            where: { productId_branchId: { productId, branchId: from } },
+          });
+          if (!src || src.quantity < qty) {
+            const p = await tx.product.findFirst({ where: { id: productId } });
+            const err = new Error(`كمية غير كافية: ${p?.name || productId}`);
+            err.status = 400;
+            throw err;
+          }
+          await tx.inventory.update({
+            where: { productId_branchId: { productId, branchId: from } },
+            data: { quantity: { decrement: qty } },
+          });
+          await tx.inventory.upsert({
+            where: { productId_branchId: { productId, branchId: to } },
+            create: { productId, branchId: to, quantity: qty, minStockLevel: 5 },
+            update: { quantity: { increment: qty } },
+          });
+          await moveLotsBetweenBranches(tx, {
+            orgId,
+            fromBranchId: from,
+            toBranchId: to,
             productId,
-            branchId: to,
             quantity: qty,
-            minStockLevel: 5,
+          });
+        }
+        await tx.stockMovement.create({
+          data: {
+            organizationId: orgId,
+            productId,
+            ...(variantId ? { variantId } : {}),
+            branchId: from,
+            quantityDelta: -qty,
+            reason: "TRANSFER",
+            note: to,
+            userId,
           },
-          update: { quantity: { increment: qty } },
         });
-        await moveLotsBetweenBranches(tx, {
-          orgId,
-          fromBranchId: from,
-          toBranchId: to,
-          productId,
-          quantity: qty,
+        await tx.stockMovement.create({
+          data: {
+            organizationId: orgId,
+            productId,
+            ...(variantId ? { variantId } : {}),
+            branchId: to,
+            quantityDelta: qty,
+            reason: "TRANSFER",
+            note: from,
+            userId,
+          },
         });
       }
     },

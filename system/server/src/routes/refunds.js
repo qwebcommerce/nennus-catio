@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireRole, requirePermission, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
 import { assessRefundRisk } from "../lib/cashierCopilot.js";
@@ -37,7 +37,7 @@ const refundInclude = {
   user: { select: { name: true } },
 };
 
-router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("refunds"), async (req, res) => {
+router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("refunds"), requireModule("pos", "refund"), async (req, res) => {
   const {
     branchId,
     saleId,
@@ -45,7 +45,9 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     items,
     clientMutationId: clientMutationIdRaw,
     deviceId: _deviceId,
+    restock: restockRaw,
   } = req.body || {};
+  const restock = restockRaw !== false;
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
   if (!Array.isArray(items) || items.length === 0) {
@@ -117,8 +119,13 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
         quantity: 0,
         unitPrice: it.unitPrice,
         lotUsages: [],
+        costAmount: 0,
+        variantId: it.variantId || null,
+        mixedVariant: false,
       };
       prev.quantity += Number(it.quantity || 0);
+      prev.costAmount += Number(it.costAmount || 0);
+      if ((it.variantId || null) !== prev.variantId) prev.mixedVariant = true;
       prev.lotUsages.push(...(it.lotUsages || []));
       saleItemsByProduct.set(it.productId, prev);
     }
@@ -165,12 +172,16 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
 
       const subtotal = unitPrice.mul(qty);
       total = total.add(subtotal);
+      const sold = saleItemsByProduct?.get(productId);
+      const share = sold && sold.quantity > 0 ? (Number(sold.costAmount) * qty) / sold.quantity : 0;
       lineData.push({
         productId,
         quantity: qty,
         unitPrice,
         subtotal,
-        saleLots: saleItemsByProduct?.get(productId)?.lotUsages || [],
+        variantId: sold && !sold.mixedVariant ? sold.variantId : null,
+        costAmount: restock ? share : null,
+        saleLots: sold?.lotUsages || [],
       });
     }
 
@@ -203,6 +214,7 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
               quantity: l.quantity,
               unitPrice: l.unitPrice,
               subtotal: l.subtotal,
+              ...(l.costAmount != null ? { costAmount: new Prisma.Decimal(Number(l.costAmount).toFixed(4)) } : {}),
             })),
           },
         },
@@ -210,6 +222,15 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       });
 
       for (const l of lineData) {
+        if (!restock) continue;
+        if (l.variantId) {
+          await tx.variantStock.upsert({
+            where: { variantId_branchId: { variantId: l.variantId, branchId: bid } },
+            create: { variantId: l.variantId, branchId: bid, quantity: l.quantity, minStockLevel: 5 },
+            update: { quantity: { increment: l.quantity } },
+          });
+          continue;
+        }
         await tx.inventory.upsert({
           where: {
             productId_branchId: { productId: l.productId, branchId: bid },

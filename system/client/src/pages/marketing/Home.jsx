@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { api } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
 import {
   CATEGORIES,
@@ -13,6 +14,16 @@ export default function Home() {
   const isAr = locale === "ar";
   const c = COPY[isAr ? "ar" : "en"];
   const [sent, setSent] = useState(false);
+  const [business, setBusiness] = useState(null);
+  useEffect(() => {
+    api("/api/shop/meta").then((meta) => setBusiness(meta.business || null)).catch(() => {});
+  }, []);
+  const digits = String(business?.whatsapp || "").replace(/[^\d]/g, "");
+  const whatsappHref = digits ? `https://wa.me/${digits}` : CONTACT.whatsappHref;
+  const whatsappLabel = business?.whatsapp || CONTACT.whatsapp;
+  const email = business?.email || CONTACT.email;
+  const place = business?.address || (isAr ? CONTACT.locationAr : CONTACT.locationEn);
+  const hours = isAr ? business?.hours : business?.hoursEn || business?.hours;
 
   return (
     <div className="nc-page">
@@ -48,7 +59,7 @@ export default function Home() {
               height={370}
             />
             <p className="nc-hero-place">
-              {isAr ? CONTACT.locationAr : CONTACT.locationEn}
+              {place}
             </p>
           </div>
         </div>
@@ -122,7 +133,7 @@ export default function Home() {
                   <span>{isAr ? "قسائم تهذيب" : "grooming coupons"}</span>
                 </p>
                 <p className="nc-service-blurb">{isAr ? s.blurbAr : s.blurbEn}</p>
-                <a className="nc-btn nc-btn-forest nc-btn-block" href={CONTACT.whatsappHref} target="_blank" rel="noreferrer">
+                <a className="nc-btn nc-btn-forest nc-btn-block" href={whatsappHref} target="_blank" rel="noreferrer">
                   {c.services.cta}
                 </a>
               </article>
@@ -141,8 +152,8 @@ export default function Home() {
             <ul className="nc-contact-list">
               <li>
                 <span>{c.contact.whatsapp}</span>
-                <a href={CONTACT.whatsappHref} target="_blank" rel="noreferrer">
-                  {CONTACT.whatsapp}
+                <a href={whatsappHref} target="_blank" rel="noreferrer">
+                  {whatsappLabel}
                 </a>
               </li>
               <li>
@@ -153,12 +164,18 @@ export default function Home() {
               </li>
               <li>
                 <span>{c.contact.email}</span>
-                <a href={CONTACT.emailHref}>{CONTACT.email}</a>
+                <a href={`mailto:${email}`}>{email}</a>
               </li>
               <li>
                 <span>{isAr ? "الموقع" : "Location"}</span>
-                <em>{isAr ? CONTACT.locationAr : CONTACT.locationEn}</em>
+                <em>{place}</em>
               </li>
+              {hours ? (
+                <li>
+                  <span>{isAr ? "الساعات" : "Hours"}</span>
+                  <em>{hours}</em>
+                </li>
+              ) : null}
             </ul>
           </div>
 

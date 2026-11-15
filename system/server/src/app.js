@@ -43,6 +43,17 @@ import couponsRoutes from "./routes/coupons.js";
 import employeesRoutes from "./routes/employees.js";
 import payrollRoutes from "./routes/payroll.js";
 import employeeLoansRoutes from "./routes/employeeLoans.js";
+import petTypeRoutes from "./routes/petTypes.js";
+import purchaseOrderRoutes from "./routes/purchaseOrders.js";
+import shopRoutes from "./routes/shop.js";
+import groomingShopRoutes from "./routes/groomingShop.js";
+import { relocationShop, relocationStaff } from "./routes/relocation.js";
+import onlineOrderRoutes from "./routes/onlineOrders.js";
+import deliverySetupRoutes from "./routes/deliverySetup.js";
+import promotionRoutes from "./routes/promotions.js";
+import financeRoutes from "./routes/finance.js";
+import vehicleRoutes from "./routes/vehicles.js";
+import exportRoutes from "./routes/exports.js";
 import customerAccountsRoutes from "./routes/customerAccounts.js";
 import zakatRoutes from "./routes/zakat.js";
 import expensesRoutes from "./routes/expenses.js";
@@ -85,7 +96,7 @@ app.use(helmetMiddleware);
 app.use(cors({ origin: true, credentials: true }));
 /** Stripe webhook needs raw body — mount before express.json() */
 app.use("/api/billing", billingWebhookRoutes);
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "8mb" }));
 app.use("/api/auth/login", loginRateLimiter);
 app.use("/api/auth/register-organization", loginRateLimiter);
 app.use("/api", apiRateLimiter);
@@ -161,6 +172,18 @@ app.use("/api/coupons", couponsRoutes);
 app.use("/api/employees", employeesRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use("/api/employee-loans", employeeLoansRoutes);
+app.use("/api/pet-types", petTypeRoutes);
+app.use("/api/purchase-orders", purchaseOrderRoutes);
+app.use("/api/shop/grooming", groomingShopRoutes);
+app.use("/api/shop/relocation", relocationShop);
+app.use("/api/relocation", relocationStaff);
+app.use("/api/shop", shopRoutes);
+app.use("/api/promotions", promotionRoutes);
+app.use("/api/finance", financeRoutes);
+app.use("/api/vehicles", vehicleRoutes);
+app.use("/api/exports", exportRoutes);
+app.use("/api/online-orders", onlineOrderRoutes);
+app.use("/api/delivery-setup", deliverySetupRoutes);
 
 /**
  * Local single-process mode: serve the Vite build from the same Express port.

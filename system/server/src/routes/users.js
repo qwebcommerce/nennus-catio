@@ -3,11 +3,12 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { findOrganizationOwnerId, isOrganizationOwner } from "../lib/orgOwner.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireRole, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
 router.use(requireRole("ADMIN"));
+router.use((req, res, next) => requireModule("team", req.method === "GET" ? "view" : "edit")(req, res, next));
 
 const userSelect = {
   id: true,

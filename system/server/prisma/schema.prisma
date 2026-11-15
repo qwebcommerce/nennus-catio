@@ -47,6 +47,28 @@ model Organization {
   cashierPermissions String?
   /// هل يُسمح لبائع الأرضية بإتمام الدفع من الجوال (وإلا يُرسل السلة للكاشير)
   associateCanAcceptPayment Boolean @default(true)
+  /// The one location the website sells from. Never a van.
+  websiteBranchId String?
+  websiteBranch   Branch? @relation("OrgWebsiteBranch", fields: [websiteBranchId], references: [id], onDelete: SetNull)
+  /// How long a website payment hold lasts, in minutes.
+  holdMinutes Int @default(20)
+  /// Business WhatsApp for a custom pet-house enquiry. Digits only, country code included.
+  whatsappNumber String?
+  /// Added to a grooming booking when the customer chooses a home visit.
+  homeVisitFee Decimal @default(0)
+  phone           String?
+  publicEmail     String?
+  publicAddress   String?
+  hoursText       String?
+  hoursTextEn     String?
+  notifyEmail     String?
+  alertOrder      Boolean @default(true)
+  alertBooking    Boolean @default(true)
+  alertRelocation Boolean @default(true)
+  alertLowStock   Boolean @default(false)
+  /// Module rights for manager and cashier. Admin always has every action.
+  managerModules  String?
+  cashierModules  String?
 
   /// Onboarding: account created → profile/docs → Stripe payment → complete
   profileDocsDone Boolean @default(false)
@@ -123,6 +145,19 @@ model Organization {
   purchaseDrafts          PurchaseDraft[]
   promoDrafts             PromoDraft[]
   saleItemLots            SaleItemLot[]
+  catalogPetTypes         CatalogPetType[]
+  productVariants         ProductVariant[]
+  purchaseOrders          PurchaseOrder[]
+  supplierBills           SupplierBill[]
+  stockMovements          StockMovement[]
+  stockHolds              StockHold[]
+  deliveryAreas           DeliveryArea[]
+  deliveryWindows         DeliveryWindow[]
+  customerPets            CustomerPet[]
+  groomingSchedules       GroomingSchedule[]
+  relocationRequests      RelocationRequest[]
+  promotions              Promotion[]
+  vehicles                Vehicle[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -241,10 +276,29 @@ enum EmployeeLoanStatus {
 
 enum AppointmentStatus {
   BOOKED
+  PENDING_PAYMENT
   CONFIRMED
   CHECKED_IN
+  IN_PROGRESS
   DONE
   NO_SHOW
+  CANCELLED
+}
+
+enum VisitKind {
+  SHOP
+  HOME
+}
+
+enum RelocationStatus {
+  SUBMITTED
+  DOCUMENTS_REQUESTED
+  DOCUMENTS_RECEIVED
+  UNDER_REVIEW
+  QUOTE_SENT
+  PAID
+  IN_PROGRESS
+  COMPLETED
   CANCELLED
 }
 
@@ -398,10 +452,82 @@ enum PetType {
   OTHER
 }
 
+enum LocationKind {
+  WAREHOUSE
+  SHOP
+  VAN
+}
+
+enum OrderChannel {
+  IN_STORE
+  VAN
+  WEBSITE
+}
+
+enum SellBy {
+  PIECE
+  WEIGHT
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum SupplierBillStatus {
+  OPEN
+  PARTIAL
+  PAID
+}
+
+enum SupplierPayMethod {
+  CASH
+  BANK
+}
+
+enum WebOrderStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  PREPARING
+  OUT_FOR_DELIVERY
+  READY_FOR_PICKUP
+  DELIVERED
+  COLLECTED
+  CANCELLED
+}
+
+enum FulfillmentKind {
+  DELIVERY
+  PICKUP
+}
+
+enum StockMoveReason {
+  RECEIPT
+  TRANSFER
+  SALE
+  RETURN
+  ADJUSTMENT
+  HOLD_COMMIT
+  CANCEL
+}
+
+enum HoldStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}
+
 enum PaymentMethod {
   CASH
   CARD
   ONLINE
+  /// Van till: customer pays by Fawran. Staff confirm the reference. The bank is not checked automatically.
+  FAWRAN
+  /// Van till: customer pays from a link or QR. Staff confirm the reference.
+  PAYMENT_LINK
   SPLIT
   /// الدفع عند الاستلام — نقاط الولاء تُمنح بعد تأكيد الاستلام إذا كان الإعداد ON_DELIVERY
   ON_DELIVERY
@@ -447,6 +573,22 @@ enum CouponChannel {
   BOTH
 }
 
+enum PromotionKind {
+  PERCENT
+  FIXED
+  PRODUCT
+  CATEGORY
+  BUNDLE
+  BOGO
+}
+
+enum PromoChannel {
+  ALL
+  TILL
+  WEBSITE
+  GROOMING
+}
+
 enum SaleChannel {
   RETAIL
   WHOLESALE
@@ -485,6 +627,17 @@ model Customer {
   lifetimeSpend   Decimal      @default(0)
   /// رصيد ذمّة (ما للمحل على الزبون) — يُحدَّث مع CustomerAccountLedger
   accountBalance  Decimal      @default(0)
+  passwordHash    String?
+  emailVerifiedAt DateTime?
+  /// Approved to buy now and pay later.
+  creditApproved  Boolean      @default(false)
+  creditLimit     Decimal?
+  locale          String       @default("ar")
+  /// Staff-only labels. Never returned on the shop account.
+  tags            String?
+  verifyTokenHash String?
+  resetTokenHash  String?      @unique
+  resetExpiresAt  DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   sales          Sale[]
@@ -494,6 +647,9 @@ model Customer {
   automationLogs AutomationLog[]
   deliveryOrders DeliveryOrder[]
   deliveryStops  DeliveryStop[]
+  pets           CustomerPet[]
+  addresses      CustomerAddress[]
+  relocationRequests RelocationRequest[]
 }
 
 /// حركات ذمم الزبائن
@@ -615,6 +771,7 @@ model Category {
   updatedAt      DateTime      @updatedAt
   products       Product[]     @relation("ProductCategory")
   subcategories  Subcategory[]
+  promotions     Promotion[]
 
   @@unique([organizationId, supabaseId])
   @@index([organizationId])
@@ -662,6 +819,9 @@ model Branch {
   name           String
   nameEn         String?
   address        String?
+  kind           LocationKind @default(SHOP)
+  isActive       Boolean      @default(true)
+  websiteFor     Organization[] @relation("OrgWebsiteBranch")
   supabaseId     String?
   createdAt      DateTime     @default(now())
   users          User[]
@@ -683,6 +843,11 @@ model Branch {
   deliveryRoutes DeliveryRoute[]
   deliveryStops  DeliveryStop[]
   inventoryLots  InventoryLot[]
+  purchaseOrders PurchaseOrder[]
+  stockMovements StockMovement[]
+  stockHolds     StockHold[]
+  variantStocks  VariantStock[]
+  vehicle        Vehicle?
 
   @@unique([organizationId, supabaseId])
 }
@@ -693,10 +858,17 @@ model Supplier {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
   phone          String?
+  email          String?
+  address        String?
   note           String?
+  isActive       Boolean      @default(true)
   createdAt      DateTime     @default(now())
   purchases      Purchase[]
   purchaseDrafts PurchaseDraft[]
+  preferredProducts Product[] @relation("ProductPreferredSupplier")
+  preferredVariants ProductVariant[] @relation("VariantPreferredSupplier")
+  purchaseOrders PurchaseOrder[]
+  supplierBills  SupplierBill[]
 }
 
 model Account {
@@ -924,10 +1096,14 @@ model GroomingService {
   name           String
   durationMin    Int          @default(60)
   price          Decimal
+  nameEn         String?
+  included       String?
+  includedEn     String?
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   appointments   Appointment[]
+  petLinks       GroomingPackagePet[]
 
   @@index([organizationId, active])
 }
@@ -958,6 +1134,9 @@ model User {
   customerLedgerEntriesCreated CustomerAccountLedger[] @relation("CustomerLedgerCreatedBy")
   expensesCreated Expense[] @relation("ExpenseCreatedBy")
   appointmentsCreated Appointment[] @relation("AppointmentCreatedBy")
+  purchaseOrdersCreated PurchaseOrder[]
+  stockMovements StockMovement[]
+  supplierPayments SupplierPayment[]
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -996,8 +1175,21 @@ model Product {
   subcategoryId  String?
   productSubcategory Subcategory? @relation("ProductSubcategory", fields: [subcategoryId], references: [id], onDelete: SetNull)
   imageUrl       String?
+  /// Extra image URLs, after the main image.
+  gallery        Json?
+  sellBy         SellBy       @default(PIECE)
+  preferredSupplierId String?
+  preferredSupplier   Supplier? @relation("ProductPreferredSupplier", fields: [preferredSupplierId], references: [id], onDelete: SetNull)
+  /// Ready-made pet house sold through the same checkout.
+  isPetHouse       Boolean  @default(false)
+  leadTimeDays     Int?
+  houseDeliveryFee Decimal  @default(0)
+  /// Made-to-order houses do not reduce on-hand quantity.
+  takesStock       Boolean  @default(true)
   productImages  ProductImage[]
   isActive       Boolean      @default(true)
+  petLinks       ProductPetType[]
+  variants       ProductVariant[]
   externalId     String?
   /// اختياري: إضافات/خيارات للكافيه والمطاعم [{key,label,labelAr?,priceDelta}]
   modifiers      Json?
@@ -1014,6 +1206,9 @@ model Product {
   purchaseDraftItems PurchaseDraftItem[]
   promoDraftItems PromoDraftItem[]
   inventoryLots  InventoryLot[]
+  stockMovements StockMovement[]
+  stockHolds     StockHold[]
+  promotions     Promotion[]
 
   @@unique([organizationId, sku])
   @@unique([organizationId, externalId])
@@ -1027,6 +1222,8 @@ model Inventory {
   branchId      String
   branch        Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
   quantity      Int      @default(0)
+  /// Last weighted unit cost at this location. Does not change the selling price.
+  unitCost      Decimal?
   minStockLevel Int      @default(5)
   lots          InventoryLot[]
 
@@ -1047,6 +1244,17 @@ model Appointment {
   groomer         Employee?         @relation("AppointmentGroomer", fields: [groomerId], references: [id], onDelete: SetNull)
   petName         String?
   petType         PetType           @default(OTHER)
+  breed           String?
+  ageText         String?
+  visitKind       VisitKind         @default(SHOP)
+  address         String?
+  areaId          String?
+  area            DeliveryArea?     @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  homeFee         Decimal           @default(0)
+  amount          Decimal           @default(0)
+  holdExpiresAt   DateTime?
+  gatewayPaymentId String?
+  paymentReference String?
   notes           String?
   status          AppointmentStatus @default(BOOKED)
   startAt         DateTime
@@ -1090,6 +1298,28 @@ model Sale {
   customer         Customer?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
   /// تجزئة (POS) أو جملة (قسم الجملة)
   channel          SaleChannel     @default(RETAIL)
+  /// Shop, van, or website. Separate from wholesale vs retail pricing.
+  orderChannel     OrderChannel    @default(IN_STORE)
+  /// Fawran or payment-link reference confirmed by staff.
+  paymentReference String?
+  webStatus        WebOrderStatus?
+  fulfillment      FulfillmentKind?
+  deliveryFee      Decimal         @default(0)
+  deliveryAreaId   String?
+  deliveryArea     DeliveryArea?   @relation(fields: [deliveryAreaId], references: [id], onDelete: SetNull)
+  deliveryWindowId String?
+  deliveryWindow   DeliveryWindow? @relation(fields: [deliveryWindowId], references: [id], onDelete: SetNull)
+  gatewayPaymentId String?
+  holdExpiresAt    DateTime?
+  /// Calendar day of the delivery window, in Qatar.
+  deliveryDate     DateTime?       @db.Date
+  deliveryLat      Decimal?
+  deliveryLng      Decimal?
+  fleetwizReference String?
+  fleetwizStatus   String?
+  /// Gateway amount did not match the order. Staff decide.
+  paymentReview    Boolean         @default(false)
+  promotionDiscount Decimal        @default(0)
   clientMutationId String?         @unique
   total            Decimal
   discountAmount   Decimal         @default(0)
@@ -1128,6 +1358,7 @@ model Sale {
   refunds          Refund[]
   loyaltyLedgers   LoyaltyLedger[]
   customerAccountLedgers CustomerAccountLedger[]
+  stockHolds       StockHold[]
 
   @@unique([invoiceNumber])
 }
@@ -1190,6 +1421,7 @@ model Refund {
   clientMutationId String?      @unique
   total            Decimal
   note             String?
+  gatewayRefundId  String?
   createdAt        DateTime     @default(now())
   items            RefundItem[]
 }
@@ -1211,6 +1443,8 @@ model RefundItem {
   quantity  Int
   unitPrice Decimal
   subtotal  Decimal
+  /// Cost reversed when the goods are returned. Empty when the refund is money only.
+  costAmount Decimal?
 }
 
 model Purchase {
@@ -1337,9 +1571,16 @@ model SaleItem {
   sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
   productId String
   product   Product  @relation(fields: [productId], references: [id])
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  /// Pieces, or grams when the product is sold by weight.
   quantity  Int
   unitPrice Decimal
   subtotal  Decimal
+  discountAmount Decimal @default(0)
+  /// Location unit cost at the time of the sale. Does not change the selling price.
+  unitCost  Decimal?
+  costAmount Decimal?
   /// الإضافات المختارة للسطر [{key,label,priceDelta}]
   modifiers Json?
   lotUsages SaleItemLot[]
@@ -1412,4 +1653,362 @@ model SyncSettings {
   lastOrderSyncAt      DateTime?
   lastSupabaseSyncAt   DateTime?
   updatedAt            DateTime     @updatedAt
+}
+
+model CatalogPetType {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  nameEn         String?
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  products       ProductPetType[]
+  pets           CustomerPet[]
+  groomingPackages GroomingPackagePet[]
+
+  @@index([organizationId, isActive])
+}
+
+model ProductPetType {
+  productId String
+  petTypeId String
+  product   Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  petType   CatalogPetType @relation(fields: [petTypeId], references: [id], onDelete: Cascade)
+
+  @@id([productId, petTypeId])
+}
+
+model ProductVariant {
+  id                  String    @id @default(cuid())
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productId           String
+  product             Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku                 String?
+  barcode             String?
+  label               String
+  labelEn             String?
+  price               Decimal
+  isActive            Boolean   @default(true)
+  packWeight          Decimal?
+  preferredSupplierId String?
+  preferredSupplier   Supplier? @relation("VariantPreferredSupplier", fields: [preferredSupplierId], references: [id], onDelete: SetNull)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  stocks              VariantStock[]
+  saleItems           SaleItem[]
+  orderLines          PurchaseOrderLine[]
+  stockMovements      StockMovement[]
+  stockHolds          StockHold[]
+
+  @@unique([organizationId, sku])
+  @@unique([organizationId, barcode])
+  @@index([productId])
+}
+
+model VariantStock {
+  id            String         @id @default(cuid())
+  variantId     String
+  variant       ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  branchId      String
+  branch        Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  quantity      Int            @default(0)
+  unitCost      Decimal?
+  minStockLevel Int            @default(5)
+
+  @@unique([variantId, branchId])
+  @@index([branchId])
+}
+
+model PurchaseOrder {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplierId     String
+  supplier       Supplier            @relation(fields: [supplierId], references: [id])
+  branchId       String
+  branch         Branch              @relation(fields: [branchId], references: [id])
+  userId         String
+  user           User                @relation(fields: [userId], references: [id])
+  status         PurchaseOrderStatus @default(DRAFT)
+  note           String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  lines          PurchaseOrderLine[]
+  bills          SupplierBill[]
+
+  @@index([organizationId, status])
+}
+
+model PurchaseOrderLine {
+  id               String         @id @default(cuid())
+  orderId          String
+  order            PurchaseOrder  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId        String
+  variantId        String?
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  quantity         Int
+  quantityReceived Int            @default(0)
+  unitCost         Decimal
+
+  @@index([orderId])
+}
+
+model SupplierBill {
+  id             String             @id @default(cuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplierId     String
+  supplier       Supplier           @relation(fields: [supplierId], references: [id])
+  purchaseOrderId String?
+  purchaseOrder  PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
+  amount         Decimal
+  amountPaid     Decimal            @default(0)
+  status         SupplierBillStatus @default(OPEN)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  payments       SupplierPayment[]
+
+  @@index([organizationId, supplierId, status])
+}
+
+model SupplierPayment {
+  id        String            @id @default(cuid())
+  billId    String
+  bill      SupplierBill      @relation(fields: [billId], references: [id], onDelete: Cascade)
+  amount    Decimal
+  method    SupplierPayMethod
+  paidAt    DateTime          @default(now())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id])
+  note      String?
+}
+
+model StockMovement {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product         @relation(fields: [productId], references: [id])
+  variantId      String?
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  branchId       String
+  branch         Branch          @relation(fields: [branchId], references: [id])
+  quantityDelta  Int
+  reason         StockMoveReason
+  note           String?
+  userId         String?
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt      DateTime        @default(now())
+
+  @@index([organizationId, branchId, createdAt])
+  @@index([productId])
+}
+
+model StockHold {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  saleId         String
+  sale           Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product        @relation(fields: [productId], references: [id])
+  variantId      String?
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  branchId       String
+  branch         Branch         @relation(fields: [branchId], references: [id])
+  quantity       Int
+  windowId       String?
+  window         DeliveryWindow? @relation(fields: [windowId], references: [id], onDelete: SetNull)
+  status         HoldStatus     @default(HELD)
+  expiresAt      DateTime
+  releasedAt     DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@index([saleId, status])
+  @@index([branchId, productId, status])
+}
+
+model DeliveryArea {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  nameEn         String?
+  city           String?
+  fee            Decimal      @default(0)
+  isActive       Boolean      @default(true)
+  sales          Sale[]
+  appointments   Appointment[]
+  createdAt      DateTime     @default(now())
+}
+
+model DeliveryWindow {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  label          String
+  labelEn        String?
+  /// 0 = Sunday … 6 = Saturday. Null means any day.
+  weekday        Int?
+  startTime      String
+  endTime        String
+  seats          Int          @default(4)
+  isActive       Boolean      @default(true)
+  sales          Sale[]
+  holds          StockHold[]
+  createdAt      DateTime     @default(now())
+}
+
+model CustomerPet {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  petTypeId      String?
+  petType        CatalogPetType? @relation(fields: [petTypeId], references: [id], onDelete: SetNull)
+  name           String
+  breed          String?
+  ageText        String?
+  /// Staff only. Never returned to the customer account.
+  notes          String?
+  createdAt      DateTime     @default(now())
+  relocationLinks RelocationPet[]
+
+  @@index([customerId])
+}
+
+model CustomerAddress {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  label      String?
+  line1      String
+  area       String?
+  city       String?
+  lat        Decimal?
+  lng        Decimal?
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([customerId])
+}
+
+model GroomingSchedule {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// 0 = Sunday … 6 = Saturday.
+  weekday        Int
+  startTime      String
+  endTime        String
+  capacity       Int          @default(1)
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, weekday])
+}
+
+model GroomingPackagePet {
+  serviceId String
+  petTypeId String
+  service   GroomingService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  petType   CatalogPetType  @relation(fields: [petTypeId], references: [id], onDelete: Cascade)
+
+  @@id([serviceId, petTypeId])
+}
+
+model RelocationRequest {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  destination    String
+  petSummary     String?
+  status         RelocationStatus @default(SUBMITTED)
+  quoteAmount    Decimal?
+  quoteNote      String?
+  /// Hidden from the customer.
+  staffNotes     String?
+  history        Json?
+  paymentMethod  String?
+  gatewayPaymentId String?
+  paidAt         DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  pets           RelocationPet[]
+  documents      RelocationDocument[]
+
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+model RelocationPet {
+  requestId String
+  petId     String
+  request   RelocationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  pet       CustomerPet       @relation(fields: [petId], references: [id], onDelete: Cascade)
+
+  @@id([requestId, petId])
+}
+
+model RelocationDocument {
+  id         String            @id @default(cuid())
+  requestId  String
+  request    RelocationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  fileName   String
+  mime       String
+  content    Bytes
+  createdAt  DateTime          @default(now())
+
+  @@index([requestId])
+}
+
+model Promotion {
+  id             String        @id @default(cuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  nameEn         String?
+  kind           PromotionKind
+  code           String?
+  percent        Decimal?
+  amount         Decimal?
+  productId      String?
+  product        Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  categoryId     String?
+  category       Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  buyQty         Int?
+  getQty         Int?
+  bundleProductIds Json?
+  bundlePrice    Decimal?
+  minOrderAmount Decimal?
+  startsAt       DateTime      @default(now())
+  endsAt         DateTime?
+  active         Boolean       @default(true)
+  channel        PromoChannel  @default(ALL)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId, active])
+}
+
+model Vehicle {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  plate          String
+  branchId       String?      @unique
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  isActive       Boolean      @default(true)
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, isActive])
 }

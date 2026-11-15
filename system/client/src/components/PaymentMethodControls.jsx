@@ -69,6 +69,8 @@ const METHOD_ICONS = {
   CASH: IconCash,
   CARD: IconCardPay,
   ONLINE: IconOnline,
+  FAWRAN: IconOnline,
+  PAYMENT_LINK: IconWallet,
   ON_ACCOUNT: IconWallet,
   ON_DELIVERY: IconDelivery,
 };
@@ -77,6 +79,8 @@ const METHOD_LABEL_KEYS = {
   CASH: "payment.cash",
   CARD: "payment.card",
   ONLINE: "payment.online",
+  FAWRAN: "payment.fawran",
+  PAYMENT_LINK: "payment.link",
   ON_ACCOUNT: "payment.onAccount",
   ON_DELIVERY: "payment.onDelivery",
 };

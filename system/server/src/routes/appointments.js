@@ -3,12 +3,14 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
+import { qatarParts, slotTaken } from "../lib/groomingSlots.js";
 
 const router = Router();
 router.use(authMiddleware);
 router.use(requireRole("ADMIN", "MANAGER"));
 
-const ACTIVE_STATUSES = ["BOOKED", "CONFIRMED", "CHECKED_IN"];
+const ACTIVE_STATUSES = ["BOOKED", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS"];
+const STATUSES = ["BOOKED", "PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "DONE", "NO_SHOW", "CANCELLED"];
 
 function parseDateTime(value) {
   const d = new Date(String(value || ""));
@@ -73,14 +75,22 @@ router.post("/services", async (req, res) => {
       return res.status(400).json({ error: "سعر غير صالح" });
     }
     const branchId = b.branchId ? await assertBranchAllowed(req, String(b.branchId)) : null;
+    const petTypeIds = Array.isArray(b.petTypeIds) ? [...new Set(b.petTypeIds.map(String))] : [];
+    const petTypes = petTypeIds.length
+      ? await prisma.catalogPetType.findMany({ where: { organizationId: req.user.organizationId, id: { in: petTypeIds } } })
+      : [];
     const row = await prisma.groomingService.create({
       data: {
         organizationId: req.user.organizationId,
         branchId,
         name,
+        nameEn: b.nameEn ? String(b.nameEn).trim() : null,
+        included: b.included ? String(b.included).trim() : null,
+        includedEn: b.includedEn ? String(b.includedEn).trim() : null,
         durationMin,
         price: new Prisma.Decimal(price.toFixed(2)),
         active: true,
+        petLinks: { create: petTypes.map((pet) => ({ petTypeId: pet.id })) },
       },
     });
     res.status(201).json(row);
@@ -148,6 +158,28 @@ router.get("/availability", async (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "تعذر فحص التوفر" });
   }
+});
+
+router.get("/schedule", async (req, res) => {
+  const rows = await prisma.groomingSchedule.findMany({
+    where: { organizationId: req.user.organizationId },
+    orderBy: [{ weekday: "asc" }, { startTime: "asc" }],
+  });
+  res.json(rows);
+});
+
+router.post("/schedule", async (req, res) => {
+  const weekday = Number(req.body?.weekday);
+  const startTime = String(req.body?.startTime || "").trim();
+  const endTime = String(req.body?.endTime || "").trim();
+  const capacity = Math.floor(Number(req.body?.capacity) || 0);
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6 || !startTime || !endTime || capacity < 1) {
+    return res.status(400).json({ error: "Weekday, times, and a capacity of at least one are required" });
+  }
+  const row = await prisma.groomingSchedule.create({
+    data: { organizationId: req.user.organizationId, weekday, startTime, endTime, capacity },
+  });
+  res.status(201).json(row);
 });
 
 router.post("/", async (req, res) => {
@@ -254,10 +286,24 @@ router.patch("/:id", async (req, res) => {
     const data = {};
     if (b.status != null) {
       const st = String(b.status).toUpperCase();
-      if (!["BOOKED", "CONFIRMED", "CHECKED_IN", "DONE", "NO_SHOW", "CANCELLED"].includes(st)) {
+      if (!STATUSES.includes(st)) {
         return res.status(400).json({ error: "حالة غير صالحة" });
       }
       data.status = st;
+    }
+    if (b.startAt != null || b.endAt != null) {
+      const startAt = parseDateTime(b.startAt || existing.startAt);
+      const endAt = parseDateTime(b.endAt || existing.endAt);
+      if (!startAt || !endAt || endAt <= startAt) return res.status(400).json({ error: "وقت الموعد غير صالح" });
+      const taken = await slotTaken(prisma, req.user.organizationId, startAt, endAt, existing.id);
+      const local = qatarParts(startAt);
+      const schedules = await prisma.groomingSchedule.findMany({
+        where: { organizationId: req.user.organizationId, weekday: local.weekday, isActive: true },
+      });
+      const room = schedules.reduce((max, row) => Math.max(max, row.capacity), 0);
+      if (schedules.length && taken >= room) return res.status(409).json({ error: "That time is already full" });
+      data.startAt = startAt;
+      data.endAt = endAt;
     }
     if (b.notes !== undefined) data.notes = b.notes ? String(b.notes).trim() : null;
     const row = await prisma.$transaction(async (tx) => {

@@ -6,6 +6,8 @@ const PAY_KEYS = {
   CASH: "payment.cash",
   CARD: "payment.card",
   ONLINE: "payment.online",
+  FAWRAN: "payment.fawran",
+  PAYMENT_LINK: "payment.link",
   SPLIT: "payment.split",
   ON_ACCOUNT: "payment.onAccount",
   ON_DELIVERY: "payment.onDelivery",
@@ -79,6 +81,7 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
         ) : (
           <div>
             {t("invoice.payment")} {t(PAY_KEYS[sale.paymentMethod] || "payment.cash")}
+            {sale.paymentReference ? ` · ${sale.paymentReference}` : ""}
           </div>
         )}
         {sale.customer ? (

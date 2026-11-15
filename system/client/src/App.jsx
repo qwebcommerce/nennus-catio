@@ -5,8 +5,16 @@ import { useI18n } from "./context/LanguageContext.jsx";
 import { AppLayout } from "./components/layout/AppLayout.jsx";
 import { VerticalFeatureGate } from "./components/VerticalFeatureGate.jsx";
 import Login from "./pages/Login.jsx";
-import { MarketingLayout } from "./marketing/MarketingLayout.jsx";
-import Home from "./pages/marketing/Home.jsx";
+import { ShopAccount, ShopCheckout, ShopOrders, ShopProduct, ShopReset, ShopVerify } from "./pages/shop/Shop.jsx";
+import { ShopBookings, ShopGrooming, ShopGroomingBook, ShopHouses, ShopRelocation } from "./pages/shop/ShopServices.jsx";
+import { SiteLayout } from "./site/SiteLayout.jsx";
+import { SiteHome } from "./site/SiteHome.jsx";
+import { SiteShop } from "./site/SiteShop.jsx";
+import { SiteAbout } from "./site/SiteAbout.jsx";
+import { SiteContact } from "./site/SiteContact.jsx";
+import { SiteGrooming } from "./site/SiteGrooming.jsx";
+import { SiteHouses } from "./site/SiteHouses.jsx";
+import { SiteRelocation } from "./site/SiteRelocation.jsx";
 import OnboardingProfile from "./pages/onboarding/OnboardingProfile.jsx";
 import OnboardingPayment from "./pages/onboarding/OnboardingPayment.jsx";
 import OnboardingPaymentSuccess from "./pages/onboarding/OnboardingPaymentSuccess.jsx";
@@ -29,6 +37,14 @@ import ComingSoon from "./pages/ComingSoon.jsx";
 import Zakat from "./pages/Zakat.jsx";
 import Returns from "./pages/Returns.jsx";
 import Purchases from "./pages/Purchases.jsx";
+import PurchaseOrders from "./pages/PurchaseOrders.jsx";
+import OnlineOrders from "./pages/OnlineOrders.jsx";
+import PetTypes from "./pages/PetTypes.jsx";
+import GroomingDesk from "./pages/GroomingDesk.jsx";
+import RelocationDesk from "./pages/RelocationDesk.jsx";
+import Promotions from "./pages/Promotions.jsx";
+import Finance from "./pages/Finance.jsx";
+import Vehicles from "./pages/Vehicles.jsx";
 import Transfer from "./pages/Transfer.jsx";
 import Count from "./pages/Count.jsx";
 import Cash from "./pages/Cash.jsx";
@@ -135,21 +151,6 @@ function ComingSoonFloorOrLive() {
   return <ComingSoon titleKey="nav.floorPos" blurbKey="comingSoon.floorPos" />;
 }
 
-function PublicHome() {
-  const { user, loading } = useAuth();
-  if (loading) {
-    return (
-      <div style={{ padding: 24, textAlign: "center" }}>
-        Loading...
-      </div>
-    );
-  }
-  if (user) {
-    return <Navigate to={getPostAuthPath(user)} replace />;
-  }
-  return <Home />;
-}
-
 function ProtectedPlatform({ children }) {
   const { user, loading } = useAuth();
   const { t } = useI18n();
@@ -213,12 +214,30 @@ export default function App() {
   return (
     <React.Suspense fallback={lazyFallback}>
       <Routes>
-        <Route element={<MarketingLayout />}>
-          <Route path="/" element={<PublicHome />} />
-          <Route path="/about" element={<Navigate to="/#categories" replace />} />
-          <Route path="/pricing" element={<Navigate to="/#services" replace />} />
+        <Route element={<SiteLayout />}>
+          <Route path="/" element={<SiteHome />} />
+          <Route path="/about" element={<SiteAbout />} />
+          <Route path="/pricing" element={<Navigate to="/shop" replace />} />
           <Route path="/privacy" element={<Navigate to="/" replace />} />
-          <Route path="/contact" element={<Navigate to="/#contact" replace />} />
+          <Route path="/contact" element={<SiteContact />} />
+          <Route path="/shop" element={<SiteShop />} />
+          <Route path="/grooming" element={<SiteGrooming />} />
+          <Route path="/pet-houses" element={<SiteHouses />} />
+          <Route path="/relocation" element={<SiteRelocation />} />
+          <Route path="/shop/product/:id" element={<ShopProduct />} />
+          <Route path="/shop/checkout" element={<ShopCheckout />} />
+          <Route path="/shop/account" element={<ShopAccount />} />
+          <Route path="/shop/verify" element={<ShopVerify />} />
+          <Route path="/shop/reset" element={<ShopReset />} />
+          <Route path="/shop/orders" element={<ShopOrders />} />
+          <Route path="/shop/orders/:id" element={<ShopOrders />} />
+          <Route path="/shop/grooming" element={<ShopGrooming />} />
+          <Route path="/shop/grooming/bookings" element={<ShopBookings />} />
+          <Route path="/shop/grooming/bookings/:id" element={<ShopBookings />} />
+          <Route path="/shop/grooming/:packageId" element={<ShopGroomingBook />} />
+          <Route path="/shop/houses" element={<ShopHouses />} />
+          <Route path="/shop/relocation" element={<ShopRelocation />} />
+          <Route path="/shop/relocation/:id" element={<ShopRelocation />} />
         </Route>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Navigate to="/login" replace />} />
@@ -548,6 +567,70 @@ export default function App() {
             element={
               <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="refunds">
                 <Returns />
+              </Protected>
+            }
+          />
+          <Route
+            path="/purchase-orders"
+            element={
+              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="purchases">
+                <PurchaseOrders />
+              </Protected>
+            }
+          />
+          <Route
+            path="/online-orders"
+            element={
+              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]}>
+                <OnlineOrders />
+              </Protected>
+            }
+          />
+          <Route
+            path="/promotions"
+            element={
+              <Protected roles={["ADMIN", "MANAGER"]}>
+                <Promotions />
+              </Protected>
+            }
+          />
+          <Route
+            path="/finance"
+            element={
+              <Protected roles={["ADMIN", "MANAGER"]}>
+                <Finance />
+              </Protected>
+            }
+          />
+          <Route
+            path="/vehicles"
+            element={
+              <Protected roles={["ADMIN", "MANAGER"]}>
+                <Vehicles />
+              </Protected>
+            }
+          />
+          <Route
+            path="/grooming"
+            element={
+              <Protected roles={["ADMIN", "MANAGER"]}>
+                <GroomingDesk />
+              </Protected>
+            }
+          />
+          <Route
+            path="/relocation"
+            element={
+              <Protected roles={["ADMIN", "MANAGER"]}>
+                <RelocationDesk />
+              </Protected>
+            }
+          />
+          <Route
+            path="/pet-types"
+            element={
+              <Protected roles={["ADMIN", "MANAGER"]}>
+                <PetTypes />
               </Protected>
             }
           />

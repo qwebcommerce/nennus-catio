@@ -17,11 +17,12 @@ export default function Branches() {
   const [list, setList] = useState([]);
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
+  const [kind, setKind] = useState("SHOP");
   const [supaEdits, setSupaEdits] = useState({});
   const [busy, setBusy] = useState(false);
   const [savingId, setSavingId] = useState("");
   const [editBranch, setEditBranch] = useState(null);
-  const [editForm, setEditForm] = useState({ name: "", address: "" });
+  const [editForm, setEditForm] = useState({ name: "", address: "", kind: "SHOP", isActive: true });
   const [editBusy, setEditBusy] = useState(false);
 
   const load = async () => {
@@ -51,9 +52,10 @@ export default function Branches() {
     }
     setBusy(true);
     try {
-      await api("/api/branches", { method: "POST", body: { name, address } });
+      await api("/api/branches", { method: "POST", body: { name, address, kind } });
       setName("");
       setAddress("");
+      setKind("SHOP");
       await load();
       await reloadBranches();
       await refreshUser?.();
@@ -70,6 +72,8 @@ export default function Branches() {
     setEditForm({
       name: b.name || "",
       address: b.address || "",
+      kind: b.kind || "SHOP",
+      isActive: b.isActive !== false,
     });
   };
 
@@ -93,6 +97,8 @@ export default function Branches() {
         body: {
           name: nextName,
           address: editForm.address.trim() || null,
+          kind: editForm.kind || "SHOP",
+          isActive: editForm.isActive !== false,
         },
       });
       setEditBranch(null);
@@ -172,6 +178,14 @@ export default function Branches() {
             />
           </label>
           <label className="branches-field">
+            <span>{t("branches.kind")}</span>
+            <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={atLimit || busy}>
+              <option value="SHOP">{t("branches.kind.SHOP")}</option>
+              <option value="VAN">{t("branches.kind.VAN")}</option>
+              <option value="WAREHOUSE">{t("branches.kind.WAREHOUSE")}</option>
+            </select>
+          </label>
+          <label className="branches-field">
             <span>{t("branches.address")}</span>
             <input
               value={address}
@@ -202,6 +216,8 @@ export default function Branches() {
                     <div>
                       <h2 className="branch-card__name">{branchDisplayName(b, locale)}</h2>
                       <p className="branch-card__address">
+                        {t(`branches.kind.${b.kind || "SHOP"}`)}
+                        {" · "}
                         {b.address?.trim() ? b.address : t("branches.noAddress")}
                       </p>
                     </div>
@@ -280,6 +296,27 @@ export default function Branches() {
                 onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
                 disabled={editBusy}
               />
+            </label>
+            <label className="branches-field">
+              <span>{t("branches.kind")}</span>
+              <select
+                value={editForm.kind || "SHOP"}
+                onChange={(e) => setEditForm((f) => ({ ...f, kind: e.target.value }))}
+                disabled={editBusy}
+              >
+                <option value="SHOP">{t("branches.kind.SHOP")}</option>
+                <option value="VAN">{t("branches.kind.VAN")}</option>
+                <option value="WAREHOUSE">{t("branches.kind.WAREHOUSE")}</option>
+              </select>
+            </label>
+            <label className="branches-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={editForm.isActive !== false}
+                onChange={(e) => setEditForm((f) => ({ ...f, isActive: e.target.checked }))}
+                disabled={editBusy}
+              />
+              <span>{t("branches.active")}</span>
             </label>
             <label className="branches-field">
               <span>{t("branches.address")}</span>

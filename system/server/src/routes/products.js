@@ -20,6 +20,7 @@ import {
   assertBarcodeAvailable,
 } from "../lib/productBarcode.js";
 import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
+import { syncProductExtras } from "../lib/catalogExtras.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
 import {
@@ -383,6 +384,13 @@ router.get("/", async (req, res) => {
     inventories: branchId
       ? { where: { branchId: String(branchId) } }
       : true,
+    variants: {
+      include: {
+        stocks: branchId ? { where: { branchId: String(branchId) } } : true,
+        preferredSupplier: { select: { id: true, name: true } },
+      },
+    },
+    petLinks: { include: { petType: true } },
     brand: { select: { id: true, name: true, nameEn: true } },
     productCategory: { select: { id: true, name: true, nameEn: true } },
     productSubcategory: { select: { id: true, name: true, nameEn: true, categoryId: true } },
@@ -967,11 +975,19 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       }
       return created;
     });
+    await syncProductExtras(prisma, {
+      orgId: req.user.organizationId,
+      productId: product.id,
+      body: req.body || {},
+    });
   } catch (e) {
     if (e?.code === "P2002") {
       return res.status(400).json({
         error: "تعارض بيانات فريدة (SKU أو باركود أو معرّف خارجي)",
       });
+    }
+    if (e instanceof Error && e.message === "Preferred supplier was not found") {
+      return res.status(400).json({ error: e.message });
     }
     throw e;
   }
@@ -1141,6 +1157,11 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
       where: { id: existing.id },
       data: update,
       include: { inventories: true },
+    });
+    await syncProductExtras(prisma, {
+      orgId: req.user.organizationId,
+      productId: p.id,
+      body: data,
     });
     if (update.imageUrl !== undefined) {
       await linkProductImage(req.user.organizationId, p.id, update.imageUrl);

@@ -13,21 +13,16 @@ import {
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner.js";
 import { useCartStore } from "../store/cartStore.js";
 import { useAuth } from "../context/AuthContext.jsx";
-import { useActiveBranchId, useActiveBranchLabel } from "../context/BranchContext.jsx";
-import { useOffline } from "../context/OfflineContext.jsx";
+import { useActiveBranchId, useActiveBranchLabel, useBranchContext } from "../context/BranchContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import {
-  applyOfflineSaleToInventory,
   hydrateInventoryFromProducts,
   loadProductsForBranch,
   saveCustomers,
   saveProductsForBranch,
   loadCustomers,
 } from "../offline/cache.js";
-import { getOrCreateDeviceId, SYNC_TYPES } from "../offline/db.js";
-import { enqueue } from "../offline/syncQueue.js";
-import { buildOfflineSalePreview } from "../offline/offlineSale.js";
 import { buildReceiptPlainText } from "../utils/receiptText.js";
 import { isUnitPriceAtOrBelowCost } from "../utils/saleCostWarning.js";
 import { productDisplayName } from "../utils/productName.js";
@@ -49,10 +44,12 @@ export default function POS() {
   const { classFor } = usePrintSettings();
   const { user, can } = useAuth();
   const { label: currencyLabel } = useOrgCurrency();
-  const { refreshPending } = useOffline();
   const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
   const branchName = useActiveBranchLabel(locale);
+  const { activeBranch } = useBranchContext();
+  const tillKind = activeBranch?.kind || "SHOP";
+  const tillOpen = Boolean(activeBranch) && activeBranch.isActive !== false && tillKind !== "WAREHOUSE";
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [search, setSearch] = useState("");
@@ -95,6 +92,13 @@ export default function POS() {
   const [barcodeSuggestions, setBarcodeSuggestions] = useState([]);
   const [upsellTips, setUpsellTips] = useState([]);
   const [discountReason, setDiscountReason] = useState("");
+  const [cashTendered, setCashTendered] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [payLink, setPayLink] = useState(null);
+  const [salePrompt, setSalePrompt] = useState(null);
+  const [promptVariantId, setPromptVariantId] = useState("");
+  const [promptKg, setPromptKg] = useState("1");
+  const [todayAppointments, setTodayAppointments] = useState([]);
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
 
@@ -294,7 +298,15 @@ export default function POS() {
           (p.name && p.name.toLowerCase().includes(q)) ||
           (p.nameEn && p.nameEn.toLowerCase().includes(q)) ||
           (p.sku && String(p.sku).toLowerCase().includes(q)) ||
-          (p.barcode && String(p.barcode).toLowerCase().includes(q))
+          (p.barcode && String(p.barcode).toLowerCase().includes(q)) ||
+          (Array.isArray(p.variants) &&
+            p.variants.some(
+              (v) =>
+                (v.sku && String(v.sku).toLowerCase().includes(q)) ||
+                (v.barcode && String(v.barcode).toLowerCase().includes(q)) ||
+                (v.label && v.label.toLowerCase().includes(q)) ||
+                (v.labelEn && v.labelEn.toLowerCase().includes(q))
+            ))
         );
       })
       .slice(0, 14);
@@ -303,6 +315,16 @@ export default function POS() {
   const pickSearchProduct = useCallback(
     (p) => {
       if (!p) return;
+      const variants = (p.variants || []).filter((v) => v.isActive !== false);
+      if (variants.length || p.sellBy === "WEIGHT") {
+        setSalePrompt(p);
+        setPromptVariantId(variants[0]?.id || "");
+        setPromptKg("1");
+        setSearch("");
+        setSearchOpen(false);
+        setMsg("");
+        return;
+      }
       if (showCafeExtras && productHasModifiers(p)) {
         setModifierProduct(p);
         setModifierKeys([]);
@@ -514,16 +536,39 @@ export default function POS() {
     [customers, customerId]
   );
 
-  const paymentMethodIds = useMemo(
-    () => (customerId ? PAYMENT_METHOD_IDS : PAYMENT_METHOD_IDS.filter((m) => m !== "ON_ACCOUNT")),
-    [customerId]
-  );
+  const paymentMethodIds = useMemo(() => {
+    const ids = tillKind === "VAN" ? [...PAYMENT_METHOD_IDS, "FAWRAN", "PAYMENT_LINK"] : PAYMENT_METHOD_IDS;
+    return customerId && selectedCustomer?.creditApproved ? ids : ids.filter((m) => m !== "ON_ACCOUNT");
+  }, [customerId, selectedCustomer, tillKind]);
 
   useEffect(() => {
     if (!customerId && paymentMethod === "ON_ACCOUNT") {
       setPaymentMethod("CASH");
     }
-  }, [customerId, paymentMethod]);
+    if (tillKind !== "VAN" && (paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK")) {
+      setPaymentMethod("CASH");
+    }
+  }, [customerId, paymentMethod, tillKind]);
+
+  useEffect(() => {
+    if (!branchId) {
+      setTodayAppointments([]);
+      return;
+    }
+    let cancelled = false;
+    const now = new Date();
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    api(`/api/appointments?branchId=${encodeURIComponent(branchId)}&day=${day}`)
+      .then((rows) => {
+        if (!cancelled) setTodayAppointments(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setTodayAppointments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId]);
 
   const hasBelowCostWarning = useMemo(
     () => items.some((line) => isUnitPriceAtOrBelowCost(line.unitPrice, line.cost)),
@@ -672,10 +717,39 @@ export default function POS() {
     setMsg("");
     if (!items.length) return;
     const bid = branchId;
+    if (!tillOpen) {
+      setMsg(t("pos.tillLocationRequired"));
+      return;
+    }
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setMsg(t("pos.offlineBlocked"));
+      return;
+    }
+    for (const line of items) {
+      const onHand = Number(line.maxStock ?? 0);
+      if (line.quantity > onHand) {
+        setMsg(t("pos.insufficientStock", { name: productDisplayName(line, locale) }));
+        return;
+      }
+    }
 
     if (discountRisk && !discountRisk.canProceed) {
       setMsg(t("copilot.discountReasonNeeded", { pct: String(discountRisk.pct) }));
       return;
+    }
+
+    if (!splitEnabled && paymentMethod === "CASH" && cashTendered.trim() !== "") {
+      const tendered = round2(Number.parseFloat(String(cashTendered).replace(",", ".")) || 0);
+      if (!(tendered + 0.001 >= amountDue)) {
+        setMsg(t("pos.cashShort"));
+        return;
+      }
+    }
+    if (!splitEnabled && (paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK")) {
+      if (!paymentReference.trim()) {
+        setMsg(t("pos.paymentReferenceRequired"));
+        return;
+      }
     }
 
     if (paymentMethod === "ON_DELIVERY" && !splitEnabled) {
@@ -760,6 +834,7 @@ export default function POS() {
       useWholesalePricing,
       items: items.map((i) => ({
         productId: i.productId,
+        variantId: i.variantId || undefined,
         quantity: i.quantity,
         ...(i.modifiers?.length
           ? { modifiers: i.modifiers.map((m) => ({ key: m.key })) }
@@ -793,74 +868,12 @@ export default function POS() {
       ) {
         body.amountPaid = round2(Number.parseFloat(String(payNowInput).replace(",", ".")) || 0);
       }
-    }
-
-    const offline = typeof navigator !== "undefined" && !navigator.onLine;
-    if (offline) {
-      const cached = await loadProductsForBranch(bid);
-      if (cached.length === 0) {
-        setMsg(t("offline.needCache"));
-        return;
+      if (
+        (paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK") &&
+        paymentReference.trim()
+      ) {
+        body.paymentReference = paymentReference.trim();
       }
-      setLoading(true);
-      try {
-        const clientMutationId = crypto.randomUUID();
-        const deviceId = await getOrCreateDeviceId();
-        const payload = {
-          ...body,
-          clientMutationId,
-          deviceId,
-        };
-        await enqueue(SYNC_TYPES.SALE, clientMutationId, payload);
-        await applyOfflineSaleToInventory(
-          bid,
-          items.map((i) => ({ productId: i.productId, quantity: i.quantity }))
-        );
-        const cust = customerId ? customers.find((c) => c.id === customerId) : null;
-        const preview = buildOfflineSalePreview({
-          clientMutationId,
-          branchName,
-          cashierName: user?.name || "—",
-          cartItems: items,
-          total: round2(amountDue),
-          discountAmount: discountNum,
-          taxAmount: round2(taxPreview),
-          paymentMethod,
-          paymentSplits,
-          amountPaid: body.amountPaid,
-          customer: cust ? { id: cust.id, name: cust.name, phone: cust.phone || undefined } : null,
-          tableNumber: showCafeExtras && tableNumber.trim() ? tableNumber.trim() : null,
-          orderNote: showCafeExtras && orderNote.trim() ? orderNote.trim() : null,
-        });
-        setLastSale(preview);
-        setCopyDone(false);
-        clearCart();
-        setCustomerId("");
-        setDeliveryAddress("");
-        setDiscountInput("");
-        setDiscountReason("");
-        setBarcodeMiss("");
-        setBarcodeSuggestions([]);
-        setUpsellTips([]);
-        setTaxPercent("0");
-        setTableNumber("");
-        setOrderNote("");
-        setSplitEnabled(false);
-        setSplitRows([
-          { method: "CASH", amount: "" },
-          { method: "CARD", amount: "" },
-        ]);
-        setMsg(t("offline.savedLocal"));
-        setPayNowInput("");
-        await refreshPending();
-        await loadProducts();
-        setTimeout(() => window.print(), 200);
-      } catch (e) {
-        setMsg(e.message || t("pos.saleFailed"));
-      } finally {
-        setLoading(false);
-      }
-      return;
     }
 
     setLoading(true);
@@ -891,6 +904,8 @@ export default function POS() {
       setLoyaltyPointsInput("");
       setGuestPhoneInput("");
       setPayNowInput("");
+      setCashTendered("");
+      setPaymentReference("");
       await loadProducts();
       await loadHeldCarts();
       api("/api/customers")
@@ -1043,6 +1058,82 @@ export default function POS() {
           <Link to="/cash" className="btn-touch" style={{ background: "var(--accent)", color: "#fff", textDecoration: "none" }}>
             {t("nav.funds")}
           </Link>
+        </div>
+      ) : null}
+
+      {salePrompt ? (
+        <div className="card" style={{ margin: "0 0 8px", padding: 14, display: "grid", gap: 8 }}>
+          <strong>{productDisplayName(salePrompt, locale)}</strong>
+          {(salePrompt.variants || []).filter((v) => v.isActive !== false).length ? (
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span>{t("pos.variant")}</span>
+              <select value={promptVariantId} onChange={(e) => setPromptVariantId(e.target.value)}>
+                {(salePrompt.variants || [])
+                  .filter((v) => v.isActive !== false)
+                  .map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {(locale === "en" ? v.labelEn || v.label : v.label)} · {Number(v.price).toFixed(2)} · {t("pos.inStock", { n: v.stocks?.[0]?.quantity ?? 0 })}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          ) : null}
+          {salePrompt.sellBy === "WEIGHT" ? (
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span>{t("pos.weightKg")}</span>
+              <input value={promptKg} inputMode="decimal" onChange={(e) => setPromptKg(e.target.value)} />
+            </label>
+          ) : null}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="btn-touch"
+              style={{ background: "var(--accent)", color: "#fff" }}
+              onClick={() => {
+                const variant = (salePrompt.variants || []).find((v) => v.id === promptVariantId) || null;
+                const kg = Number(String(promptKg).replace(",", "."));
+                const qty = salePrompt.sellBy === "WEIGHT" ? Math.round(kg * 1000) : 1;
+                if (salePrompt.sellBy === "WEIGHT" && (!Number.isFinite(qty) || qty < 1)) {
+                  setMsg(t("pos.weightKg"));
+                  return;
+                }
+                addProduct(salePrompt, qty, { variant });
+                setSalePrompt(null);
+              }}
+            >
+              {t("pos.addWithModifiers")}
+            </button>
+            <button type="button" className="btn-touch" style={{ background: "var(--surface2)" }} onClick={() => setSalePrompt(null)}>
+              {t("common.cancel")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {!tillOpen ? (
+        <div className="card" role="alert" style={{ margin: "0 0 8px", padding: "10px 14px", fontSize: 13 }}>
+          {t("pos.tillLocationRequired")}
+        </div>
+      ) : (
+        <div className="card" style={{ margin: "0 0 8px", padding: "10px 14px", fontSize: 13 }}>
+          <strong>{branchName || "—"}</strong>
+          <span style={{ color: "var(--muted)", marginInlineStart: 8 }}>{t(`branches.kind.${tillKind}`)}</span>
+        </div>
+      )}
+
+      {todayAppointments.length > 0 ? (
+        <div className="card" style={{ margin: "0 0 8px", padding: "10px 14px" }}>
+          <div style={{ fontWeight: 800, marginBottom: 6 }}>{t("pos.todayGrooming")}</div>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+            {todayAppointments.slice(0, 6).map((row) => (
+              <li key={row.id} style={{ fontSize: 13 }}>
+                {new Date(row.startAt).toLocaleTimeString(locale === "en" ? "en-GB" : "ar-QA", { hour: "2-digit", minute: "2-digit" })}
+                {" · "}
+                {row.customer?.name || "—"}
+                {row.service?.name ? ` · ${row.service.name}` : ""}
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
 
@@ -1406,6 +1497,92 @@ export default function POS() {
                     </span>
                   </label>
                 ) : null}
+                {paymentMethod === "CASH" ? (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.cashReceived")}</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={cashTendered}
+                      onChange={(e) => setCashTendered(e.target.value)}
+                      placeholder={amountDue.toFixed(2)}
+                      style={{
+                        minHeight: 44,
+                        padding: "0 12px",
+                        borderRadius: 12,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg)",
+                        color: "var(--text)",
+                      }}
+                    />
+                    {cashTendered.trim() !== "" &&
+                    round2(Number.parseFloat(String(cashTendered).replace(",", ".")) || 0) + 0.001 >= amountDue ? (
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>
+                        {t("pos.changeDue")}{" "}
+                        {round2(
+                          round2(Number.parseFloat(String(cashTendered).replace(",", ".")) || 0) - amountDue
+                        ).toFixed(2)}{" "}
+                        {currencyLabel}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.cashReceivedHint")}</span>
+                    )}
+                  </label>
+                ) : null}
+                {paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK" ? (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.paymentReference")}</span>
+                    <input
+                      type="text"
+                      value={paymentReference}
+                      onChange={(e) => setPaymentReference(e.target.value)}
+                      placeholder={t("pos.paymentReferenceHint")}
+                      style={{
+                        minHeight: 44,
+                        padding: "0 12px",
+                        borderRadius: 12,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg)",
+                        color: "var(--text)",
+                      }}
+                    />
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.paymentReferenceNote")}</span>
+                  </label>
+                ) : null}
+                {paymentMethod === "PAYMENT_LINK" ? (
+                  <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                    <button
+                      type="button"
+                      className="btn-touch"
+                      onClick={async () => {
+                        try {
+                          const link = await api("/api/sales/payment-link", {
+                            method: "POST",
+                            body: {
+                              amount: amountDue,
+                              branchId,
+                              name: selectedCustomer?.name || "Customer",
+                              phone: selectedCustomer?.phone || "",
+                              email: selectedCustomer?.email || "",
+                            },
+                          });
+                          setPayLink(link);
+                          setPaymentReference(link.id || "");
+                        } catch (err) {
+                          setMsg(err.message);
+                        }
+                      }}
+                    >
+                      {t("shop.payLink")}
+                    </button>
+                    {payLink?.payUrl ? (
+                      <>
+                        <a href={payLink.payUrl} target="_blank" rel="noreferrer">{payLink.payUrl}</a>
+                        {payLink.qr ? <img src={payLink.qr} alt="" width={180} height={180} /> : null}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
@@ -1608,7 +1785,7 @@ export default function POS() {
               <button
                 type="button"
                 className="btn-touch pos-checkout-dock__btn"
-                disabled={loading || !items.length}
+                disabled={loading || !items.length || !tillOpen}
                 onClick={checkout}
               >
                 {loading ? t("pos.processing") : t("pos.checkout")}

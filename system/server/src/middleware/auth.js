@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
-import { hasPermission, resolveRolePermissions } from "../lib/permissions.js";
+import { hasPermission, resolveModulePermissions, resolveRolePermissions } from "../lib/permissions.js";
 import {
   dbUnavailableMessage,
   dbUnavailableMessageEn,
@@ -34,6 +34,14 @@ export function authMiddleware(req, res, next) {
         code: "SESSION_EXPIRED",
       });
     }
+    if (payload.role === "CUSTOMER") {
+      return res.status(401).json({
+        error: "هذه الجلسة للعميل فقط",
+        errorAr: "هذه الجلسة للعميل فقط",
+        errorEn: "This session is for the shop only",
+        code: "CUSTOMER_SESSION",
+      });
+    }
     req.user = payload;
     next();
   } catch {
@@ -60,6 +68,26 @@ export function requireRole(...roles) {
  * Fine-grained permission check. ADMIN always passes.
  * Loads org permission matrices on demand (cached on req).
  */
+export function requireModule(mod, action) {
+  return async (req, res, next) => {
+    try {
+      if (!req.user) return res.status(401).json({ error: "غير مصرح" });
+      if (req.user.role === "ADMIN") return next();
+      const org = await prisma.organization.findUnique({
+        where: { id: req.user.organizationId },
+        select: { managerModules: true, cashierModules: true },
+      });
+      const allowed = resolveModulePermissions(org, req.user.role);
+      if (!allowed?.[mod]?.[action]) {
+        return res.status(403).json({ error: "Insufficient permission for this action", code: "FORBIDDEN", module: mod, action });
+      }
+      next();
+    } catch (e) {
+      next(e);
+    }
+  };
+}
+
 export function requirePermission(...keys) {
   return async (req, res, next) => {
     try {

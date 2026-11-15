@@ -137,3 +137,49 @@ export function hasPermission(permissions, key) {
   if (!key) return true;
   return Boolean(permissions?.[key]);
 }
+
+export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team"];
+export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
+
+function blankModuleMap(on) {
+  return Object.fromEntries(
+    MODULES.map((mod) => [mod, Object.fromEntries(MODULE_ACTIONS.map((action) => [action, on]))])
+  );
+}
+
+export function defaultModuleMap(role) {
+  if (role === "ADMIN" || role === "MANAGER") return blankModuleMap(true);
+  const map = blankModuleMap(false);
+  if (role === "CASHIER") {
+    map.products.view = true;
+    map.warehouses.view = true;
+    map.pos.view = true;
+    map.pos.create = true;
+    map.pos.refund = true;
+    map.orders.view = true;
+    map.orders.create = true;
+    map.customers.view = true;
+    map.customers.create = true;
+    map.delivery.view = true;
+    map.grooming.view = true;
+  }
+  return map;
+}
+
+export function resolveModulePermissions(organization, role) {
+  const base = defaultModuleMap(role);
+  if (role === "ADMIN") return base;
+  const raw = role === "MANAGER" ? organization?.managerModules : organization?.cashierModules;
+  if (!raw) return base;
+  try {
+    const parsed = JSON.parse(raw);
+    for (const mod of MODULES) {
+      for (const action of MODULE_ACTIONS) {
+        if (typeof parsed?.[mod]?.[action] === "boolean") base[mod][action] = parsed[mod][action];
+      }
+    }
+  } catch {
+    /* keep defaults */
+  }
+  return base;
+}
