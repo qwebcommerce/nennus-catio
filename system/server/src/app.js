@@ -99,6 +99,9 @@ app.use(
 app.use(express.json({ limit: "8mb" }));
 app.use("/api", csrfGuard);
 app.use("/api/auth/login", loginRateLimiter);
+app.use("/api/auth/forgot-password", loginRateLimiter);
+app.use("/api/auth/reset-password", loginRateLimiter);
+app.use("/api/auth/change-password", loginRateLimiter);
 app.use("/api/shop/login", loginRateLimiter);
 app.use("/api", apiRateLimiter);
 

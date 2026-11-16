@@ -16,7 +16,7 @@ if (!globalForPrisma.prisma) {
      * (select / omit: { field: false }) — NFR-11.
      */
     omit: {
-      user: { passwordHash: true },
+      user: { passwordHash: true, resetTokenHash: true },
       customer: { passwordHash: true, verifyTokenHash: true, resetTokenHash: true },
     },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],

@@ -4,6 +4,7 @@ import { useAuth } from "./context/AuthContext.jsx";
 import { useI18n } from "./context/LanguageContext.jsx";
 import { AppLayout } from "./components/layout/AppLayout.jsx";
 import Login from "./pages/Login.jsx";
+import { ChangePassword, StaffForgotPassword, StaffResetPassword } from "./pages/StaffPassword.jsx";
 import { ShopAccount, ShopCheckout, ShopOrders, ShopProduct, ShopReset, ShopVerify } from "./pages/shop/Shop.jsx";
 import { ShopBookings, ShopGrooming, ShopGroomingBook, ShopHouses, ShopRelocation } from "./pages/shop/ShopServices.jsx";
 import { SiteLayout } from "./site/SiteLayout.jsx";
@@ -126,6 +127,8 @@ export default function App() {
           <Route path="/shop/relocation/:id" element={<ShopRelocation />} />
         </Route>
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<StaffForgotPassword />} />
+        <Route path="/reset-password" element={<StaffResetPassword />} />
         <Route path="/register" element={<Navigate to="/login" replace />} />
         <Route
           element={
@@ -134,6 +137,7 @@ export default function App() {
             </Protected>
           }
         >
+          <Route path="/change-password" element={<ChangePassword />} />
           <Route path="/pos" element={<Protected permission="pos"><POS /></Protected>} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/dashboard" element={<Dashboard />} />

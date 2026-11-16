@@ -449,6 +449,10 @@ export function AppLayout() {
               <div className="app-sidebar-role">{t(`role.${user.role}`)}</div>
             ) : null}
           </div>
+          <NavLink to="/change-password" className="app-sidebar-logout" onClick={() => setMenuOpen?.(false)}>
+            <SidebarIcon name="settings" />
+            <span>{t("nav.changePassword")}</span>
+          </NavLink>
           <button
             type="button"
             className="app-sidebar-logout"

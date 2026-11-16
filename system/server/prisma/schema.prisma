@@ -1149,6 +1149,9 @@ model User {
   active         Boolean      @default(true)
   /// Bumped on password change / deactivation so older sessions stop working.
   sessionVersion Int          @default(0)
+  /// Staff "forgot password": sha256 of the emailed token, valid until resetExpiresAt.
+  resetTokenHash String?      @unique
+  resetExpiresAt DateTime?
   branchId       String?
   branch         Branch?      @relation(fields: [branchId], references: [id])
   sales          Sale[]
