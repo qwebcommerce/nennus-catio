@@ -23,7 +23,7 @@ async function receivePurchase(req, res, payload) {
   } catch (e) {
     const status = e?.status || 400;
     const msg = e instanceof Error ? e.message : "فشل الاستلام";
-    return res.status(status).json({ error: msg });
+    return res.status(status).json({ error: msg, ...(e?.errorEn ? { errorAr: e.errorAr, errorEn: e.errorEn } : {}) });
   }
 }
 
