@@ -211,6 +211,8 @@ model ProductImage {
   mimeType       String
   size           Int
   data           Bytes
+  /// Object key in the Supabase "product-images" bucket once the bytes were copied there (move-files-to-storage).
+  storagePath    String?
   createdAt      DateTime     @default(now())
 
   @@index([organizationId])
@@ -2054,10 +2056,31 @@ model RelocationDocument {
   request    RelocationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   fileName   String
   mime       String
-  content    Bytes
+  /// Bytes kept in the database (storage disabled, or not yet moved). Null when the file lives only in Supabase Storage.
+  content    Bytes?
+  /// Object key in the private Supabase "relocation-documents" bucket.
+  storagePath String?
+  size       Int?
   createdAt  DateTime          @default(now())
 
   @@index([requestId])
+}
+
+/// A direct browser upload to Supabase Storage waiting to be confirmed (checked) and attached to a request.
+/// Rows left over after 24 h are removed with their objects by the daily cron.
+model RelocationUpload {
+  id             String    @id @default(cuid())
+  organizationId String
+  customerId     String
+  storagePath    String    @unique
+  fileName       String
+  mime           String
+  size           Int?
+  verifiedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([customerId])
+  @@index([createdAt])
 }
 
 model Promotion {

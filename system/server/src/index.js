@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import app from "./app.js";
 import { hasPublicImageBaseConfigured } from "./lib/productImageUrl.js";
+import { storageEnabled } from "./lib/storage.js";
 
 const port = Number(process.env.PORT) || 4000;
 const isVercel = Boolean(process.env.VERCEL);
@@ -27,6 +28,11 @@ if (!isVercel) {
     } else {
       console.log(`Dev UI (Vite): http://localhost:5173  — use: npm run dev (from system/)`);
     }
+    console.log(
+      storageEnabled()
+        ? "[storage] Supabase Storage: on (product images + relocation documents)"
+        : "[storage] Supabase Storage: off — files are kept in the database (set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)"
+    );
     if (hasPublicImageBaseConfigured()) {
       console.log(
         "[صور] PUBLIC_IMAGE_BASE_URL / SUPABASE_PUBLIC_IMAGE_PREFIX: مضبوط (مسارات نسبية تُكمَّل)"
