@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { qatarParts, slotTaken } from "../lib/groomingSlots.js";
+import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -179,12 +180,10 @@ router.post("/", async (req, res) => {
 
     const reminder24hAt = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
     const reminder2hAt = new Date(startAt.getTime() - 2 * 60 * 60 * 1000);
+    // Email is the only notification channel (FR-87): one email reminder the day before.
     const reminders = [];
     if (reminder24hAt > new Date()) {
-      reminders.push({ channel: "WHATSAPP", scheduledAt: reminder24hAt });
-    }
-    if (reminder2hAt > new Date()) {
-      reminders.push({ channel: "SMS", scheduledAt: reminder2hAt });
+      reminders.push({ channel: "EMAIL", scheduledAt: reminder24hAt });
     }
 
     const row = await prisma.appointment.create({
@@ -256,12 +255,24 @@ router.patch("/:id", async (req, res) => {
       });
       return updated;
     });
+    // Booking update email (FR-85): cancellation, other status changes and a new time.
+    const moved = data.startAt && data.startAt.getTime() !== existing.startAt.getTime();
+    const statusChanged = data.status && data.status !== existing.status;
+    if ((moved || statusChanged) && row.customerId) {
+      const customer = await prisma.customer.findUnique({ where: { id: row.customerId } });
+      await mailCustomer(customer, "booking", {
+        reference: row.id.slice(-8).toUpperCase(),
+        status: statusChanged ? row.status : "RESCHEDULED",
+        startAt: row.startAt,
+      });
+    }
     res.json(row);
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "تعذر تعديل الموعد" });
   }
 });
 
+/** Queues due reminder emails. Only email is sent (FR-87); other channels are never marked sent. */
 router.post("/reminders/mark-due", async (req, res) => {
   const now = new Date();
   const due = await prisma.appointmentReminder.findMany({
@@ -275,18 +286,33 @@ router.post("/reminders/mark-due", async (req, res) => {
         select: {
           id: true,
           startAt: true,
-          customer: { select: { name: true, phone: true, email: true } },
+          status: true,
+          customer: { select: { name: true, email: true, locale: true, organizationId: true } },
         },
       },
     },
     take: 200,
   });
-  if (!due.length) return res.json({ processed: 0 });
-  await prisma.appointmentReminder.updateMany({
-    where: { id: { in: due.map((d) => d.id) } },
-    data: { status: "SENT", sentAt: now },
-  });
-  res.json({ processed: due.length, items: due });
+  let queued = 0;
+  for (const reminder of due) {
+    const appointment = reminder.appointment;
+    const live = appointment && !["CANCELLED", "NO_SHOW", "DONE", "PENDING_PAYMENT"].includes(appointment.status);
+    const row = reminder.channel === "EMAIL" && live && appointment.customer?.email
+      ? await mailCustomer(appointment.customer, "booking", {
+          reference: appointment.id.slice(-8).toUpperCase(),
+          status: appointment.status,
+          startAt: appointment.startAt,
+        })
+      : null;
+    if (row) queued += 1;
+    await prisma.appointmentReminder.update({
+      where: { id: reminder.id },
+      data: row
+        ? { status: "SENT", sentAt: now, error: null }
+        : { status: "FAILED", error: reminder.channel !== "EMAIL" ? "Only email reminders are sent" : !live ? "Booking is not active" : "Customer has no email" },
+    });
+  }
+  res.json({ processed: due.length, queued });
 });
 
 export default router;

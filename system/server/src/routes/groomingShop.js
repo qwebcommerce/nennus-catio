@@ -7,6 +7,7 @@ import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { minutesOf, qatarDateTime, qatarParts, slotTaken, weekdayOf } from "../lib/groomingSlots.js";
 import { sweepExpiredHolds } from "../lib/webOrder.js";
+import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
@@ -162,6 +163,8 @@ router.post("/bookings/:id/cancel", async (req, res) => {
     where: { id: row.id },
     data: { status: "CANCELLED" },
   });
+  const customer = await prisma.customer.findUnique({ where: { id: session.sub } });
+  await mailCustomer(customer, "booking", { reference: updated.id.slice(-8).toUpperCase(), status: "CANCELLED", startAt: updated.startAt });
   res.json({ id: updated.id, status: updated.status });
 });
 

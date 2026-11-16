@@ -8,17 +8,14 @@ import jwt from "jsonwebtoken";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
 import { commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
 import { quotePromotions } from "../lib/promotions.js";
-import { mailCustomer, mailStaff, sendMail } from "../lib/mailer.js";
+import { mailConfigured, mailCustomer, mailStaff } from "../lib/mailer.js";
+import { publicBase as publicUrl } from "../lib/publicUrl.js";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
-function publicBase() {
-  return (
-    process.env.APP_PUBLIC_URL ||
-    process.env.CLIENT_URL ||
-    "http://localhost:5173"
-  ).replace(/\/$/, "");
+function publicBase(req) {
+  return publicUrl(req);
 }
 
 async function shopOrg() {
@@ -289,22 +286,16 @@ router.get("/products/:id", async (req, res) => {
   res.json(dto);
 });
 
-async function sendVerifyEmail(email, token) {
-  const key = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.SHOP_FROM_EMAIL?.trim() || process.env.ONBOARDING_NOTIFY_FROM_EMAIL?.trim();
-  const link = `${publicBase()}/shop/verify?token=${encodeURIComponent(token)}`;
-  if (!key || !from) return { sent: false, link: process.env.NODE_ENV === "production" ? null : link };
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: [email],
-      subject: "Confirm your Nennus Catio account",
-      text: `Confirm your account: ${link}`,
-    }),
-  });
-  return { sent: res.ok, link: process.env.NODE_ENV === "production" ? null : link };
+/** Queues the verification email in the customer's language. Never throws. */
+async function sendVerifyEmail(customer, token, req) {
+  const link = `${publicBase(req)}/shop/verify?token=${encodeURIComponent(token)}`;
+  const queued = await mailCustomer(customer, "verify", { name: customer.name, link });
+  return { sent: Boolean(queued) && mailConfigured(), link: process.env.NODE_ENV === "production" ? null : link };
+}
+
+function bodyLocale(req) {
+  const raw = String(req.body?.locale || req.body?.lang || "").toLowerCase();
+  return raw === "en" || raw === "ar" ? raw : null;
 }
 
 router.post("/register", async (req, res) => {
@@ -314,6 +305,7 @@ router.post("/register", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const phone = String(req.body?.phone || "").trim() || null;
+  const locale = bodyLocale(req);
   if (!name || !email || password.length < 8) {
     return res.status(400).json({ error: "Name, email, and a password of at least 8 characters are required" });
   }
@@ -330,14 +322,14 @@ router.post("/register", async (req, res) => {
   if (existing) {
     customer = await prisma.customer.update({
       where: { id: existing.id },
-      data: { name, phone, passwordHash, verifyTokenHash, emailVerifiedAt: null },
+      data: { name, phone, passwordHash, verifyTokenHash, emailVerifiedAt: null, ...(locale ? { locale } : {}) },
     });
   } else {
     customer = await prisma.customer.create({
-      data: { organizationId: org.id, name, email, phone, passwordHash, verifyTokenHash },
+      data: { organizationId: org.id, name, email, phone, passwordHash, verifyTokenHash, ...(locale ? { locale } : {}) },
     });
   }
-  const mail = await sendVerifyEmail(email, token);
+  const mail = await sendVerifyEmail(customer, token, req);
   res.status(201).json({ id: customer.id, email, verifyEmailSent: mail.sent, verifyLink: mail.link });
 });
 
@@ -397,9 +389,10 @@ router.post("/forgot", async (req, res) => {
       resetExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
     },
   });
-  const link = `${publicBase()}/shop/reset?token=${encodeURIComponent(token)}`;
-  const sent = await sendMail({ to: customer.email, subject: "Reset your Nennus Catio password", text: link });
-  res.json({ ok: true, resetLink: !sent && process.env.NODE_ENV !== "production" ? link : null });
+  const link = `${publicBase(req)}/shop/reset?token=${encodeURIComponent(token)}`;
+  const locale = bodyLocale(req);
+  await mailCustomer(locale ? { ...customer, locale } : customer, "reset", { link });
+  res.json({ ok: true, resetLink: !mailConfigured() && process.env.NODE_ENV !== "production" ? link : null });
 });
 
 router.post("/reset", async (req, res) => {
@@ -853,7 +846,7 @@ router.post("/checkout", async (req, res) => {
       TransactionId: sale.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 40),
       Custom1: sale.id,
       WebhookUrl: `${(process.env.API_PUBLIC_URL || process.env.APP_PUBLIC_URL || "http://localhost:4000").replace(/\/$/, "")}/api/shop/payments/skipcash`,
-      ReturnUrl: `${publicBase()}/shop/orders/${sale.id}`,
+      ReturnUrl: `${publicBase(req)}/shop/orders/${sale.id}`,
     }).catch(async (err) => {
       await prisma.$transaction(async (tx) => {
         await releaseSaleHolds(tx, sale.id);
@@ -905,8 +898,8 @@ router.post("/payments/skipcash", async (req, res) => {
       });
       if (booking.customerId) {
         const buyer = await prisma.customer.findUnique({ where: { id: booking.customerId } });
-        await mailCustomer(buyer, "booking", `Booking ${booking.id} is confirmed.`);
-        await mailStaff(booking.organizationId, "alertBooking", `Grooming booking ${booking.id} is paid.`);
+        await mailCustomer(buyer, "booking", { reference: booking.id.slice(-8).toUpperCase(), status: "CONFIRMED", startAt: booking.startAt });
+        await mailStaff(booking.organizationId, "alertBooking", { reference: booking.id.slice(-8).toUpperCase() });
       }
     } else if ([3, 4, 5].includes(statusId) && booking.status === "PENDING_PAYMENT") {
       await prisma.appointment.update({ where: { id: booking.id }, data: { status: "CANCELLED" } });
@@ -927,6 +920,8 @@ router.post("/payments/skipcash", async (req, res) => {
           history: [...history, { at: new Date().toISOString(), status: "PAID", note: "ONLINE" }],
         },
       });
+      const buyer = await prisma.customer.findUnique({ where: { id: request.customerId } });
+      await mailCustomer(buyer, "relocation", { reference: request.id.slice(-8).toUpperCase(), status: "PAID" });
     }
     return res.status(200).json({ ok: true });
   }
@@ -961,8 +956,9 @@ router.post("/payments/skipcash", async (req, res) => {
       });
       if (sale.customerId) {
         const buyer = await prisma.customer.findUnique({ where: { id: sale.customerId } });
-        await mailCustomer(buyer, "order", `Order ${sale.id} is confirmed.`);
-        if (buyer) await mailStaff(buyer.organizationId, "alertOrder", `Website order ${sale.id} is paid.`);
+        const reference = sale.invoiceNumber || sale.id.slice(-8).toUpperCase();
+        await mailCustomer(buyer, "order", { reference, status: "CONFIRMED", link: `${publicBase(req)}/shop/orders/${sale.id}` });
+        if (buyer) await mailStaff(buyer.organizationId, "alertOrder", { reference });
       }
     } else if ([3, 4, 5].includes(statusId)) {
       await prisma.$transaction(async (tx) => {

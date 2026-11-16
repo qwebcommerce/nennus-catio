@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { authMiddleware, requireRole, requirePermission, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -231,6 +232,12 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       summary: `Refund total ${refund.total}`,
       meta: { lines: refund.items?.length, saleId: saleRef?.id ?? null },
     });
+
+    // Refund email to the customer (FR-85). Queued; never fails the saved refund.
+    if (saleRef?.id) {
+      const sale = await prisma.sale.findUnique({ where: { id: saleRef.id }, select: { id: true, invoiceNumber: true, customer: true } });
+      if (sale?.customer) await mailCustomer(sale.customer, "refund", { reference: sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount: refund.total });
+    }
 
     res.status(201).json(refund);
   } catch (e) {
