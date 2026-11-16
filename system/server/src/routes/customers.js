@@ -2,11 +2,32 @@ import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requirePermission("customers"));
+router.use(requireModule("customers", "view"));
+
+/** Staff-facing customer fields — never password or token hashes (NFR-11). */
+const CUSTOMER_STAFF_SELECT = {
+  id: true,
+  organizationId: true,
+  name: true,
+  phone: true,
+  email: true,
+  notes: true,
+  address: true,
+  loyaltyPoints: true,
+  lifetimeSpend: true,
+  accountBalance: true,
+  emailVerifiedAt: true,
+  creditApproved: true,
+  creditLimit: true,
+  locale: true,
+  tags: true,
+  createdAt: true,
+  updatedAt: true,
+};
 
 function roundMoney(n) {
   return Math.round(Number(n) * 100) / 100;
@@ -37,11 +58,12 @@ router.get("/", async (req, res) => {
     where,
     orderBy: { name: "asc" },
     take: 200,
+    select: CUSTOMER_STAFF_SELECT,
   });
   res.json(list);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireModule("customers", "create"), async (req, res) => {
   const { name, phone, email, notes, address, accountBalance } = req.body || {};
   const n = String(name || "").trim();
   if (!n) return res.status(400).json({ error: "الاسم مطلوب" });
@@ -77,6 +99,7 @@ router.post("/", async (req, res) => {
           ? new Prisma.Decimal(Number(req.body.creditLimit).toFixed(2))
           : null,
       },
+      select: CUSTOMER_STAFF_SELECT,
     });
     if (opening > 0) {
       await tx.customerAccountLedger.create({
@@ -97,7 +120,7 @@ router.post("/", async (req, res) => {
   res.status(201).json(row);
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.patch("/:id", requireModule("customers", "edit"), async (req, res) => {
   const { name, phone, email, notes, address, accountBalance } = req.body || {};
   const data = {};
   if (name != null) {
@@ -143,6 +166,7 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
       const updated = await tx.customer.update({
         where: { id: existing.id },
         data,
+        select: CUSTOMER_STAFF_SELECT,
       });
       if (nextBalance != null) {
         const prev = roundMoney(Number(existing.accountBalance ?? 0));
@@ -161,19 +185,42 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
           });
         }
       }
+      if (req.body?.creditApproved !== undefined || req.body?.creditLimit !== undefined || nextBalance != null) {
+        await writeAudit(
+          {
+            userId: req.user.sub,
+            action: nextBalance != null ? "CUSTOMER_BALANCE_UPDATE" : "CREDIT_UPDATE",
+            entityType: "Customer",
+            entityId: updated.id,
+            summary: `${updated.name} credit=${updated.creditApproved}`,
+            meta: {
+              before: {
+                creditApproved: existing.creditApproved,
+                creditLimit: existing.creditLimit != null ? Number(existing.creditLimit) : null,
+                accountBalance: Number(existing.accountBalance ?? 0),
+              },
+              after: {
+                creditApproved: updated.creditApproved,
+                creditLimit: updated.creditLimit != null ? Number(updated.creditLimit) : null,
+                accountBalance: Number(updated.accountBalance ?? 0),
+              },
+            },
+          },
+          tx
+        );
+      }
       return updated;
     });
-    if (req.body?.creditApproved !== undefined || req.body?.creditLimit !== undefined) {
-      await writeAudit({
-        userId: req.user.sub,
-        action: "CREDIT_UPDATE",
-        entityType: "Customer",
-        entityId: row.id,
-        summary: `${row.name} credit=${row.creditApproved}`,
+    res.json(row);
+  } catch (e) {
+    if (e?.code === "P2002") {
+      return res.status(409).json({
+        error: "هذا البريد مستخدم لعميل آخر",
+        errorAr: "هذا البريد مستخدم لعميل آخر",
+        errorEn: "This email already belongs to a customer",
+        code: "EMAIL_TAKEN",
       });
     }
-    res.json(row);
-  } catch {
     res.status(404).json({ error: "العميل غير موجود" });
   }
 });
@@ -213,7 +260,7 @@ router.get("/:id/record", async (req, res) => {
   });
 });
 
-router.post("/:id/pets", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/pets", requireModule("customers", "edit"), async (req, res) => {
   const customer = await prisma.customer.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -234,7 +281,7 @@ router.post("/:id/pets", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   res.status(201).json(pet);
 });
 
-router.post("/:id/addresses", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/addresses", requireModule("customers", "edit"), async (req, res) => {
   const customer = await prisma.customer.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -254,7 +301,7 @@ router.post("/:id/addresses", requireRole("ADMIN", "MANAGER"), async (req, res) 
   res.status(201).json(address);
 });
 
-router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+router.delete("/:id", requireModule("customers", "delete"), async (req, res) => {
   const row = await prisma.customer.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });

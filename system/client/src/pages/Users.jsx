@@ -22,7 +22,8 @@ export default function Users() {
     branchId: "",
   });
 
-  const atLimit = users.length >= maxUsers;
+  const activeCount = users.filter((u) => u.active !== false).length;
+  const atLimit = activeCount >= maxUsers;
 
   const load = async () => {
     const data = await api("/api/users");
@@ -99,14 +100,15 @@ export default function Users() {
     }
   };
 
-  const del = async (u) => {
+  /** FR-07: staff are deactivated, never deleted (their sales and audit rows keep the author). */
+  const setActive = async (u, active) => {
     if (u.isOrgOwner) return;
-    if (!confirm(t("users.confirmDelete"))) return;
+    if (!active && !confirm(t("users.confirmDeactivate"))) return;
     try {
-      await api(`/api/users/${u.id}`, { method: "DELETE" });
+      await api(`/api/users/${u.id}/${active ? "reactivate" : "deactivate"}`, { method: "POST" });
       await load();
       await refreshUser?.();
-      showToast(t("users.toastDeleted"), "success");
+      showToast(t("shop.saved"), "success");
     } catch (err) {
       showToast(err.message || "Failed", "error");
     }
@@ -117,7 +119,7 @@ export default function Users() {
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 12 }}>
         <h1 style={{ margin: 0 }}>{t("users.title")}</h1>
         <span style={{ color: "var(--muted)", fontSize: 14 }}>
-          {t("users.limit", { count: users.length, max: maxUsers })}
+          {t("users.limit", { count: activeCount, max: maxUsers })}
         </span>
       </div>
 
@@ -210,7 +212,10 @@ export default function Users() {
               return (
                 <tr key={u.id} style={{ borderTop: "1px solid var(--border)" }}>
                   <td style={td}>
-                    <div style={{ fontWeight: locked ? 700 : 500 }}>{u.name}</div>
+                    <div style={{ fontWeight: locked ? 700 : 500, opacity: u.active === false ? 0.55 : 1 }}>{u.name}</div>
+                    {u.active === false ? (
+                      <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 2 }}>{t("users.inactive")}</div>
+                    ) : null}
                     {locked ? (
                       <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
                         {t("users.orgOwnerBadge")}
@@ -264,14 +269,14 @@ export default function Users() {
                       disabled={locked}
                       title={locked ? t("users.ownerLockedHint") : undefined}
                       style={{
-                        background: locked ? "var(--surface2)" : "var(--danger)",
+                        background: locked ? "var(--surface2)" : u.active === false ? "var(--accent)" : "var(--danger)",
                         color: locked ? "var(--muted)" : "#fff",
                         opacity: locked ? 0.65 : 1,
                         cursor: locked ? "not-allowed" : "pointer",
                       }}
-                      onClick={() => del(u)}
+                      onClick={() => setActive(u, u.active === false)}
                     >
-                      {t("common.delete")}
+                      {u.active === false ? t("users.reactivate") : t("users.deactivate")}
                     </button>
                   </td>
                 </tr>
