@@ -1,4 +1,6 @@
 import { Prisma } from "./prisma-client-bundle.js";
+import { staleEditError } from "./recordVersion.js";
+import { requireDirhams } from "./money.js";
 
 export function sellByValue(raw) {
   return String(raw || "").toUpperCase() === "WEIGHT" ? "WEIGHT" : "PIECE";
@@ -11,43 +13,51 @@ function cleanUrl(raw) {
   return "";
 }
 
-export async function syncProductExtras(tx, { orgId, productId, body }) {
-  if (!body) return;
-  if (body.isPetHouse !== undefined || body.leadTimeDays !== undefined || body.houseDeliveryFee !== undefined || body.takesStock !== undefined) {
-    const data = {};
-    if (body.isPetHouse !== undefined) data.isPetHouse = Boolean(body.isPetHouse);
-    if (body.takesStock !== undefined) data.takesStock = Boolean(body.takesStock);
-    if (body.leadTimeDays !== undefined) {
-      const days = Math.floor(Number(body.leadTimeDays));
-      data.leadTimeDays = Number.isFinite(days) && days >= 0 ? days : null;
-    }
-    if (body.houseDeliveryFee !== undefined) {
-      const fee = Number(body.houseDeliveryFee);
-      data.houseDeliveryFee = new Prisma.Decimal((Number.isFinite(fee) && fee >= 0 ? fee : 0).toFixed(2));
-    }
-    await tx.product.update({ where: { id: productId }, data });
+/**
+ * Product columns set from the form's extra fields, validated, as one data object, so a
+ * save writes the product row once (one version step, NFR-13).
+ */
+export async function productExtrasData(tx, { orgId, body }) {
+  const data = {};
+  if (!body) return data;
+  if (body.isPetHouse !== undefined) data.isPetHouse = Boolean(body.isPetHouse);
+  if (body.takesStock !== undefined) data.takesStock = Boolean(body.takesStock);
+  if (body.leadTimeDays !== undefined) {
+    const days = Math.floor(Number(body.leadTimeDays));
+    data.leadTimeDays = Number.isFinite(days) && days >= 0 ? days : null;
   }
-  if (body.sellBy !== undefined) {
-    await tx.product.update({
-      where: { id: productId },
-      data: { sellBy: sellByValue(body.sellBy) },
-    });
+  if (body.houseDeliveryFee !== undefined) {
+    // Whole dirhams (NFR-03); an empty field is no fee.
+    const raw = body.houseDeliveryFee;
+    data.houseDeliveryFee = raw == null || String(raw).trim() === "" ? 0 : requireDirhams(raw, {}, "house delivery fee");
   }
+  if (body.sellBy !== undefined) data.sellBy = sellByValue(body.sellBy);
   if (body.preferredSupplierId !== undefined) {
     const supplierId = body.preferredSupplierId ? String(body.preferredSupplierId) : null;
     if (supplierId) {
       const supplier = await tx.supplier.findFirst({ where: { id: supplierId, organizationId: orgId } });
       if (!supplier) throw new Error("Preferred supplier was not found");
     }
-    await tx.product.update({
-      where: { id: productId },
-      data: { preferredSupplierId: supplierId },
-    });
+    data.preferredSupplierId = supplierId;
   }
   if (Array.isArray(body.gallery)) {
-    const urls = body.gallery.map(cleanUrl).filter(Boolean).slice(0, 8);
-    await tx.product.update({ where: { id: productId }, data: { gallery: urls } });
+    data.gallery = body.gallery.map(cleanUrl).filter(Boolean).slice(0, 8);
   }
+  return data;
+}
+
+export async function syncProductExtras(tx, { orgId, productId, body, skipProductRow = false }) {
+  if (!body) return;
+  if (!skipProductRow) {
+    const data = await productExtrasData(tx, { orgId, body });
+    if (Object.keys(data).length) await tx.product.update({ where: { id: productId }, data });
+  }
+  await syncProductLinks(tx, { orgId, productId, body });
+}
+
+/** Pet types and variants of a product (rows of their own tables). */
+export async function syncProductLinks(tx, { orgId, productId, body }) {
+  if (!body) return;
   if (Array.isArray(body.petTypeIds)) {
     const ids = [...new Set(body.petTypeIds.map((id) => String(id || "").trim()).filter(Boolean))];
     const found = ids.length
@@ -63,8 +73,8 @@ export async function syncProductExtras(tx, { orgId, productId, body }) {
   if (Array.isArray(body.variants)) {
     for (const raw of body.variants) {
       const label = String(raw?.label || raw?.labelEn || "").trim();
-      const price = Number(raw?.price);
-      if (!label || !Number.isFinite(price) || price < 0) continue;
+      if (!label || raw?.price == null || String(raw.price).trim() === "") continue;
+      const price = requireDirhams(raw.price, {}, "variant price");
       const supplierId = raw?.preferredSupplierId ? String(raw.preferredSupplierId) : null;
       if (supplierId) {
         const supplier = await tx.supplier.findFirst({ where: { id: supplierId, organizationId: orgId } });
@@ -75,7 +85,7 @@ export async function syncProductExtras(tx, { orgId, productId, body }) {
         labelEn: raw?.labelEn ? String(raw.labelEn).trim() : null,
         sku: raw?.sku ? String(raw.sku).trim() : null,
         barcode: raw?.barcode ? String(raw.barcode).trim() : null,
-        price: new Prisma.Decimal(price.toFixed(2)),
+        price,
         isActive: raw?.isActive !== false,
         packWeight:
           raw?.packWeight != null && raw.packWeight !== "" && Number.isFinite(Number(raw.packWeight))
@@ -84,10 +94,16 @@ export async function syncProductExtras(tx, { orgId, productId, body }) {
         preferredSupplierId: supplierId,
       };
       if (raw?.id) {
-        await tx.productVariant.updateMany({
-          where: { id: String(raw.id), productId, organizationId: orgId },
-          data,
+        // A variant sent with the version it was loaded at is only saved over that version (NFR-13).
+        const loaded = Number.isInteger(Number(raw?.version)) && Number(raw.version) >= 1 ? Number(raw.version) : null;
+        const saved = await tx.productVariant.updateMany({
+          where: { id: String(raw.id), productId, organizationId: orgId, ...(loaded ? { version: loaded } : {}) },
+          data: { ...data, version: { increment: 1 } },
         });
+        if (!saved.count && loaded) {
+          const cur = await tx.productVariant.findUnique({ where: { id: String(raw.id) }, select: { version: true } });
+          if (cur) throw staleEditError(cur.version);
+        }
       } else {
         await tx.productVariant.create({
           data: { ...data, productId, organizationId: orgId },

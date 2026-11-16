@@ -2,10 +2,9 @@ import React, { useEffect, useState } from "react";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useTheme } from "../context/ThemeContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useToast } from "../context/ToastContext.jsx";
 import PrintSettings from "./PrintSettings.jsx";
-import TaxSettingsPanel from "../components/TaxSettingsPanel.jsx";
 import { LanguageSwitcher } from "../components/LanguageSwitcher.jsx";
 import { useBranchContext } from "../context/BranchContext.jsx";
 
@@ -38,74 +37,64 @@ function SettingRow({ label, hint, control }) {
 export default function Settings() {
   const { t } = useI18n();
   const { theme, toggleTheme } = useTheme();
-  const { user, isAdmin, isManager, refreshUser } = useAuth();
+  const { isAdmin, isManager, isOrgOwner } = useAuth();
   const { showToast } = useToast();
   const [notifEnabled, setNotifEnabled] = useState(readNotifPref);
   const [notifPermission, setNotifPermission] = useState(() =>
     typeof Notification !== "undefined" ? Notification.permission : "unsupported",
   );
-  const [associatePay, setAssociatePay] = useState(() => user?.associateCanAcceptPayment !== false);
-  const [associatePayBusy, setAssociatePayBusy] = useState(false);
   const { branches } = useBranchContext();
   const [websiteBranchId, setWebsiteBranchId] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [homeVisitFee, setHomeVisitFee] = useState("0");
+  const [bookingCancelHours, setBookingCancelHours] = useState("24");
+  const [businessName, setBusinessName] = useState("");
   const [profile, setProfile] = useState({ phone: "", publicEmail: "", publicAddress: "", hoursText: "", hoursTextEn: "", notifyEmail: "", alertOrder: true, alertBooking: true, alertRelocation: true, alertLowStock: false });
+  /** NFR-13: the settings row version the form was loaded at; every save sends it. */
+  const [orgVersion, setOrgVersion] = useState(null);
 
-  useEffect(() => {
-    setAssociatePay(user?.associateCanAcceptPayment !== false);
-  }, [user?.associateCanAcceptPayment]);
+  const applySettings = (s) => {
+    setOrgVersion(s?.version ?? null);
+    setWebsiteBranchId(s?.websiteBranchId || "");
+    setWhatsappNumber(s?.whatsappNumber || "");
+    setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
+    setBookingCancelHours(s?.bookingCancelHours != null ? String(s.bookingCancelHours) : "24");
+    setBusinessName(s?.name || "");
+    setProfile({
+      phone: s?.phone || "",
+      publicEmail: s?.publicEmail || "",
+      publicAddress: s?.publicAddress || "",
+      hoursText: s?.hoursText || "",
+      hoursTextEn: s?.hoursTextEn || "",
+      notifyEmail: s?.notifyEmail || "",
+      alertOrder: s?.alertOrder !== false,
+      alertBooking: s?.alertBooking !== false,
+      alertRelocation: s?.alertRelocation !== false,
+      alertLowStock: s?.alertLowStock === true,
+    });
+  };
+
+  /** A failed settings save: on a stale copy show the notice and reload the latest settings. */
+  const settingsSaveFailed = async (err) => {
+    showToast(editErrorMessage(err, t), "error");
+    if (isStaleEdit(err)) {
+      const fresh = await api("/api/org-settings").catch(() => null);
+      if (fresh) applySettings(fresh);
+    }
+  };
 
   useEffect(() => {
     if (!isAdmin && !isManager) return undefined;
     let cancelled = false;
     api("/api/org-settings")
       .then((s) => {
-        if (!cancelled) {
-          setAssociatePay(s?.associateCanAcceptPayment !== false);
-          setWebsiteBranchId(s?.websiteBranchId || "");
-          setWhatsappNumber(s?.whatsappNumber || "");
-          setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
-          setProfile({
-            phone: s?.phone || "",
-            publicEmail: s?.publicEmail || "",
-            publicAddress: s?.publicAddress || "",
-            hoursText: s?.hoursText || "",
-            hoursTextEn: s?.hoursTextEn || "",
-            notifyEmail: s?.notifyEmail || "",
-            alertOrder: s?.alertOrder !== false,
-            alertBooking: s?.alertBooking !== false,
-            alertRelocation: s?.alertRelocation !== false,
-            alertLowStock: s?.alertLowStock === true,
-          });
-        }
+        if (!cancelled) applySettings(s);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [isAdmin, isManager]);
-
-  const toggleAssociatePayment = async () => {
-    const next = !associatePay;
-    setAssociatePayBusy(true);
-    try {
-      const s = await api("/api/org-settings", {
-        method: "PATCH",
-        body: { associateCanAcceptPayment: next },
-      });
-      setAssociatePay(s?.associateCanAcceptPayment !== false);
-      if (typeof refreshUser === "function") await refreshUser();
-      showToast(
-        next ? t("settings.associatePayOn") : t("settings.associatePayOff"),
-        "success"
-      );
-    } catch (e) {
-      showToast(e.message || t("settings.associatePayFail"), "error");
-    } finally {
-      setAssociatePayBusy(false);
-    }
-  };
 
   const toggleNotifications = async () => {
     if (typeof Notification === "undefined") {
@@ -197,29 +186,8 @@ export default function Settings() {
         />
       </section>
 
-      {isAdmin || isManager ? (
-        <section className="settings-card" aria-labelledby="settings-floor-heading">
-          <h2 id="settings-floor-heading">{t("settings.floorSales")}</h2>
-          <SettingRow
-            label={t("settings.associateCanPay")}
-            hint={t("settings.associateCanPayHint")}
-            control={
-              <button
-                type="button"
-                className={`settings-switch${associatePay ? " is-on" : ""}`}
-                role="switch"
-                aria-checked={associatePay}
-                disabled={associatePayBusy}
-                onClick={toggleAssociatePayment}
-              >
-                <span className="settings-switch-knob" />
-              </button>
-            }
-          />
-        </section>
-      ) : null}
-
-      {isAdmin ? (
+      {/* FR-09: business settings are reserved for the owner. */}
+      {isOrgOwner ? (
         <section className="settings-card">
           <h2>{t("settings.websiteLocation")}</h2>
           <p>{t("settings.websiteLocationHint")}</p>
@@ -229,11 +197,12 @@ export default function Settings() {
               const next = e.target.value;
               setWebsiteBranchId(next);
               try {
-                const saved = await api("/api/org-settings", { method: "PATCH", body: { websiteBranchId: next || null } });
+                const saved = await api("/api/org-settings", { method: "PATCH", body: { websiteBranchId: next || null, version: orgVersion } });
                 setWebsiteBranchId(saved.websiteBranchId || "");
+                setOrgVersion(saved.version ?? null);
                 showToast(t("common.save"), "success");
               } catch (err) {
-                showToast(err.message, "error");
+                await settingsSaveFailed(err);
               }
             }}
           >
@@ -243,12 +212,20 @@ export default function Settings() {
             ))}
           </select>
           <label>
+            <span>{t("fd.businessName")}</span>
+            <input value={businessName} onChange={(e) => setBusinessName(e.target.value)} maxLength={120} required />
+          </label>
+          <label>
             <span>{t("shop.whatsapp")}</span>
             <input value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="97433130153" />
           </label>
           <label>
             <span>{t("shop.homeFee")}</span>
             <input type="number" min="0" step="0.01" value={homeVisitFee} onChange={(e) => setHomeVisitFee(e.target.value)} />
+          </label>
+          <label>
+            <span>{t("shop.bookingCancelHours")}</span>
+            <input type="number" min="0" max="336" step="1" value={bookingCancelHours} onChange={(e) => setBookingCancelHours(e.target.value)} />
           </label>
           {["phone", "publicEmail", "publicAddress", "hoursText", "hoursTextEn", "notifyEmail"].map((key) => (
             <label key={key}>
@@ -269,13 +246,16 @@ export default function Settings() {
               try {
                 const saved = await api("/api/org-settings", {
                   method: "PATCH",
-                  body: { whatsappNumber, homeVisitFee: Number(homeVisitFee), ...profile },
+                  body: { name: businessName, whatsappNumber, homeVisitFee: Number(homeVisitFee), bookingCancelHours: Number(bookingCancelHours), ...profile, version: orgVersion },
                 });
+                setBusinessName(saved.name || businessName);
                 setWhatsappNumber(saved.whatsappNumber || "");
                 setHomeVisitFee(String(saved.homeVisitFee ?? 0));
+                setBookingCancelHours(String(saved.bookingCancelHours ?? 24));
+                setOrgVersion(saved.version ?? null);
                 showToast(t("common.save"), "success");
               } catch (err) {
-                showToast(err.message, "error");
+                await settingsSaveFailed(err);
               }
             }}
           >
@@ -283,8 +263,6 @@ export default function Settings() {
           </button>
         </section>
       ) : null}
-
-      <TaxSettingsPanel />
 
       <section className="settings-print" aria-label={t("nav.printSettings")}>
         <PrintSettings />

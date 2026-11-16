@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requireModule } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("warehouses", "view"));
 router.use((req, res, next) => requireModule("warehouses", req.method === "GET" ? "view" : "edit")(req, res, next));
 
 const LOCATION_KINDS = new Set(["WAREHOUSE", "SHOP", "VAN"]);
@@ -22,27 +24,9 @@ router.get("/", async (req, res) => {
   res.json(branches);
 });
 
-router.post("/", requireRole("ADMIN"), async (req, res) => {
+router.post("/", requireModule("warehouses", "create"), async (req, res) => {
   const { name, nameEn, address, kind, isActive } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ error: "Branch name is required", code: "BRANCH_NAME_REQUIRED" });
-
-  const org = await prisma.organization.findUnique({
-    where: { id: req.user.organizationId },
-    select: { maxBranches: true, plan: true },
-  });
-  const maxBranches = org?.maxBranches ?? 3;
-  const count = await prisma.branch.count({
-    where: { organizationId: req.user.organizationId },
-  });
-  if (count >= maxBranches) {
-    return res.status(403).json({
-      error: `Branch limit reached (${count}/${maxBranches}). Upgrade the plan to add more branches.`,
-      code: "BRANCH_LIMIT",
-      maxBranches,
-      branchCount: count,
-      plan: org?.plan || "FREE",
-    });
-  }
 
   const b = await prisma.branch.create({
     data: {
@@ -61,17 +45,19 @@ router.post("/", requireRole("ADMIN"), async (req, res) => {
     entityId: b.id,
     branchId: b.id,
     summary: `Created branch "${b.name}"`,
-    meta: { name: b.name, plan: org?.plan, maxBranches },
+    meta: { name: b.name },
   });
   res.status(201).json(b);
 });
 
-router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
-  const { name, nameEn, address, supabaseId, kind, isActive } = req.body || {};
+router.patch("/:id", requireModule("warehouses", "edit"), async (req, res) => {
+  const { name, nameEn, address, kind, isActive } = req.body || {};
+  const version = requireVersion(req);
   const existing = await prisma.branch.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Branch not found", code: "NOT_FOUND" });
+  assertVersion(existing, version);
   const data = {
     ...(name != null && { name: String(name).trim() }),
     ...(nameEn !== undefined && { nameEn: nameEn?.trim() || null }),
@@ -79,14 +65,7 @@ router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
     ...(kind !== undefined && { kind: locationKind(kind, existing.kind || "SHOP") }),
     ...(isActive !== undefined && { isActive: isActive !== false }),
   };
-  if (supabaseId !== undefined) {
-    const s = supabaseId != null && String(supabaseId).trim() ? String(supabaseId).trim() : null;
-    data.supabaseId = s;
-  }
-  const b = await prisma.branch.update({
-    where: { id: existing.id },
-    data,
-  });
+  const b = await versionedUpdate(prisma, "branch", { id: existing.id, version, data });
   await writeAudit({
     userId: req.user.sub,
     action: "BRANCH_UPDATE",
@@ -99,7 +78,7 @@ router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
   res.json(b);
 });
 
-router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+router.delete("/:id", requireModule("warehouses", "delete"), async (req, res) => {
   const orgId = req.user.organizationId;
   const existing = await prisma.branch.findFirst({
     where: { id: req.params.id, organizationId: orgId },
@@ -114,12 +93,14 @@ router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
     });
   }
 
-  const [sales, users, cashSessions, refunds, purchases] = await Promise.all([
+  const [sales, users, cashSessions, refunds, purchases, auditRows] = await Promise.all([
     prisma.sale.count({ where: { branchId: existing.id } }),
     prisma.user.count({ where: { branchId: existing.id } }),
     prisma.cashSession.count({ where: { branchId: existing.id } }),
     prisma.refund.count({ where: { branchId: existing.id } }),
     prisma.purchase.count({ where: { branchId: existing.id } }),
+    // Audit rows are immutable (NFR-16), so a branch they point at cannot be removed.
+    prisma.auditLog.count({ where: { branchId: existing.id } }),
   ]);
 
   const blockers = [];
@@ -128,12 +109,13 @@ router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
   if (cashSessions) blockers.push(`${cashSessions} cash session(s)`);
   if (refunds) blockers.push(`${refunds} refund(s)`);
   if (purchases) blockers.push(`${purchases} purchase(s)`);
+  if (auditRows) blockers.push(`${auditRows} audit record(s)`);
 
   if (blockers.length) {
     return res.status(400).json({
       error: `Cannot delete branch while related data exists: ${blockers.join(", ")}. Move users or choose a branch with no transactions.`,
       code: "BRANCH_HAS_DATA",
-      blockers: { sales, users, cashSessions, refunds, purchases },
+      blockers: { sales, users, cashSessions, refunds, purchases, auditRows },
     });
   }
 

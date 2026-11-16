@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireModule, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("delivery", "view"));
 
-router.get("/", requireModule("delivery", "view"), async (req, res) => {
+router.get("/", async (req, res) => {
   const rows = await prisma.vehicle.findMany({
     where: { organizationId: req.user.organizationId },
     include: { branch: { select: { id: true, name: true, kind: true } } },
@@ -15,7 +16,7 @@ router.get("/", requireModule("delivery", "view"), async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), requireModule("delivery", "create"), async (req, res) => {
+router.post("/", requireModule("delivery", "create"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const plate = String(req.body?.plate || "").trim();
   if (!name || !plate) return res.status(400).json({ error: "Name and plate are required" });

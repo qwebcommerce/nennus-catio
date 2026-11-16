@@ -1,11 +1,26 @@
 import crypto from "crypto";
 import { Router } from "express";
-import jwt from "jsonwebtoken";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { d, fmt, riyals, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requireModule } from "../middleware/auth.js";
+import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
+import { customerSession } from "../lib/customerSession.js";
+import { DOCUMENT_MIMES, contentDisposition, sniffFileType } from "../lib/fileCheck.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
+import { checkGatewayPayment, lookupOnReturn } from "../lib/paymentLookup.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
+import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
+import {
+  LOCK_TX,
+  acceptReviewPayments,
+  lockParent,
+  paymentTotals,
+  recordStaffPayment,
+  refundParent,
+  rejectReviewPayments,
+  statusError,
+} from "../lib/payments.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
@@ -34,32 +49,68 @@ async function shopOrg() {
   return prisma.organization.findFirst({ orderBy: { createdAt: "asc" } });
 }
 
-function customerFromHeader(req) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) return null;
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== "CUSTOMER" || !payload.sub) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+/** Signed, short-lived document links (FR-66, NFR-18). */
+const LINK_TTL_MS = 5 * 60 * 1000;
+const LINK_KEY = crypto
+  .createHash("sha256")
+  .update(`relocation-doc-link:${JWT_SECRET}`)
+  .digest();
+
+function linkSignature(docId, principal, exp) {
+  return crypto.createHmac("sha256", LINK_KEY).update(`${docId}.${principal}.${exp}`).digest("base64url");
+}
+
+function signedDocumentLink(docId, principal) {
+  const exp = Date.now() + LINK_TTL_MS;
+  const sig = linkSignature(docId, principal, exp);
+  return {
+    url: `/api/relocation-files/${encodeURIComponent(docId)}?p=${encodeURIComponent(principal)}&exp=${exp}&sig=${sig}`,
+    expiresAt: new Date(exp).toISOString(),
+  };
+}
+
+function linkValid(docId, principal, exp, sig) {
+  const n = Number(exp);
+  if (!principal || !Number.isFinite(n) || n < Date.now() || n > Date.now() + LINK_TTL_MS + 5000) return false;
+  const want = Buffer.from(linkSignature(docId, principal, n));
+  const got = Buffer.from(String(sig || ""));
+  return want.length === got.length && crypto.timingSafeEqual(want, got);
+}
+
+function sendDocument(res, doc) {
+  const kind = sniffFileType(Buffer.from(doc.content));
+  const mime = kind && DOCUMENT_MIMES.includes(kind.mime) ? kind.mime : "application/octet-stream";
+  res.setHeader("Content-Type", mime);
+  res.setHeader("Content-Disposition", contentDisposition(doc.fileName, kind?.ext));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.send(Buffer.from(doc.content));
 }
 
 function publicRequest(row) {
   return {
     id: row.id,
+    reference: row.reference,
     destination: row.destination,
     petSummary: row.petSummary,
     status: row.status,
-    quoteAmount: row.quoteAmount != null ? Number(row.quoteAmount) : null,
+    version: row.version,
+    quoteAmount: riyals(row.quoteAmount),
     quoteNote: row.quoteNote,
     history: Array.isArray(row.history) ? row.history : [],
     paymentMethod: row.paymentMethod,
     paidAt: row.paidAt,
     createdAt: row.createdAt,
-    pets: (row.pets || []).map((link) => link.pet),
+    // Customer-facing: never the staff pet notes, staff notes or tags (FR-03, FR-65, FR-69).
+    pets: (row.pets || []).map((link) => ({
+      id: link.pet?.id,
+      name: link.pet?.name,
+      breed: link.pet?.breed,
+      ageText: link.pet?.ageText,
+      petTypeId: link.pet?.petTypeId,
+    })),
     documents: (row.documents || []).map((doc) => ({ id: doc.id, fileName: doc.fileName, mime: doc.mime, createdAt: doc.createdAt })),
   };
 }
@@ -77,22 +128,29 @@ async function readDocuments(raw) {
     throw err;
   }
   return raw.map((doc) => {
-    const fileName = String(doc?.fileName || "document").slice(0, 120);
-    const mime = String(doc?.mime || "application/octet-stream").slice(0, 80);
     const bytes = Buffer.from(String(doc?.dataBase64 || ""), "base64");
     if (!bytes.length || bytes.length > 1_200_000) {
       const err = new Error("Each document must be under 1.2 MB");
       err.status = 400;
       throw err;
     }
-    return { fileName, mime, content: bytes };
+    // NFR-18: only PDF, JPEG or PNG, decided from the file's bytes (not the declared type).
+    const kind = sniffFileType(bytes);
+    if (!kind || !DOCUMENT_MIMES.includes(kind.mime)) {
+      const err = new Error("Documents must be PDF, JPEG or PNG files");
+      err.status = 400;
+      throw err;
+    }
+    let fileName = String(doc?.fileName || "document").replace(/[\r\n"\\/]/g, "_").slice(0, 120) || "document";
+    if (!fileName.toLowerCase().endsWith(`.${kind.ext}`)) fileName = `${fileName.replace(/\.[^.]*$/, "")}.${kind.ext}`;
+    return { fileName, mime: kind.mime, content: bytes };
   });
 }
 
 export const relocationShop = Router();
 
 relocationShop.use(async (req, res, next) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org || session.organizationId !== org.id) {
     return res.status(401).json({ error: "Sign in with a customer account" });
@@ -100,7 +158,8 @@ relocationShop.use(async (req, res, next) => {
   const customer = await prisma.customer.findFirst({
     where: { id: session.sub, organizationId: org.id },
   });
-  if (!customer?.passwordHash) {
+  // customerSession() only accepts registered (password) accounts.
+  if (!customer) {
     return res.status(403).json({ error: "Only a registered customer can request relocation" });
   }
   req.customer = customer;
@@ -142,7 +201,7 @@ relocationShop.post("/", async (req, res) => {
       },
       include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
     });
-    await mailStaff(req.shopOrg.id, "alertRelocation", `Relocation request ${row.id} was submitted.`);
+    await mailStaff(req.shopOrg.id, "alertRelocation", { reference: row.reference || row.id.slice(-8).toUpperCase() });
     res.status(201).json(publicRequest(row));
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not submit the request" });
@@ -150,11 +209,16 @@ relocationShop.post("/", async (req, res) => {
 });
 
 relocationShop.get("/:id", async (req, res) => {
-  const row = await prisma.relocationRequest.findFirst({
+  const include = { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } };
+  let row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, customerId: req.customer.id },
-    include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
+    include,
   });
   if (!row) return res.status(404).json({ error: "Request not found" });
+  // FR-76: back from the payment page — the server looks the payment up itself.
+  if (await lookupOnReturn(req, "relocation", row, row.status === "QUOTE_SENT")) {
+    row = await prisma.relocationRequest.findUnique({ where: { id: row.id }, include });
+  }
   res.json(publicRequest(row));
 });
 
@@ -180,13 +244,23 @@ relocationShop.post("/:id/documents", async (req, res) => {
   res.json(publicRequest(updated));
 });
 
+/** Issue a 5-minute signed download link for one of the customer's own documents. */
+relocationShop.post("/:id/documents/:docId/link", async (req, res) => {
+  const doc = await prisma.relocationDocument.findFirst({
+    where: { id: req.params.docId, request: { id: req.params.id, customerId: req.customer.id } },
+    select: { id: true },
+  });
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  res.json(signedDocumentLink(doc.id, `c:${req.customer.id}`));
+});
+
 relocationShop.get("/:id/documents/:docId", async (req, res) => {
   const doc = await prisma.relocationDocument.findFirst({
     where: { id: req.params.docId, request: { id: req.params.id, customerId: req.customer.id } },
+    select: { id: true },
   });
   if (!doc) return res.status(404).json({ error: "Document not found" });
-  res.setHeader("Content-Type", doc.mime);
-  res.send(Buffer.from(doc.content));
+  res.redirect(303, signedDocumentLink(doc.id, `c:${req.customer.id}`).url);
 });
 
 relocationShop.post("/:id/pay", async (req, res) => {
@@ -205,7 +279,7 @@ relocationShop.post("/:id/pay", async (req, res) => {
   const payment = await createSkipcashPayment({
     Uid: crypto.randomUUID(),
     KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-    Amount: Number(row.quoteAmount).toFixed(2),
+    Amount: fmt(row.quoteAmount),
     FirstName: (first || "Customer").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Customer",
     LastName: (rest.join(" ") || "Catio").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Catio",
     Phone: String(row.customer.phone || "00000000").slice(0, 15),
@@ -219,13 +293,13 @@ relocationShop.post("/:id/pay", async (req, res) => {
     where: { id: row.id },
     data: { gatewayPaymentId: payment.id },
   });
-  res.json({ payUrl: payment.payUrl, total: Number(row.quoteAmount) });
+  res.json({ payUrl: payment.payUrl, total: riyals(row.quoteAmount) });
 });
 
 export const relocationStaff = Router();
 relocationStaff.use(authMiddleware);
-relocationStaff.use(requireRole("ADMIN", "MANAGER"));
-relocationStaff.use((req, res, next) => requireModule("relocation", req.method === "GET" ? "view" : "edit")(req, res, next));
+relocationStaff.use(requireModule("relocation", "view"));
+relocationStaff.use((req, res, next) => (req.method === "GET" ? next() : requireModule("relocation", "edit")(req, res, next)));
 
 relocationStaff.get("/", async (req, res) => {
   const rows = await prisma.relocationRequest.findMany({
@@ -234,11 +308,12 @@ relocationStaff.get("/", async (req, res) => {
       customer: { select: { id: true, name: true, email: true, phone: true } },
       pets: { include: { pet: true } },
       documents: { select: { id: true, fileName: true, mime: true, createdAt: true } },
+      payments: { orderBy: { createdAt: "asc" } },
     },
     orderBy: { createdAt: "desc" },
     take: 100,
   });
-  res.json(rows);
+  res.json(toApi("RelocationRequest", rows));
 });
 
 relocationStaff.post("/:id/status", async (req, res) => {
@@ -251,80 +326,310 @@ relocationStaff.post("/:id/status", async (req, res) => {
     return res.status(400).json({ error: "That status change is not allowed" });
   }
   if (next === "QUOTE_SENT") return res.status(400).json({ error: "Send a quote with an amount" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
-    data: {
-      status: next,
-      history: pushHistory(row.history, next, String(req.body?.note || "").trim()),
-    },
+  // FR-64: a paid request is cancelled only with a refund decision: FULL_REFUND or NO_REFUND (with a reason).
+  const decision = String(req.body?.refundDecision || "").toUpperCase();
+  const note = String(req.body?.note || "").trim();
+  let refunded = 0;
+  if (next === "CANCELLED") {
+    const totals = await paymentTotals(prisma, "relocation", row.id);
+    if (totals.remaining > 0) {
+      if (!["FULL_REFUND", "NO_REFUND"].includes(decision)) {
+        return res.status(400).json({
+          error: "This request is paid. Choose to refund it in full or to keep the payment before cancelling.",
+          code: "REFUND_DECISION_REQUIRED",
+          remaining: riyals(totals.remaining),
+        });
+      }
+      if (decision === "NO_REFUND" && !note) {
+        return res.status(400).json({ error: "Give a reason for keeping the payment" });
+      }
+      if (decision === "FULL_REFUND") {
+        try {
+          await refundParent({
+            parentKind: "relocation",
+            parentId: row.id,
+            organizationId: row.organizationId,
+            amount: totals.remaining,
+            userId: req.user.sub,
+            method: totals.rows.some((p) => p.kind === "PAYMENT" && p.method === "ONLINE" && p.status === "CAPTURED") ? "ONLINE" : row.paymentMethod,
+            note: "Refund on cancel",
+          });
+          refunded = totals.remaining;
+        } catch (e) {
+          return res.status(e.status || 400).json({ error: e.message });
+        }
+      }
+    }
+  }
+  // Guarded transition so two staff actions cannot both apply.
+  const updated = await prisma.$transaction(async (tx) => {
+    const moved = await tx.relocationRequest.updateMany({ where: { id: row.id, status: row.status }, data: { status: next } });
+    if (!moved.count) throw statusError("The request changed. Refresh and try again.", 409);
+    const fresh = await tx.relocationRequest.findUnique({ where: { id: row.id } });
+    const historyNote = [note, refunded ? `Refunded ${fmt(refunded)} QAR` : ""].filter(Boolean).join(" · ");
+    return tx.relocationRequest.update({
+      where: { id: row.id },
+      data: { history: pushHistory(fresh.history, next, historyNote) },
+    });
+  }).catch((e) => e);
+  if (updated instanceof Error) return res.status(updated.status || 400).json({ error: updated.message });
+  await writeAudit({
+    userId: req.user.sub,
+    action: "RELOCATION_STATUS",
+    entityType: "RelocationRequest",
+    entityId: row.id,
+    summary: `${row.reference || row.id}: ${row.status} -> ${next}${decision ? ` (${decision}${note ? `: ${note}` : ""})` : ""}`,
   });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `Relocation ${updated.id} is now ${updated.status}.`);
-  res.json(updated);
+  await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: updated.status });
+  res.json(toApi("RelocationRequest", updated));
 });
 
 relocationStaff.post("/:id/quote", async (req, res) => {
-  const amount = Number(req.body?.amount);
-  if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: "Enter a quote amount" });
+  const amount = toDirhams(req.body?.amount);
+  if (amount == null) return res.status(400).json({ error: "Enter a quote amount (at most 2 decimals)", errorAr: "أدخل مبلغ العرض (منزلتان عشريتان كحد أقصى)", errorEn: "Enter a quote amount (at most 2 decimals)" });
+  const version = requireVersion(req);
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row) return res.status(404).json({ error: "Request not found" });
+  assertVersion(row, version);
   if (!["UNDER_REVIEW", "QUOTE_SENT"].includes(row.status)) {
     return res.status(400).json({ error: "Review the request before sending a quote" });
   }
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
+  // Conditional write: refused if the request moved on (status or version) since it was loaded.
+  const updated = await versionedUpdate(prisma, "relocationRequest", {
+    id: row.id,
+    version,
+    where: { status: { in: ["UNDER_REVIEW", "QUOTE_SENT"] } },
     data: {
       status: "QUOTE_SENT",
-      quoteAmount: new Prisma.Decimal(amount.toFixed(2)),
+      quoteAmount: amount,
       quoteNote: req.body?.note ? String(req.body.note).trim() : null,
       history: pushHistory(row.history, "QUOTE_SENT", req.body?.note ? String(req.body.note).trim() : ""),
     },
   });
+  await writeAudit({ userId: req.user.sub, action: "RELOCATION_QUOTE", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${fmt(amount)}` });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `A quote of ${amount.toFixed(2)} QAR is ready.`);
-  res.json(updated);
+  await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: "QUOTE_SENT", amount: fmt(amount) });
+  res.json(toApi("RelocationRequest", updated));
 });
 
+/**
+ * FR-64: staff record a cash or bank payment. Writes a Payment row (amount, method,
+ * reference, staff user) and an audit row; the QUOTE_SENT -> PAID change is guarded.
+ */
 relocationStaff.post("/:id/pay", async (req, res) => {
   const method = String(req.body?.method || "").toUpperCase();
   if (!["CASH", "BANK"].includes(method)) return res.status(400).json({ error: "Record cash or a bank transfer" });
+  const reference = String(req.body?.reference || "").trim();
+  if (method === "BANK" && !reference) return res.status(400).json({ error: "Enter the bank transfer reference" });
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
-  if (!row || row.status !== "QUOTE_SENT") return res.status(400).json({ error: "There is no quote to mark paid" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
-    data: {
-      status: "PAID",
-      paymentMethod: method,
-      paidAt: new Date(),
-      history: pushHistory(row.history, "PAID", method),
-    },
+  if (!row || row.status !== "QUOTE_SENT" || row.quoteAmount == null) return res.status(400).json({ error: "There is no quote to mark paid" });
+  const amount = req.body?.amount == null || req.body.amount === "" ? d(row.quoteAmount) : toDirhams(req.body.amount);
+  if (amount == null || amount !== d(row.quoteAmount)) {
+    return res.status(400).json({ error: `The payment must be the quoted ${fmt(row.quoteAmount)} QAR` });
+  }
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      await lockParent(tx, "relocation", row.id);
+      const moved = await tx.relocationRequest.updateMany({
+        where: { id: row.id, status: "QUOTE_SENT", quoteAmount: row.quoteAmount },
+        data: { status: "PAID", paymentMethod: method, paidAt: new Date(), amountPaid: amount },
+      });
+      if (!moved.count) throw statusError("The request changed. Refresh and try again.", 409);
+      const payment = await recordStaffPayment(tx, {
+        parentKind: "relocation",
+        parentId: row.id,
+        organizationId: row.organizationId,
+        amount,
+        method,
+        reference,
+        userId: req.user.sub,
+        note: req.body?.note,
+      });
+      const fresh = await tx.relocationRequest.findUnique({ where: { id: row.id } });
+      const updated = await tx.relocationRequest.update({
+        where: { id: row.id },
+        data: { history: pushHistory(fresh.history, "PAID", method) },
+      });
+      return { updated, payment };
+    }, LOCK_TX);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
+  }
+  await writeAudit({
+    userId: req.user.sub,
+    action: "RELOCATION_PAYMENT",
+    entityType: "Payment",
+    entityId: result.payment.id,
+    summary: `${row.reference || row.id} ${fmt(amount)} ${method}${reference ? ` ref ${reference}` : ""}`,
   });
-  const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `Relocation ${updated.id} is marked paid.`);
-  res.json(updated);
+  const buyer = await prisma.customer.findUnique({ where: { id: result.updated.customerId } });
+  await mailCustomer(buyer, "relocation", { reference: result.updated.reference || result.updated.id.slice(-8).toUpperCase(), status: "PAID" });
+  res.json({ ...toApi("RelocationRequest", result.updated), payment: toApi("Payment", result.payment) });
+});
+
+/** FR-76: staff ask the gateway for the payment's status; a paid result confirms through the webhook's path. */
+relocationStaff.post("/:id/check-payment", async (req, res) => {
+  const row = await prisma.relocationRequest.findFirst({ where: { id: req.params.id, organizationId: req.user.organizationId } });
+  if (!row) return res.status(404).json({ error: "Request not found" });
+  try {
+    const result = await checkGatewayPayment({ parentKind: "relocation", parentId: row.id, source: "staff", req, allowReview: true });
+    if (!result.checked) return res.status(400).json({ error: "There is no gateway payment to check", ...result });
+    await writeAudit({
+      userId: req.user.sub,
+      action: "PAYMENT_LOOKUP",
+      entityType: "RelocationRequest",
+      entityId: row.id,
+      summary: `${row.reference || row.id} gateway ${result.gatewayStatus}: ${result.outcome}`,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/** FR-77: refund a relocation payment in part or in full (gateway for online, recorded for cash/bank). */
+relocationStaff.post("/:id/refund", requireModule("relocation", "refund"), async (req, res) => {
+  const row = await prisma.relocationRequest.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId },
+    include: { customer: true },
+  });
+  if (!row) return res.status(404).json({ error: "Request not found" });
+  try {
+    const refund = await refundParent({
+      parentKind: "relocation",
+      parentId: row.id,
+      organizationId: row.organizationId,
+      amount: toDirhams(req.body?.amount, { allowZero: false }) ?? 0,
+      userId: req.user.sub,
+      method: req.body?.method || (row.paymentMethod === "ONLINE" ? "ONLINE" : row.paymentMethod),
+      note: req.body?.note,
+    });
+    await writeAudit({ userId: req.user.sub, action: "RELOCATION_REFUND", entityType: "Payment", entityId: refund.id, summary: `${row.reference || row.id} ${fmt(refund.amount)} ${refund.method}` });
+    await mailCustomer(row.customer, "refund", { reference: row.reference || row.id.slice(-8).toUpperCase(), amount: fmt(refund.amount) });
+    res.status(201).json(toApi("Payment", refund));
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/** FR-79: accept (mark paid) or refund an online payment that arrived late or for the wrong amount. */
+relocationStaff.post("/:id/resolve-payment", async (req, res) => {
+  const row = await prisma.relocationRequest.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId, paymentReview: true },
+  });
+  if (!row) return res.status(404).json({ error: "No payment is waiting for review" });
+  const accept = Boolean(req.body?.accept);
+  try {
+    if (accept) {
+      await prisma.$transaction(async (tx) => {
+        await lockParent(tx, "relocation", row.id);
+        const current = await tx.relocationRequest.findUnique({ where: { id: row.id } });
+        if (current.status !== "QUOTE_SENT") throw statusError("Only a request waiting for payment can accept it. Refund it instead.", 400);
+        const accepted = await acceptReviewPayments(tx, "relocation", row.id);
+        if (accepted <= 0) throw statusError("No payment is waiting for review", 404);
+        await tx.relocationRequest.update({
+          where: { id: row.id },
+          data: {
+            status: "PAID",
+            paymentMethod: "ONLINE",
+            paidAt: new Date(),
+            amountPaid: accepted,
+            paymentReview: false,
+            paymentReviewReason: null,
+            history: pushHistory(current.history, "PAID", "ONLINE"),
+          },
+        });
+      }, LOCK_TX);
+    } else {
+      await rejectReviewPayments({ parentKind: "relocation", parentId: row.id, userId: req.user.sub });
+      await prisma.relocationRequest.update({ where: { id: row.id }, data: { paymentReview: false, paymentReviewReason: null } });
+    }
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
+  }
+  await writeAudit({ userId: req.user.sub, action: "PAYMENT_REVIEW", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${row.paymentReviewReason}: ${accept ? "accepted" : "refunded"}` });
+  res.json({ id: row.id, reference: row.reference, accepted: accept });
 });
 
 relocationStaff.post("/:id/notes", async (req, res) => {
+  const version = requireVersion(req);
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row) return res.status(404).json({ error: "Request not found" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
+  assertVersion(row, version);
+  const updated = await versionedUpdate(prisma, "relocationRequest", {
+    id: row.id,
+    version,
     data: { staffNotes: String(req.body?.staffNotes || "").trim() || null },
   });
-  res.json({ id: updated.id, staffNotes: updated.staffNotes });
+  res.json({ id: updated.id, staffNotes: updated.staffNotes, version: updated.version });
+});
+
+/** Staff with Relocation → view get a 5-minute signed download link. */
+relocationStaff.get("/:id/documents/:docId/link", async (req, res) => {
+  const doc = await prisma.relocationDocument.findFirst({
+    where: { id: req.params.docId, request: { id: req.params.id, organizationId: req.user.organizationId } },
+    select: { id: true },
+  });
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  res.json(signedDocumentLink(doc.id, `s:${req.user.sub}`));
 });
 
 relocationStaff.get("/:id/documents/:docId", async (req, res) => {
   const doc = await prisma.relocationDocument.findFirst({
     where: { id: req.params.docId, request: { id: req.params.id, organizationId: req.user.organizationId } },
+    select: { id: true },
   });
   if (!doc) return res.status(404).json({ error: "Document not found" });
-  res.setHeader("Content-Type", doc.mime);
-  res.send(Buffer.from(doc.content));
+  res.redirect(303, signedDocumentLink(doc.id, `s:${req.user.sub}`).url);
+});
+
+/**
+ * GET /api/relocation-files/:docId?p&exp&sig — the signed link is bound to the person it was
+ * issued to; their session must still be valid (and staff must still hold Relocation → view).
+ * Served as an attachment with nosniff and a locked-down CSP, never inline.
+ */
+export const relocationFiles = Router();
+
+relocationFiles.get("/:docId", async (req, res, next) => {
+  const { p: principal, exp, sig } = req.query;
+  if (!linkValid(req.params.docId, String(principal || ""), exp, sig)) {
+    return res.status(403).json({ error: "This download link is not valid or has expired", code: "LINK_INVALID" });
+  }
+  const p = String(principal);
+  const doc = await prisma.relocationDocument.findFirst({
+    where: { id: req.params.docId },
+    include: { request: { select: { customerId: true, organizationId: true } } },
+  });
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  if (p.startsWith("c:")) {
+    const session = await customerSession(req, res);
+    if (!session || `c:${session.sub}` !== p || doc.request.customerId !== session.sub) {
+      return res.status(403).json({ error: "Sign in with the account that owns this document" });
+    }
+    return sendDocument(res, doc);
+  }
+  if (p.startsWith("s:")) {
+    return authMiddleware(req, res, async () => {
+      try {
+        if (`s:${req.user.sub}` !== p || doc.request.organizationId !== req.user.organizationId) {
+          return res.status(403).json({ error: "Not allowed" });
+        }
+        if (!(await hasModule(req, "relocation", "view"))) {
+          return res.status(403).json({ error: "Insufficient permission for this action", code: "FORBIDDEN" });
+        }
+        return sendDocument(res, doc);
+      } catch (e) {
+        next(e);
+      }
+    });
+  }
+  return res.status(403).json({ error: "Not allowed" });
 });

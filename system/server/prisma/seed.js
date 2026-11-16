@@ -11,20 +11,12 @@ async function main() {
     update: {
       name: "المتجر الافتراضي",
       slug: "ezoo",
-      businessVertical: "GROCERY",
-      profileDocsDone: true,
-      paymentDone: true,
-      onboardingReviewStatus: "APPROVED",
       country: "QA",
     },
     create: {
       id: ORG_ID,
       name: "المتجر الافتراضي",
       slug: "ezoo",
-      businessVertical: "GROCERY",
-      profileDocsDone: true,
-      paymentDone: true,
-      onboardingReviewStatus: "APPROVED",
       country: "QA",
     },
   });
@@ -68,26 +60,6 @@ async function main() {
       passwordHash: hash,
       name: "مدير النظام",
       nameEn: "System administrator",
-      role: "ADMIN",
-      branchId: mainBranch.id,
-    },
-  });
-
-  const platformHash = await bcrypt.hash("platform123", 10);
-  await prisma.user.upsert({
-    where: {
-      organizationId_email: {
-        organizationId: ORG_ID,
-        email: "platform@petstore.local",
-      },
-    },
-    update: { nameEn: "Platform administrator" },
-    create: {
-      organizationId: ORG_ID,
-      email: "platform@petstore.local",
-      passwordHash: platformHash,
-      name: "مدير المنصة",
-      nameEn: "Platform administrator",
       role: "ADMIN",
       branchId: mainBranch.id,
     },
@@ -197,7 +169,7 @@ async function main() {
   });
 
   console.log(
-    "تم البذر: admin@petstore.local / admin123 | platform@petstore.local / platform123 (مدير المنصة) | cashier@petstore.local / cashier123"
+    "تم البذر: admin@petstore.local / admin123 | cashier@petstore.local / cashier123"
   );
 }
 

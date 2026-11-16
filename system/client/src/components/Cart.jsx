@@ -3,6 +3,7 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { productDisplayName } from "../utils/productName.js";
 import { isUnitPriceAtOrBelowCost } from "../utils/saleCostWarning.js";
 import { ProductImagePreview } from "./ProductImagePreview.jsx";
+import { lineAmount } from "../store/cartStore.js";
 
 /**
  * سلة مشتريات — عرض الأسطر مع تعديل الكمية وحذف
@@ -45,7 +46,7 @@ export function Cart({ lines, onChangeQty, onRemove, total, embedded = false }) 
               {productDisplayName({ name: line.name, nameEn: line.nameEn }, locale)}
             </div>
             <div style={{ fontSize: 12, color: "var(--muted)" }}>
-              {line.unitPrice.toFixed(2)} × {line.quantity} = {(line.unitPrice * line.quantity).toFixed(2)}
+              {line.unitPrice.toFixed(2)} × {line.quantity} = {lineAmount(line).toFixed(2)}
             </div>
             {isUnitPriceAtOrBelowCost(line.unitPrice, line.cost) ? (
               <div

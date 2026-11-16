@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requirePermission("audit"));
+router.use(requireModule("settings", "view"));
 
 router.get("/", async (req, res) => {
   const { branchId, limit = "100", action } = req.query;

@@ -1,12 +1,26 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { computeSessionExpectedCash } from "../lib/saleCash.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { fmt, riyals, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
+import { computeSessionCashUp } from "../lib/saleCash.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
+
+const BAD_AMOUNT = {
+  error: "المبلغ غير صالح (رقمان عشريان كحد أقصى)",
+  errorAr: "المبلغ غير صالح (رقمان عشريان كحد أقصى)",
+  errorEn: "Enter a valid amount (at most 2 decimals)",
+  code: "AMOUNT_INVALID",
+};
+
+/** Cash-up figures (whole dirhams) → riyal numbers for the response. */
+function cashUpApi(cashUp) {
+  return Object.fromEntries(Object.entries(cashUp).map(([key, value]) => [key, riyals(value)]));
+}
 router.use(authMiddleware);
+router.use(requireModule("pos", "view"));
 
 router.get("/open", async (req, res) => {
   const branchId = req.query.branchId || req.user.branchId;
@@ -25,10 +39,10 @@ router.get("/open", async (req, res) => {
       branch: { select: { name: true } },
     },
   });
-  res.json(session);
+  res.json(toApi("CashSession", session));
 });
 
-router.post("/open", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("cashSession"), async (req, res) => {
+router.post("/open", requireModule("pos", "create"), async (req, res) => {
   const { branchId, openingFloat } = req.body || {};
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
@@ -45,9 +59,8 @@ router.post("/open", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
   if (existing) {
     return res.status(400).json({ error: "يوجد جلسة مفتوحة لهذا الفرع" });
   }
-  const fl = Number(openingFloat);
-  const opening =
-    Number.isNaN(fl) || fl < 0 ? new Prisma.Decimal(0) : new Prisma.Decimal(fl.toFixed(2));
+  const opening = openingFloat == null || String(openingFloat).trim() === "" ? 0 : toDirhams(openingFloat);
+  if (opening == null) return res.status(400).json(BAD_AMOUNT);
 
   const session = await prisma.cashSession.create({
     data: {
@@ -66,16 +79,16 @@ router.post("/open", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
     entityType: "CashSession",
     entityId: session.id,
     branchId: bid,
-    summary: `Open float ${opening}`,
+    summary: `Open float ${fmt(opening)}`,
   });
-  res.status(201).json(session);
+  res.status(201).json(toApi("CashSession", session));
 });
 
-router.post("/:id/close", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("cashSession"), async (req, res) => {
+router.post("/:id/close", requireModule("pos", "create"), async (req, res) => {
   const { closingCountedCash, note } = req.body || {};
-  const counted = Number(closingCountedCash);
-  if (Number.isNaN(counted) || counted < 0) {
-    return res.status(400).json({ error: "المبلغ المعدود غير صالح" });
+  const counted = toDirhams(closingCountedCash);
+  if (counted == null) {
+    return res.status(400).json({ ...BAD_AMOUNT, error: "المبلغ المعدود غير صالح", errorAr: "المبلغ المعدود غير صالح" });
   }
   const session = await prisma.cashSession.findFirst({
     where: {
@@ -91,21 +104,30 @@ router.post("/:id/close", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
   }
 
   const closedAt = new Date();
-  const expectedNum = await computeSessionExpectedCash(prisma, session, closedAt);
-  const expected = new Prisma.Decimal(expectedNum.toFixed(2));
-  const closingDec = new Prisma.Decimal(counted.toFixed(2));
-  const variance = closingDec.sub(expected);
+  const cashUp = await computeSessionCashUp(prisma, session, closedAt);
+  const expected = cashUp.expectedCash;
+  const cardTotal = cashUp.cardTotal;
+  const closingDec = counted;
+  const variance = closingDec - expected;
 
-  const updated = await prisma.cashSession.update({
-    where: { id: session.id },
+  // Close once: a second close of the same session changes nothing.
+  const closed = await prisma.cashSession.updateMany({
+    where: { id: session.id, closedAt: null },
     data: {
       closedAt,
       closedByUserId: req.user.sub,
       closingCountedCash: closingDec,
       expectedCash: expected,
       cashVariance: variance,
+      cardTotal,
       note: note != null && String(note).trim() ? String(note).trim() : null,
     },
+  });
+  if (closed.count !== 1) {
+    return res.status(400).json({ error: "الجلسة غير موجودة أو مُغلقة" });
+  }
+  const updated = await prisma.cashSession.findUnique({
+    where: { id: session.id },
     include: {
       openedBy: { select: { name: true } },
       closedBy: { select: { name: true } },
@@ -119,15 +141,37 @@ router.post("/:id/close", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
     entityType: "CashSession",
     entityId: updated.id,
     branchId: session.branchId,
-    summary: `Close counted ${closingDec} expected ${expected} variance ${variance}`,
+    summary: `Close counted ${fmt(closingDec)} expected ${fmt(expected)} variance ${fmt(variance)} card ${fmt(cardTotal)}`,
     meta: {
-      expected: expected.toString(),
-      counted: closingDec.toString(),
-      variance: variance.toString(),
+      expected: fmt(expected),
+      counted: fmt(closingDec),
+      variance: fmt(variance),
+      cardTotal: fmt(cardTotal),
     },
   });
 
-  res.json(updated);
+  res.json({ ...toApi("CashSession", updated), cashUp: cashUpApi(cashUp) });
+});
+
+/** Cash-up figures for a session: opening float, cash in and out, expected cash and card total. */
+router.get("/:id/cash-up", async (req, res) => {
+  const session = await prisma.cashSession.findFirst({
+    where: {
+      id: req.params.id,
+      branch: { organizationId: req.user.organizationId },
+    },
+  });
+  if (!session) return res.status(404).json({ error: "الجلسة غير موجودة" });
+  if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== session.branchId) {
+    return res.status(403).json({ error: "غير مصرح" });
+  }
+  const cashUp = await computeSessionCashUp(prisma, session, session.closedAt || new Date());
+  res.json({
+    ...cashUpApi(cashUp),
+    closed: Boolean(session.closedAt),
+    countedCash: riyals(session.closingCountedCash),
+    difference: riyals(session.cashVariance),
+  });
 });
 
 router.get("/", async (req, res) => {
@@ -151,7 +195,7 @@ router.get("/", async (req, res) => {
       branch: { select: { name: true } },
     },
   });
-  res.json(rows);
+  res.json(toApi("CashSession", rows));
 });
 
 export default router;

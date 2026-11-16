@@ -4,7 +4,6 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { resolveStoredImageUrl } from "../lib/productImageUrl.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { normalizeProductModifiers } from "../lib/productModifiers.js";
 import {
   buildProductsExcelBuffer,
   buildProductSampleExcelBuffer,
@@ -13,16 +12,20 @@ import {
   parseYesNo,
   parsePetType,
   parseNumber,
-  parseExpiryCell,
+  parseMoneyCell,
 } from "../lib/productsExcel.js";
+import { toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import {
   allocateUniqueBarcode,
   assertBarcodeAvailable,
 } from "../lib/productBarcode.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
-import { syncProductExtras } from "../lib/catalogExtras.js";
+import { productExtrasData, syncProductExtras, syncProductLinks } from "../lib/catalogExtras.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { normalizeImage } from "../lib/imageNormalize.js";
+import { setStockCount } from "../lib/stockLedger.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
   extractProductImageId,
@@ -31,6 +34,7 @@ import {
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("products", "view"));
 
 const uploadExcel = multer({
   storage: multer.memoryStorage(),
@@ -45,17 +49,32 @@ const uploadImage = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: PRODUCT_IMAGE_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
-    if (/^image\/(jpeg|png|webp|gif)$/i.test(file.mimetype)) cb(null, true);
-    else cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed"));
+    if (/^image\/(jpeg|png|webp)$/i.test(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG or WebP images are allowed"));
   },
 });
 
+/** Response shape of a product row: money in riyals (NFR-03 boundary) and a resolved image URL. */
 function withResolvedImageUrl(product) {
   if (!product) return product;
   return {
-    ...product,
+    ...toApi("Product", product),
     imageUrl: resolveStoredImageUrl(product.imageUrl),
   };
+}
+
+const BAD_PRICE = {
+  error: "سعر غير صالح (رقمان عشريان كحد أقصى)",
+  errorAr: "سعر غير صالح (رقمان عشريان كحد أقصى)",
+  errorEn: "Enter a valid price (at most 2 decimals)",
+  code: "AMOUNT_INVALID",
+};
+
+/** Price / cost from the product form: riyals → whole dirhams. Empty is 0 (price) or no cost. */
+function formDirhams(value, emptyAs) {
+  if (value == null || String(value).trim() === "") return emptyAs;
+  const n = toDirhams(value);
+  return n == null ? undefined : n;
 }
 
 async function linkProductImage(orgId, productId, imageUrl) {
@@ -204,7 +223,7 @@ async function resolveCatalogFromExcel(orgId, { categoryName, subcategoryName, s
 }
 
 /** Shared Excel / confirmed-row product upsert + inventory sync. */
-async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false }) {
+async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft = false }) {
   const errors = [];
   let created = 0;
   let updated = 0;
@@ -221,21 +240,24 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
       continue;
     }
 
-    const priceNum = parseNumber(r.price);
-    if (priceNum === null || priceNum < 0) {
+    // NFR-03: whole dirhams; more than two decimals is refused for the row.
+    const priceNum = parseMoneyCell(r.price);
+    if (priceNum === null) {
       errors.push({ row: rowNum, message: "سعر غير صالح" });
       continue;
     }
 
-    const costRaw = parseNumber(r.cost);
-    const wholesaleRaw = parseNumber(r.wholesalePrice);
+    const costRaw = parseMoneyCell(r.cost);
+    if (costRaw === null && r.cost != null && String(r.cost).trim() !== "") {
+      errors.push({ row: rowNum, message: "تكلفة غير صالحة" });
+      continue;
+    }
     const sku = r.sku != null && String(r.sku).trim() ? String(r.sku).trim() : null;
     const barcode = r.barcode != null && String(r.barcode).trim() ? String(r.barcode).trim() : null;
     const petType = parsePetType(r.petType);
     const isActive = asDraft ? false : parseYesNo(r.isActive);
     const stockQty = Math.max(0, Math.floor(parseNumber(r.stockQty) ?? 0));
     const minStock = Math.max(0, Math.floor(parseNumber(r.minStock) ?? 5));
-    const expDate = parseExpiryCell(r.expiryDate);
     const imageRaw = r.imageUrl != null ? String(r.imageUrl).trim() : "";
     const imageUrl =
       imageRaw && (/^https?:\/\/\S+/i.test(imageRaw) || imageRaw.startsWith("/")) ? imageRaw : null;
@@ -263,18 +285,14 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
       featuresEn: cleanOptionalText(r.featuresEn),
       sku: catalog.sku,
       barcode,
-      price: new Prisma.Decimal(priceNum),
-      wholesalePrice:
-        wholesaleRaw != null && wholesaleRaw >= 0 ? new Prisma.Decimal(wholesaleRaw) : null,
-      cost: costRaw != null && costRaw >= 0 ? new Prisma.Decimal(costRaw) : null,
+      price: priceNum,
+      cost: costRaw,
       petType,
       category: catalog.category,
       categoryId: catalog.categoryId,
       subcategoryId: catalog.subcategoryId,
       ...(imageUrl ? { imageUrl } : {}),
       isActive,
-      expiryDate: expDate,
-      expiryAlertDaysBefore: null,
     };
 
     let existing = null;
@@ -327,21 +345,25 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
         created += 1;
       }
 
-      await prisma.inventory.upsert({
-        where: {
-          productId_branchId: { productId, branchId },
-        },
-        create: {
-          productId,
-          branchId,
-          quantity: stockQty,
-          minStockLevel: minStock,
-        },
-        update: {
-          quantity: stockQty,
-          minStockLevel: minStock,
-        },
-      });
+      // Stock from the sheet is a counted quantity: the difference is written as an ADJUSTMENT movement (FR-17).
+      const hasVariants = await prisma.productVariant.count({ where: { productId } });
+      if (!hasVariants) {
+        await prisma.$transaction(async (tx) => {
+          await setStockCount(tx, {
+            orgId,
+            userId,
+            productId,
+            branchId,
+            quantity: stockQty,
+            note: "Product import",
+            unitCost: costRaw,
+          });
+          await tx.inventory.update({
+            where: { productId_branchId: { productId, branchId } },
+            data: { minStockLevel: minStock },
+          });
+        });
+      }
       touchedProductIds.add(productId);
     } catch (e) {
       if (e?.code === "P2002") {
@@ -432,10 +454,7 @@ router.get("/", async (req, res) => {
 });
 
 /** Upload product image into the database (max 2 MB) → returns path for imageUrl */
-router.post(
-  "/upload-image",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
-  requirePermission("productsEdit"),
+router.post("/upload-image", requireModule("products", ["create", "edit"]),
   (req, res, next) => {
     uploadImage.single("file")(req, res, (err) => {
       if (err) {
@@ -463,6 +482,17 @@ router.post(
           errorEn: "Image must be 2 MB or smaller",
         });
       }
+      // NFR-18: the bytes must really be a JPEG, PNG or WebP image (declared type is not trusted);
+      // it is decoded, auto-oriented, stripped of all metadata, resized and re-encoded.
+      let normalized;
+      try {
+        normalized = await normalizeImage(req.file.buffer);
+      } catch (err) {
+        if (err.status !== 400) throw err;
+        return res.status(400).json({ error: err.errorAr || err.message, errorAr: err.errorAr, errorEn: err.errorEn || err.message });
+      }
+      const imageBytes = normalized.buffer;
+      const kind = { mime: normalized.mime };
       const productIdRaw =
         req.body?.productId != null && String(req.body.productId).trim()
           ? String(req.body.productId).trim()
@@ -480,10 +510,10 @@ router.post(
         data: {
           organizationId: req.user.organizationId,
           productId,
-          fileName: String(req.file.originalname || "image").slice(0, 180),
-          mimeType: String(req.file.mimetype || "image/jpeg").slice(0, 80),
-          size: req.file.buffer.length,
-          data: req.file.buffer,
+          fileName: `${String(req.file.originalname || "image").replace(/\.[^.]*$/, "").slice(0, 170) || "image"}.webp`,
+          mimeType: kind.mime,
+          size: imageBytes.length,
+          data: imageBytes,
         },
         select: { id: true, size: true, mimeType: true },
       });
@@ -502,7 +532,7 @@ router.post(
 );
 
 /** توليد باركود رقمي غير مكرر ضمن المؤسسة (للمنتج الجديد أو عند تعبئة باركود لأول مرة) */
-router.get("/generate-barcode", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
+router.get("/generate-barcode", requireModule("products", ["create", "edit"]), async (req, res, next) => {
   try {
     const exclude =
       req.query.excludeProductId != null && String(req.query.excludeProductId).trim()
@@ -517,7 +547,7 @@ router.get("/generate-barcode", requireRole("ADMIN", "MANAGER"), async (req, res
   }
 });
 
-router.get("/import/excel/sample", requireRole("ADMIN", "MANAGER"), async (_req, res, next) => {
+router.get("/import/excel/sample", requireModule("products", "create"), async (_req, res, next) => {
   try {
     const buffer = buildProductSampleExcelBuffer();
     res.setHeader(
@@ -531,7 +561,7 @@ router.get("/import/excel/sample", requireRole("ADMIN", "MANAGER"), async (_req,
   }
 });
 
-router.get("/export/excel", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
+router.get("/export/excel", requireModule("products", "export"), async (req, res, next) => {
   try {
     const orgId = req.user.organizationId;
     const branchId = req.query.branchId != null && String(req.query.branchId).trim()
@@ -580,9 +610,7 @@ router.get("/export/excel", requireRole("ADMIN", "MANAGER"), async (req, res, ne
   }
 });
 
-router.post(
-  "/import/excel/preview",
-  requireRole("ADMIN", "MANAGER"),
+router.post("/import/excel/preview", requireModule("products", "create"),
   (req, res, next) => {
     uploadExcel.single("file")(req, res, (err) => {
       if (err) return res.status(400).json({ error: err.message || "رفع الملف فشل" });
@@ -611,7 +639,7 @@ router.post(
   }
 );
 
-router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
+router.post("/import/excel/confirm", requireModule("products", "create"), async (req, res, next) => {
   try {
     const orgId = req.user.organizationId;
     const branchId =
@@ -636,22 +664,12 @@ router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req
 
     const { created, updated, errors, touchedProductIds } = await runProductImportFromRows({
       orgId,
+      userId: req.user.sub,
       branchId,
       rows,
       asDraft: req.body?.asDraft === true,
     });
 
-    if (touchedProductIds.size > 0) {
-      scheduleInventoryWebhook(orgId, {
-        event: "products.import",
-        meta: { branchId, created, updated },
-        lines: [...touchedProductIds].map((productId) => ({
-          branchId,
-          productId,
-          quantityDelta: 0,
-        })),
-      });
-    }
 
     await writeAudit({
       userId: req.user.sub,
@@ -673,9 +691,7 @@ router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req
   }
 });
 
-router.post(
-  "/import/excel",
-  requireRole("ADMIN", "MANAGER"),
+router.post("/import/excel", requireModule("products", "create"),
   (req, res, next) => {
     uploadExcel.single("file")(req, res, (err) => {
       if (err) return res.status(400).json({ error: err.message || "رفع الملف فشل" });
@@ -708,21 +724,11 @@ router.post(
       const rows = normalizeImportPreviewRows(rawRows);
       const { created, updated, errors, touchedProductIds } = await runProductImportFromRows({
         orgId,
+        userId: req.user.sub,
         branchId,
         rows,
       });
 
-      if (touchedProductIds.size > 0) {
-        scheduleInventoryWebhook(orgId, {
-          event: "products.import",
-          meta: { branchId, created, updated },
-          lines: [...touchedProductIds].map((productId) => ({
-            branchId,
-            productId,
-            quantityDelta: 0,
-          })),
-        });
-      }
 
       await writeAudit({
         userId: req.user.sub,
@@ -757,44 +763,6 @@ router.get("/:id", async (req, res) => {
   });
   if (!p) return res.status(404).json({ error: "المنتج غير موجود" });
   res.json(withResolvedImageUrl(p));
-});
-
-router.get("/:id/lots", async (req, res) => {
-  const branchId =
-    req.query.branchId != null && String(req.query.branchId).trim()
-      ? String(req.query.branchId).trim()
-      : req.user.branchId;
-  if (!branchId) return res.status(400).json({ error: "يجب تحديد الفرع" });
-  if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== branchId) {
-    return res.status(403).json({ error: "لا يمكن الوصول لفرع آخر" });
-  }
-  const orgId = req.user.organizationId;
-  const product = await prisma.product.findFirst({
-    where: { id: req.params.id, organizationId: orgId },
-    select: { id: true, name: true },
-  });
-  if (!product) return res.status(404).json({ error: "المنتج غير موجود" });
-  const branchOk = await findBranchInOrg(prisma, orgId, branchId);
-  if (!branchOk) return res.status(400).json({ error: "فرع غير صالح" });
-
-  const lots = await prisma.inventoryLot.findMany({
-    where: {
-      organizationId: orgId,
-      productId: product.id,
-      branchId,
-    },
-    orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }],
-    select: {
-      id: true,
-      receivedAt: true,
-      expiryDate: true,
-      quantityReceived: true,
-      quantityOnHand: true,
-      unitCost: true,
-      note: true,
-    },
-  });
-  res.json({ product, branchId, lots });
 });
 
 function cleanOptionalText(value) {
@@ -834,7 +802,7 @@ function catalogFieldsFromBody(body) {
   return { fields };
 }
 
-router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("productsEdit"), async (req, res) => {
+router.post("/", requireModule("products", "create"), async (req, res) => {
   const {
     name,
     nameEn,
@@ -842,7 +810,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     sku,
     barcode,
     price,
-    wholesalePrice,
     cost,
     petType,
     categoryId,
@@ -851,8 +818,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     branchId,
     initialStock,
     minStockLevel,
-    expiryDate: expiryDateRaw,
-    modifiers: modifiersRaw,
   } = req.body || {};
   if (!nameEn?.trim()) return res.status(400).json({ error: "English product name is required" });
   if (!name?.trim()) return res.status(400).json({ error: "Arabic product name is required" });
@@ -864,9 +829,10 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     return res.status(400).json({ error: "Image URL must be http(s) or a path starting with /" });
   }
   const nameLocal = name?.trim() || "";
-  const priceNum = Number(price);
-  if (Number.isNaN(priceNum) || priceNum < 0) {
-    return res.status(400).json({ error: "سعر غير صالح" });
+  const priceNum = formDirhams(price, 0);
+  const costNum = formDirhams(cost, null);
+  if (priceNum === undefined || costNum === undefined) {
+    return res.status(400).json(BAD_PRICE);
   }
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب تحديد الفرع للمخزون الأولي" });
@@ -885,16 +851,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     throw e;
   }
 
-  let expiryDate = null;
-  if (expiryDateRaw != null && String(expiryDateRaw).trim()) {
-    const d = new Date(String(expiryDateRaw));
-    if (Number.isNaN(d.getTime())) {
-      return res.status(400).json({ error: "تاريخ انتهاء الصلاحية غير صالح" });
-    }
-    expiryDate = d;
-  }
-
-  const modifiers = normalizeProductModifiers(modifiersRaw);
   const catalogCopy = catalogFieldsFromBody(req.body || {});
   if (catalogCopy.error) return res.status(400).json({ error: catalogCopy.error });
 
@@ -906,7 +862,24 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     throw e;
   }
 
-  const stockQty = Math.max(0, Math.floor(Number(initialStock) || 0));
+  const stockRaw = initialStock == null || initialStock === "" ? 0 : Number(initialStock);
+  if (!Number.isInteger(stockRaw) || stockRaw < 0) {
+    return res.status(400).json({
+      error: "المخزون الأولي يجب أن يكون عدداً صحيحاً",
+      errorAr: "المخزون الأولي يجب أن يكون عدداً صحيحاً",
+      errorEn: "Opening stock must be a whole number of zero or more",
+    });
+  }
+  const stockQty = stockRaw;
+  const hasVariantsInBody = Array.isArray(req.body?.variants) && req.body.variants.some((v) => String(v?.label || v?.labelEn || "").trim());
+  if (stockQty > 0 && hasVariantsInBody) {
+    return res.status(400).json({
+      error: "المخزون لكل حجم — استلمه بأمر شراء أو عدّله لكل حجم بعد الحفظ",
+      errorAr: "المخزون لكل حجم — استلمه بأمر شراء أو عدّله لكل حجم بعد الحفظ",
+      errorEn: "This product keeps stock per variant. Receive or adjust each variant after saving.",
+    });
+  }
+  const openingCost = costNum;
   let product;
   try {
     product = await prisma.$transaction(async (tx) => {
@@ -927,15 +900,8 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
           isActive: catalogCopy.fields.isActive !== false,
           sku: catalog.sku,
           barcode: barcodeTrim,
-          price: new Prisma.Decimal(priceNum),
-          wholesalePrice:
-            wholesalePrice != null && wholesalePrice !== ""
-              ? new Prisma.Decimal(Number(wholesalePrice))
-              : null,
-          cost:
-            cost != null && cost !== ""
-              ? new Prisma.Decimal(Number(cost))
-              : null,
+          price: priceNum,
+          cost: costNum,
           petType: ["CAT", "DOG", "OTHER"].includes(String(petType))
             ? String(petType)
             : "OTHER",
@@ -943,37 +909,28 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
           categoryId: catalog.categoryId,
           subcategoryId: catalog.subcategoryId,
           imageUrl: imageTrim || null,
-          expiryDate,
-          expiryAlertDaysBefore: null,
-          ...(modifiers ? { modifiers } : {}),
           inventories: {
             create: {
               branchId: bid,
-              quantity: stockQty,
+              quantity: 0,
               minStockLevel: Math.max(0, Number(minStockLevel) || 5),
             },
           },
         },
-        include: { inventories: true },
       });
-      // Keep aggregate stock and expiry lots aligned from day one.
+      // FR-17: opening stock is a staff adjustment with a movement, at the product's cost.
       if (stockQty > 0) {
-        await tx.inventoryLot.create({
-          data: {
-            organizationId: req.user.organizationId,
-            productId: created.id,
-            branchId: bid,
-            receivedAt: new Date(),
-            expiryDate,
-            quantityReceived: stockQty,
-            quantityOnHand: stockQty,
-            unitCost:
-              cost != null && cost !== "" ? new Prisma.Decimal(Number(cost)) : null,
-            note: "initial-stock",
-          },
+        await setStockCount(tx, {
+          orgId: req.user.organizationId,
+          userId: req.user.sub,
+          productId: created.id,
+          branchId: bid,
+          quantity: stockQty,
+          note: "Opening stock",
+          unitCost: openingCost,
         });
       }
-      return created;
+      return tx.product.findUnique({ where: { id: created.id }, include: { inventories: true } });
     });
     await syncProductExtras(prisma, {
       orgId: req.user.organizationId,
@@ -991,17 +948,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     }
     throw e;
   }
-  scheduleInventoryWebhook(req.user.organizationId, {
-    event: "product.created",
-    meta: { productId: product.id, branchId: bid },
-    lines: [
-      {
-        branchId: bid,
-        productId: product.id,
-        quantityDelta: stockQty,
-      },
-    ],
-  });
   await writeAudit({
     userId: req.user.sub,
     action: "PRODUCT_CREATE",
@@ -1012,10 +958,10 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     meta: {
       sku: product.sku,
       barcode: product.barcode,
-      price: Number(product.price),
+      price: Number(product.price) / 100,
       categoryId: product.categoryId,
       subcategoryId: product.subcategoryId,
-      initialStock: Math.max(0, Number(initialStock) || 0),
+      initialStock: stockQty,
       minStockLevel: Math.max(0, Number(minStockLevel) || 5),
     },
   });
@@ -1023,8 +969,9 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
   res.status(201).json(withResolvedImageUrl(product));
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("productsEdit"), async (req, res) => {
+router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
   const data = req.body || {};
+  const version = requireVersion(req);
   const update = {};
   if (data.nameEn !== undefined) {
     if (!String(data.nameEn || "").trim()) {
@@ -1055,18 +1002,13 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
     Object.assign(update, catalogCopy.fields);
   }
   if (data.barcode !== undefined) update.barcode = data.barcode?.trim() || null;
-  if (data.price != null) update.price = new Prisma.Decimal(Number(data.price));
-  if (data.cost !== undefined) {
-    update.cost =
-      data.cost != null && data.cost !== ""
-        ? new Prisma.Decimal(Number(data.cost))
-        : null;
+  if (data.price != null) {
+    update.price = formDirhams(data.price, 0);
+    if (update.price === undefined) return res.status(400).json(BAD_PRICE);
   }
-  if (data.wholesalePrice !== undefined) {
-    update.wholesalePrice =
-      data.wholesalePrice != null && data.wholesalePrice !== ""
-        ? new Prisma.Decimal(Number(data.wholesalePrice))
-        : null;
+  if (data.cost !== undefined) {
+    update.cost = formDirhams(data.cost, null);
+    if (update.cost === undefined) return res.status(400).json(BAD_PRICE);
   }
   if (data.petType && ["CAT", "DOG", "OTHER"].includes(String(data.petType))) {
     update.petType = String(data.petType);
@@ -1088,6 +1030,7 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "المنتج غير موجود" });
+  assertVersion(existing, version);
 
   if (
     data.categoryId !== undefined ||
@@ -1134,34 +1077,13 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
     }
   }
 
-  if (data.expiryDate !== undefined) {
-    if (data.expiryDate === null || data.expiryDate === "") {
-      update.expiryDate = null;
-      update.expiryAlertDaysBefore = null;
-    } else {
-      const d = new Date(String(data.expiryDate));
-      if (Number.isNaN(d.getTime())) {
-        return res.status(400).json({ error: "تاريخ انتهاء الصلاحية غير صالح" });
-      }
-      update.expiryDate = d;
-      update.expiryAlertDaysBefore = null;
-    }
-  }
-
-  if (data.modifiers !== undefined) {
-    update.modifiers = normalizeProductModifiers(data.modifiers);
-  }
-
   try {
-    const p = await prisma.product.update({
-      where: { id: existing.id },
-      data: update,
-      include: { inventories: true },
-    });
-    await syncProductExtras(prisma, {
-      orgId: req.user.organizationId,
-      productId: p.id,
-      body: data,
+    // NFR-13: one conditional write of the product row (form fields + extras), then its links.
+    const p = await prisma.$transaction(async (tx) => {
+      const extras = await productExtrasData(tx, { orgId: req.user.organizationId, body: data });
+      await versionedUpdate(tx, "product", { id: existing.id, version, data: { ...update, ...extras } });
+      await syncProductLinks(tx, { orgId: req.user.organizationId, productId: existing.id, body: data });
+      return tx.product.findUnique({ where: { id: existing.id }, include: { inventories: true } });
     });
     if (update.imageUrl !== undefined) {
       await linkProductImage(req.user.organizationId, p.id, update.imageUrl);
@@ -1185,7 +1107,7 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
         changes: Object.keys(update),
         sku: p.sku,
         barcode: p.barcode,
-        price: Number(p.price),
+        price: Number(p.price) / 100,
         isActive: p.isActive,
         categoryId: p.categoryId,
         subcategoryId: p.subcategoryId,
@@ -1197,6 +1119,9 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
       return res.status(400).json({
         error: "تعارض بيانات فريدة (SKU أو باركود أو معرّف خارجي)",
       });
+    }
+    if (e instanceof Error && e.message === "Preferred supplier was not found") {
+      return res.status(400).json({ error: e.message });
     }
     throw e;
   }
@@ -1215,7 +1140,7 @@ async function deleteStoredProductImages(tx, orgId, product) {
   });
 }
 
-router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+router.delete("/:id", requireModule("products", "delete"), async (req, res) => {
   try {
     const existing = await prisma.product.findFirst({
       where: { id: req.params.id, organizationId: req.user.organizationId },
@@ -1235,7 +1160,7 @@ router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
       meta: {
         sku: existing.sku,
         barcode: existing.barcode,
-        price: Number(existing.price),
+        price: Number(existing.price) / 100,
         categoryId: existing.categoryId,
         subcategoryId: existing.subcategoryId,
       },

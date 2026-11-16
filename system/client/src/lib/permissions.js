@@ -4,8 +4,6 @@
 
 export const PERMISSION_KEYS = [
   "pos",
-  "floorPos",
-  "wholesale",
   "refunds",
   "purchases",
   "stockCount",
@@ -19,13 +17,10 @@ export const PERMISSION_KEYS = [
   "receivables",
   "expenses",
   "audit",
-  "loyalty",
 ];
 
 export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
   pos: true,
-  floorPos: true,
-  wholesale: true,
   refunds: true,
   purchases: true,
   stockCount: true,
@@ -39,14 +34,11 @@ export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
   receivables: true,
   expenses: true,
   audit: true,
-  loyalty: true,
 });
 
 export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   pos: true,
-  floorPos: false,
-  wholesale: false,
-  refunds: false,
+  refunds: true,
   purchases: false,
   stockCount: false,
   transfer: false,
@@ -59,36 +51,12 @@ export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   receivables: false,
   expenses: false,
   audit: false,
-  loyalty: false,
-});
-
-export const DEFAULT_ASSOCIATE_PERMISSIONS = Object.freeze({
-  pos: false,
-  floorPos: true,
-  wholesale: false,
-  refunds: false,
-  purchases: false,
-  stockCount: false,
-  transfer: false,
-  productsView: true,
-  productsEdit: false,
-  catalogEdit: false,
-  cashSession: false,
-  reports: false,
-  customers: false,
-  receivables: false,
-  expenses: false,
-  audit: false,
-  loyalty: false,
 });
 
 export function resolveClientPermissions(user) {
   if (!user) return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false]));
   if (user.role === "ADMIN") {
     return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
-  }
-  if (user.role === "ASSOCIATE") {
-    return { ...DEFAULT_ASSOCIATE_PERMISSIONS };
   }
   const fromApi = user.permissions;
   if (fromApi && typeof fromApi === "object") {

@@ -11,6 +11,14 @@ const datasourceUrl = withPrismaPoolLimit(process.env.DATABASE_URL, 1);
 
 if (!globalForPrisma.prisma) {
   globalForPrisma.prisma = new PrismaClient({
+    /**
+     * Secrets are never returned unless a query asks for them explicitly
+     * (select / omit: { field: false }) — NFR-11.
+     */
+    omit: {
+      user: { passwordHash: true, resetTokenHash: true },
+      customer: { passwordHash: true, verifyTokenHash: true, resetTokenHash: true },
+    },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
     ...(datasourceUrl
       ? { datasources: { db: { url: datasourceUrl } } }

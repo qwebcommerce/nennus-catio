@@ -1,6 +1,0 @@
-{
-  "name": "@nennus-catio/config",
-  "version": "0.1.0",
-  "private": true,
-  "exports": { "./typescript": "./tsconfig.base.json" }
-}

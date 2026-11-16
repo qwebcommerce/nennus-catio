@@ -1,19 +1,17 @@
 import { prisma } from "./prisma.js";
 
 /**
- * يسجّل حدثاً في سجل التدقيق — لا يرمي للخارج حتى لا يكسر العملية الرئيسية
+ * Writes an audit row (FR-88, NFR-16). Pass the transaction client as `db` so the
+ * row commits or rolls back together with the change it records. Failures are NOT
+ * swallowed: an audited change must not succeed silently without its audit row.
+ * Rows are append-only (DB trigger rejects UPDATE/DELETE on "AuditLog").
  */
-export async function writeAudit({
-  userId,
-  action,
-  entityType,
-  entityId,
-  branchId,
-  summary,
-  meta,
-}) {
+export async function writeAudit(
+  { userId, action, entityType, entityId, branchId, summary, meta },
+  db = prisma
+) {
   try {
-    await prisma.auditLog.create({
+    return await db.auditLog.create({
       data: {
         userId: userId ?? null,
         action: String(action),
@@ -25,6 +23,7 @@ export async function writeAudit({
       },
     });
   } catch (e) {
-    console.error("auditLog write failed", e);
+    console.error("auditLog write failed", action, e?.code || e?.message);
+    throw e;
   }
 }

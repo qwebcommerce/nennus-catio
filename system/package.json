@@ -18,7 +18,7 @@
     "prisma:push": "npm run db:push --prefix server",
     "prisma:validate": "npm run db:validate --prefix server",
     "build:client": "npm run build --prefix client",
-    "build:vercel": "npm run db:generate --prefix server && npm run build --prefix client",
+    "build:vercel": "npm run db:generate --prefix server && npm run db:deploy:build --prefix server && npm run build --prefix client",
     "build:vercel:migrate": "npm run db:generate --prefix server && npm run db:deploy --prefix server && npm run build --prefix client",
     "vercel-build": "npm run build:vercel",
     "db:generate": "npm run db:generate --prefix server",

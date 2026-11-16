@@ -1,13 +1,10 @@
 /**
  * Role permission keys for MANAGER and CASHIER (Employee).
  * ADMIN (super admin) always has every permission.
- * ASSOCIATE is locked to floorPos (+ productsView for lookup).
  */
 
 export const PERMISSION_KEYS = [
   "pos",
-  "floorPos",
-  "wholesale",
   "refunds",
   "purchases",
   "stockCount",
@@ -21,13 +18,10 @@ export const PERMISSION_KEYS = [
   "receivables",
   "expenses",
   "audit",
-  "loyalty",
 ];
 
 export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
   pos: true,
-  floorPos: true,
-  wholesale: true,
   refunds: true,
   purchases: true,
   stockCount: true,
@@ -41,14 +35,11 @@ export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
   receivables: true,
   expenses: true,
   audit: true,
-  loyalty: true,
 });
 
 export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   pos: true,
-  floorPos: false,
-  wholesale: false,
-  refunds: false,
+  refunds: true,
   purchases: false,
   stockCount: false,
   transfer: false,
@@ -61,28 +52,6 @@ export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   receivables: false,
   expenses: false,
   audit: false,
-  loyalty: false,
-});
-
-/** Locked matrix — floor scan & checkout only */
-export const DEFAULT_ASSOCIATE_PERMISSIONS = Object.freeze({
-  pos: false,
-  floorPos: true,
-  wholesale: false,
-  refunds: false,
-  purchases: false,
-  stockCount: false,
-  transfer: false,
-  productsView: true,
-  productsEdit: false,
-  catalogEdit: false,
-  cashSession: false,
-  reports: false,
-  customers: false,
-  receivables: false,
-  expenses: false,
-  audit: false,
-  loyalty: false,
 });
 
 function parseStored(raw, fallback) {
@@ -109,27 +78,48 @@ export function normalizePermissionMap(input, fallback) {
   return base;
 }
 
+/**
+ * Legacy permission keys are resolved through the module matrix (single source of
+ * truth for FR-08/FR-10). key → [module, action].
+ */
+export const LEGACY_TO_MODULE = Object.freeze({
+  pos: ["pos", "create"],
+  refunds: ["pos", "refund"],
+  purchases: ["purchasing", "view"],
+  stockCount: ["warehouses", "edit"],
+  transfer: ["warehouses", "edit"],
+  productsView: ["products", "view"],
+  productsEdit: ["products", "edit"],
+  catalogEdit: ["products", "edit"],
+  cashSession: ["pos", "create"],
+  reports: ["finance", "view"],
+  customers: ["customers", "view"],
+  receivables: ["finance", "view"],
+  expenses: ["finance", "create"],
+  audit: ["settings", "view"],
+});
+
+export function legacyFromModules(modules) {
+  return Object.fromEntries(
+    PERMISSION_KEYS.map((k) => {
+      const [mod, action] = LEGACY_TO_MODULE[k];
+      return [k, Boolean(modules?.[mod]?.[action])];
+    })
+  );
+}
+
+/** Legacy key map for the session user / UI, derived from the module matrix. */
 export function resolveRolePermissions(organization, role) {
   if (role === "ADMIN") {
     return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
   }
-  if (role === "MANAGER") {
-    return parseStored(organization?.managerPermissions, DEFAULT_MANAGER_PERMISSIONS);
-  }
-  if (role === "CASHIER") {
-    return parseStored(organization?.cashierPermissions, DEFAULT_CASHIER_PERMISSIONS);
-  }
-  if (role === "ASSOCIATE") {
-    return { ...DEFAULT_ASSOCIATE_PERMISSIONS };
-  }
-  return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false]));
+  return legacyFromModules(resolveModulePermissions(organization, role));
 }
 
 export function orgPermissionMatrices(organization) {
   return {
-    MANAGER: parseStored(organization?.managerPermissions, DEFAULT_MANAGER_PERMISSIONS),
-    CASHIER: parseStored(organization?.cashierPermissions, DEFAULT_CASHIER_PERMISSIONS),
-    ASSOCIATE: { ...DEFAULT_ASSOCIATE_PERMISSIONS },
+    MANAGER: resolveRolePermissions(organization, "MANAGER"),
+    CASHIER: resolveRolePermissions(organization, "CASHIER"),
   };
 }
 

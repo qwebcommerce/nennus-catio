@@ -1,8 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware } from "../middleware/auth.js";
-import { calendarDaysUntilExpiryUTC } from "../lib/productExpiry.js";
-import { resolveStoredImageUrl } from "../lib/productImageUrl.js";
 import {
   dbUnavailableMessage,
   dbUnavailableMessageEn,
@@ -47,7 +45,7 @@ async function branchesForFeed(req) {
 function parseTypes(req) {
   const raw = req.query.types ?? req.body?.types;
   if (raw == null || !String(raw).trim()) {
-    return new Set(["LOW_STOCK", "EXPIRY", "CASH_NO_SESSION"]);
+    return new Set(["LOW_STOCK", "CASH_NO_SESSION"]);
   }
   return new Set(
     String(raw)
@@ -108,93 +106,6 @@ async function buildItems(req, types) {
           minStockLevel: r.minStockLevel,
         },
         action: { path: "/products", hash: "stock" },
-      });
-    }
-  }
-
-  if (types.has("EXPIRY")) {
-    const branchId = branchIdFilter || req.user.branchId || null;
-    const withinDays = 30;
-    const seenProducts = new Set();
-
-    const lots = await prisma.inventoryLot.findMany({
-      where: {
-        organizationId: orgId,
-        quantityOnHand: { gt: 0 },
-        expiryDate: { not: null },
-        ...(branchId ? { branchId } : {}),
-      },
-      include: {
-        product: { select: { id: true, name: true, nameEn: true, sku: true, imageUrl: true, isActive: true } },
-        branch: { select: { id: true, name: true, nameEn: true } },
-      },
-      orderBy: { expiryDate: "asc" },
-      take: 300,
-    });
-
-    for (const lot of lots) {
-      if (!lot.product?.isActive) continue;
-      const days = calendarDaysUntilExpiryUTC(lot.expiryDate);
-      if (days === null || days > withinDays) continue;
-      const status = days < 0 ? "expired" : days === 0 ? "today" : "soon";
-      seenProducts.add(lot.product.id);
-      items.push({
-        key: `expiry-lot:${lot.id}`,
-        type: "EXPIRY",
-        severity: status === "expired" ? "critical" : status === "today" ? "warning" : "info",
-        at: lot.expiryDate.toISOString(),
-        branchId: lot.branchId,
-        branchName: lot.branch?.name || null,
-        branchNameEn: lot.branch?.nameEn ?? null,
-        payload: {
-          productId: lot.product.id,
-          productName: lot.product.name,
-          productNameEn: lot.product.nameEn ?? null,
-          sku: lot.product.sku,
-          daysUntilExpiry: days,
-          status,
-          quantityOnHand: Number(lot.quantityOnHand),
-          lotId: lot.id,
-          imageUrl: resolveStoredImageUrl(lot.product.imageUrl),
-        },
-        action: { path: "/inventory-lots" },
-      });
-    }
-
-    const products = await prisma.product.findMany({
-      where: {
-        organizationId: orgId,
-        isActive: true,
-        expiryDate: { not: null },
-      },
-      include: branchId
-        ? { inventories: { where: { branchId } } }
-        : { inventories: true },
-      orderBy: { expiryDate: "asc" },
-    });
-    for (const p of products) {
-      if (seenProducts.has(p.id)) continue;
-      const days = calendarDaysUntilExpiryUTC(p.expiryDate);
-      if (days === null || days > withinDays) continue;
-      const status = days < 0 ? "expired" : days === 0 ? "today" : "soon";
-      items.push({
-        key: `expiry:${p.id}`,
-        type: "EXPIRY",
-        severity: status === "expired" ? "critical" : status === "today" ? "warning" : "info",
-        at: p.expiryDate.toISOString(),
-        branchId: branchId || null,
-        branchName: null,
-        branchNameEn: null,
-        payload: {
-          productId: p.id,
-          productName: p.name,
-          productNameEn: p.nameEn ?? null,
-          sku: p.sku,
-          daysUntilExpiry: days,
-          status,
-          imageUrl: resolveStoredImageUrl(p.imageUrl),
-        },
-        action: { path: "/products", hash: "expiry" },
       });
     }
   }

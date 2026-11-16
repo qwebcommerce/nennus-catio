@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("products", "view"));
 
 router.get("/", async (req, res) => {
   const rows = await prisma.catalogPetType.findMany({
@@ -13,7 +15,7 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/", requireModule("products", "create"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const nameEn = String(req.body?.nameEn || "").trim();
   if (!name || !nameEn) return res.status(400).json({ error: "Arabic and English names are required" });
@@ -28,16 +30,18 @@ router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   res.status(201).json(row);
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.catalogPetType.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Not found" });
+  assertVersion(existing, version);
   const data = {};
   if (req.body?.name != null) data.name = String(req.body.name).trim();
   if (req.body?.nameEn != null) data.nameEn = String(req.body.nameEn).trim();
   if (req.body?.isActive !== undefined) data.isActive = req.body.isActive !== false;
-  const row = await prisma.catalogPetType.update({ where: { id: existing.id }, data });
+  const row = await versionedUpdate(prisma, "catalogPetType", { id: existing.id, version, data });
   res.json(row);
 });
 

@@ -1,8 +1,8 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Gem, Headset, Heart, Leaf, Package, ShieldCheck, ShoppingBag, Truck } from "lucide-react";
-import { money, pickName, productImage, productPrice, useCatalog, useCopy } from "./copy.js";
-import { PETS } from "./pets.js";
+import { money, pickName, productImage, productPrice, useCatalog, useCopy, useShopMeta } from "./copy.js";
+import { petGroups } from "./pets.js";
 
 const SERVICES = [
   {
@@ -38,6 +38,8 @@ const SERVICES = [
 export function SiteHome() {
   const { locale, text } = useCopy();
   const { products } = useCatalog();
+  const { meta } = useShopMeta();
+  const pets = petGroups(meta?.petTypes);
   const featured = products.filter((product) => !product.isPetHouse).slice(0, 5);
 
   return (
@@ -93,7 +95,7 @@ export function SiteHome() {
           </Link>
         </div>
         <div className="ref-pet-row">
-          {PETS.map((pet) => (
+          {pets.map((pet) => (
             <Link key={pet.id} to={`/shop?pet=${pet.id}`} className="ref-pet-circle">
               <span className="ref-pet-circle__image"><img src={pet.image} alt="" /></span>
               <strong>{text(pet.en, pet.ar)}</strong>

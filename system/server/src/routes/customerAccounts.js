@@ -1,17 +1,14 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { d, fmt, riyals, toDirhams } from "../lib/money.js";
+import { splitsToApi, toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requirePermission("receivables"));
-
-function roundMoney(n) {
-  return Math.round(Number(n) * 100) / 100;
-}
+router.use(requireModule("finance", "view"));
 
 /** قائمة عملاء مع رصيد الذمّة */
 router.get("/", async (req, res) => {
@@ -34,7 +31,7 @@ router.get("/", async (req, res) => {
       },
       take: 500,
     });
-    res.json(rows);
+    res.json(toApi("Customer", rows));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e instanceof Error ? e.message : "فشل تحميل الحسابات" });
@@ -98,11 +95,11 @@ router.get("/transactions", async (req, res) => {
         id: `sale:${s.id}`,
         kind: "SALE",
         createdAt: s.createdAt,
-        amount: Number(s.amountPaid ?? s.total ?? 0),
-        total: Number(s.total ?? 0),
-        amountDue: Number(s.amountDue ?? 0),
+        amount: riyals(s.amountPaid ?? s.total ?? 0),
+        total: riyals(s.total ?? 0),
+        amountDue: riyals(s.amountDue ?? 0),
         paymentMethod: s.paymentMethod,
-        paymentSplits: s.paymentSplits,
+        paymentSplits: splitsToApi(s.paymentSplits),
         invoiceNumber: s.invoiceNumber || null,
         customer: s.customer,
         user: s.user,
@@ -113,8 +110,8 @@ router.get("/transactions", async (req, res) => {
         id: `collect:${c.id}`,
         kind: "COLLECTION",
         createdAt: c.createdAt,
-        amount: Math.abs(Number(c.amount ?? 0)),
-        total: Math.abs(Number(c.amount ?? 0)),
+        amount: riyals(Math.abs(d(c.amount))),
+        total: riyals(Math.abs(d(c.amount))),
         amountDue: null,
         paymentMethod: c.paymentMethod || "CASH",
         paymentSplits: null,
@@ -156,20 +153,18 @@ router.get("/:customerId/ledger", async (req, res) => {
       createdBy: { select: { id: true, name: true } },
     },
   });
-  res.json({ customer: c, entries });
+  res.json({ customer: toApi("Customer", c), entries: toApi("CustomerAccountLedger", entries) });
 });
 
 /** تحصيل دفعة (يقلّل رصيد الذمّة) */
-router.post(
-  "/:customerId/payments",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
+router.post("/:customerId/payments", requireModule("finance", "create"),
   async (req, res) => {
     const orgId = req.user.organizationId;
     const customerId = String(req.params.customerId || "").trim();
     const { amount, paymentMethod, branchId: bodyBranch, note } = req.body || {};
-    const payAmt = roundMoney(Number(amount));
-    if (!Number.isFinite(payAmt) || payAmt <= 0) {
-      return res.status(400).json({ error: "مبلغ غير صالح" });
+    const payAmt = toDirhams(amount, { allowZero: false });
+    if (payAmt == null) {
+      return res.status(400).json({ error: "مبلغ غير صالح", errorAr: "مبلغ غير صالح", errorEn: "Enter a valid amount (at most 2 decimals)" });
     }
     const pm = String(paymentMethod || "CASH").toUpperCase();
     if (!["CASH", "CARD", "ONLINE"].includes(pm)) {
@@ -207,11 +202,11 @@ router.post(
           where: { id: customerId, organizationId: orgId },
         });
         if (!cust) throw new Error("العميل غير موجود");
-        const bal = Number(cust.accountBalance || 0);
+        const bal = d(cust.accountBalance);
         if (bal <= 0) throw new Error("لا يوجد رصيد مستحق لهذا العميل");
-        const apply = roundMoney(Math.min(payAmt, bal));
-        const dec = new Prisma.Decimal(apply.toFixed(2));
-        const neg = dec.neg();
+        const apply = Math.min(payAmt, bal);
+        const dec = apply;
+        const neg = -apply;
 
         await tx.customerAccountLedger.create({
           data: {
@@ -240,11 +235,11 @@ router.post(
         entityType: "Customer",
         entityId: customerId,
         branchId: bid,
-        summary: `تحصيل ذمّة ${out.applied}`,
+        summary: `تحصيل ذمّة ${fmt(out.applied)}`,
         meta: { paymentMethod: pm },
       });
 
-      res.json(out);
+      res.json({ applied: riyals(out.applied), customer: toApi("Customer", out.customer) });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "فشل التحصيل";
       res.status(400).json({ error: msg });

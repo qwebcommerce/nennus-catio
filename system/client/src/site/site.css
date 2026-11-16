@@ -4440,3 +4440,48 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Editable cart lines (FR-33) */
+.site-public .site-cart-lines {
+  display: grid;
+  gap: 10px;
+}
+.site-public .site-cart-line {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.site-public .site-cart-line__name {
+  flex: 1 1 100%;
+  font-weight: 600;
+}
+.site-public .site-cart-line__qty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.site-public .site-cart-line__qty input {
+  width: 64px;
+  min-height: 36px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+.site-public .site-cart-line__qty button {
+  min-width: 36px;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  color: var(--ink);
+}
+.site-public .site-cart-line__qty button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.site-public .site-cart-line__qty .site-cart-line__remove {
+  padding: 0 12px;
+  color: #9a3412;
+}

@@ -1,85 +1,242 @@
-import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import React, { useEffect, useMemo, useState } from "react";
+import { api, resolveApiErrorMessage } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { branchDisplayName } from "../utils/displayLabels.js";
+import { statusLabel } from "../utils/statusLabels.js";
+import { formatDateTime, qatarYmd } from "../utils/qatarDate.js";
 
 function money(n) {
   return Number(n || 0).toFixed(2);
 }
 
+const CHANNELS = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION"];
+const EXPORTS = ["transactions", "profit", "stockvalue", "bills", "payments", "expenses", "cashups", "orders", "bookings", "customers", "products"];
+
+function Row({ label, value, strong, indent }) {
+  return (
+    <div className={`fd-row${strong ? " fd-row--strong" : ""}${indent ? " fd-row--indent" : ""}`}>
+      <span>{label}</span>
+      <span className="num">{money(value)}</span>
+    </div>
+  );
+}
+
+/**
+ * Finance (FR-103, FR-107, FR-110 to FR-112): profit and loss, money in and out, stock value,
+ * and the list of sales and refunds. Dates are inclusive Qatar days.
+ */
 export default function Finance() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const today = qatarYmd();
   const [channel, setChannel] = useState("");
   const [branchId, setBranchId] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [type, setType] = useState("");
+  const [from, setFrom] = useState(`${today.slice(0, 8)}01`);
+  const [to, setTo] = useState(today);
   const [branches, setBranches] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [list, setList] = useState(null);
   const [msg, setMsg] = useState("");
-  useEffect(() => { api("/api/branches").then(setBranches).catch(() => {}); }, []);
-  const query = new URLSearchParams();
-  if (channel) query.set("channel", channel);
-  if (branchId) query.set("branchId", branchId);
-  if (from) query.set("from", from);
-  if (to) query.set("to", to);
-  const qs = query.toString();
+
   useEffect(() => {
-    api(`/api/finance/summary${qs ? `?${qs}` : ""}`).then(setSummary).catch((e) => setMsg(e.message));
+    api("/api/branches").then(setBranches).catch(() => {});
+  }, []);
+
+  const qs = useMemo(() => {
+    const query = new URLSearchParams();
+    if (channel) query.set("channel", channel);
+    if (branchId) query.set("branchId", branchId);
+    if (from) query.set("from", from);
+    if (to) query.set("to", to);
+    return query.toString();
+  }, [channel, branchId, from, to]);
+
+  useEffect(() => {
+    setMsg("");
+    api(`/api/finance/summary?${qs}`).then(setSummary).catch((e) => setMsg(e.message));
   }, [qs]);
-  const download = async (list, format) => {
-    const lang = localStorage.getItem("petstore-lang") === "en" ? "en" : "ar";
-    const res = await fetch(`${import.meta.env.VITE_API_URL || ""}/api/exports/${list}?format=${format}&lang=${lang}${qs ? `&${qs}` : ""}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
+  useEffect(() => {
+    api(`/api/finance/transactions?${qs}${type ? `&type=${type}` : ""}`).then(setList).catch((e) => setMsg(e.message));
+  }, [qs, type]);
+
+  const download = async (name, format) => {
+    setMsg("");
+    const lang = locale === "en" ? "en" : "ar";
+    const extra = name === "transactions" && type ? `&type=${type}` : "";
+    const res = await fetch(`${import.meta.env.VITE_API_URL || ""}/api/exports/${name}?format=${format}&lang=${lang}&${qs}${extra}`, {
+      credentials: "include",
     });
-    if (!res.ok) return setMsg(t("shop.documentFail"));
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      setMsg(resolveApiErrorMessage(data, t("shop.documentFail")));
+      return;
+    }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${list}.${format}`;
+    link.download = `${name}-${lang}.${format}`;
     link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   };
+
+  const branchName = (id) => branchDisplayName(branches.find((b) => b.id === id) || { name: "" }, locale);
+  const mi = summary?.moneyInDetail;
+  const mo = summary?.moneyOutDetail;
+
   return (
-    <div style={{ display: "grid", gap: 12 }}>
+    <div className="fd-page">
       <h1>{t("shop.finance")}</h1>
-      <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-      <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-      <select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-        <option value="">{t("shop.allChannels")}</option>
-        {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
-      </select>
-      <select value={channel} onChange={(e) => setChannel(e.target.value)}>
-        <option value="">{t("shop.allChannels")}</option>
-        <option value="IN_STORE">{t("shop.channelStore")}</option>
-        <option value="VAN">{t("shop.channelVan")}</option>
-        <option value="WEBSITE">{t("shop.channelWeb")}</option>
-      </select>
+
+      <div className="fd-filters">
+        <label><span>{t("fd.from")}</span><input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label><span>{t("fd.to")}</span><input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></label>
+        <label>
+          <span>{t("fd.location")}</span>
+          <select value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+            <option value="">{t("fd.allLocations")}</option>
+            {branches.map((branch) => <option key={branch.id} value={branch.id}>{branchDisplayName(branch, locale)}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>{t("fd.channel")}</span>
+          <select value={channel} onChange={(e) => setChannel(e.target.value)}>
+            <option value="">{t("shop.allChannels")}</option>
+            {CHANNELS.map((key) => <option key={key} value={key}>{statusLabel("channel", key, locale)}</option>)}
+          </select>
+        </label>
+      </div>
+      <p className="fd-muted">{t("fd.datesHint")}</p>
+
       {summary ? (
-        <section className="card" style={{ display: "grid", gap: 6 }}>
-          <div>{t("shop.revenue")} {money(summary.revenue)}</div>
-          <div>{t("shop.cogs")} {money(summary.cogs)}</div>
-          <div>{t("shop.refunds")} {money(summary.refunds)}</div>
-          <div>{t("shop.gross")} {money(summary.grossProfit)}</div>
-          <div>{t("shop.expenses")} {money(summary.expenses)}</div>
-          <div>{t("shop.net")} {money(summary.netProfit)}</div>
-          <div>{t("shop.stockValue")} {money(summary.stockValue)}</div>
-          <div>{t("shop.moneyIn")} {money(summary.moneyIn)}</div>
-          <div>{t("shop.moneyOut")} {money(summary.moneyOut)}</div>
-          <div>{t("shop.supplierPayments")} {money(summary.supplierPayments)}</div>
-          {Object.entries(summary.channels || {}).map(([key, row]) => (
-            <div key={key}>{key}: {money(row.revenue)} − {money(row.cogs)} = {money(row.grossProfit)}</div>
-          ))}
-        </section>
+        <div className="fd-grid">
+          <section className="card fd-card">
+            <h2>{t("fd.pnl")}</h2>
+            <Row label={t("shop.revenue")} value={summary.revenue} strong />
+            {CHANNELS.map((key) => <Row key={key} indent label={statusLabel("channel", key, locale)} value={summary.channels?.[key]?.revenue} />)}
+            <Row label={t("shop.refunds")} value={-summary.refunds} />
+            {CHANNELS.map((key) => (summary.channels?.[key]?.refunds ? <Row key={key} indent label={statusLabel("channel", key, locale)} value={-summary.channels[key].refunds} /> : null))}
+            <Row label={t("shop.cogs")} value={-summary.cogs} />
+            <Row label={t("shop.gross")} value={summary.grossProfit} strong />
+            <Row label={t("shop.expenses")} value={-summary.expenses} />
+            <Row label={t("shop.net")} value={summary.netProfit} strong />
+          </section>
+          <section className="card fd-card">
+            <h2>{t("fd.moneyInOut")}</h2>
+            <Row label={t("shop.moneyIn")} value={summary.moneyIn} strong />
+            <Row indent label={t("fd.cashTaken")} value={mi?.cashSales} />
+            <Row indent label={t("fd.cardTaken")} value={mi?.cardSales} />
+            <Row indent label={t("fd.bankTaken")} value={mi?.bankSales} />
+            <Row indent label={t("fd.fawranTaken")} value={mi?.fawranSales} />
+            <Row indent label={t("fd.groomingIn")} value={mi?.grooming} />
+            <Row indent label={t("fd.relocationIn")} value={mi?.relocation} />
+            <Row indent label={t("fd.collections")} value={mi?.accountCollections} />
+            {["cash", "card", "bank", "fawran"].map((key) => (
+              <Row key={`in-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mi?.[key]} />
+            ))}
+            <Row label={t("shop.moneyOut")} value={summary.moneyOut} strong />
+            <Row indent label={t("fd.refundsCash")} value={mo?.refundsCash} />
+            <Row indent label={t("fd.refundsCard")} value={mo?.refundsCard} />
+            <Row indent label={t("fd.refundsBank")} value={mo?.refundsBank} />
+            <Row indent label={t("fd.refundsFawran")} value={mo?.refundsFawran} />
+            <Row indent label={t("fd.supplierCash")} value={mo?.supplierPaymentsCash} />
+            <Row indent label={t("fd.supplierBank")} value={mo?.supplierPaymentsBank} />
+            <Row indent label={t("fd.expensesCash")} value={mo?.expensesCash} />
+            <Row indent label={t("fd.expensesBank")} value={mo?.expensesBank} />
+            {["cash", "card", "bank", "fawran"].map((key) => (
+              <Row key={`out-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mo?.[key]} />
+            ))}
+            <Row label={t("fd.net")} value={summary.net} strong />
+            {channel ? <p className="fd-muted">{t("fd.channelNote")}</p> : null}
+          </section>
+          <section className="card fd-card">
+            <h2>{t("shop.stockValue")}</h2>
+            {(summary.stockValueByLocation || []).map((row) => (
+              <Row key={row.branchId} label={locale === "en" ? row.locationEn || row.location : row.location} value={row.value} />
+            ))}
+            <Row label={t("common.total")} value={summary.stockValue} strong />
+          </section>
+        </div>
       ) : null}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {["orders", "customers", "products", "bookings", "bills", "payments", "expenses", "cashups", "profit"].map((list) => (
-          <span key={list}>
+
+      <section className="card fd-card">
+        <div className="fd-head">
+          <h2>{t("fd.salesRefunds")}</h2>
+          <label>
+            <span className="sr-only">{t("fd.type")}</span>
+            <select value={type} onChange={(e) => setType(e.target.value)} aria-label={t("fd.type")}>
+              <option value="">{t("fd.allTypes")}</option>
+              <option value="sale">{`${statusLabel("txType", "SALE", locale)} / ${statusLabel("txType", "PAYMENT", locale)}`}</option>
+              <option value="refund">{statusLabel("txType", "REFUND", locale)}</option>
+            </select>
+          </label>
+          <span className="fd-export">
             {["csv", "xlsx", "pdf"].map((format) => (
-              <button key={format} type="button" onClick={() => download(list, format)}>{list} {format}</button>
+              <button key={format} type="button" className="btn-touch" onClick={() => download("transactions", format)}>{format.toUpperCase()}</button>
             ))}
           </span>
-        ))}
-      </div>
-      {msg ? <div>{msg}</div> : null}
+        </div>
+        {list ? (
+          <>
+            <div className="fd-totals">
+              <span>{t("shop.revenue")}: <strong>{money(list.totals.sales)}</strong> ({list.totals.saleCount})</span>
+              <span>{t("shop.refunds")}: <strong>{money(list.totals.refunds)}</strong> ({list.totals.refundCount})</span>
+              <span>{t("fd.net")}: <strong>{money(list.totals.net)}</strong></span>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table className="fd-table">
+                <thead>
+                  <tr>
+                    <th>{t("fd.date")}</th>
+                    <th>{t("fd.type")}</th>
+                    <th>{t("fd.reference")}</th>
+                    <th>{t("fd.channel")}</th>
+                    <th>{t("fd.location")}</th>
+                    <th>{t("fd.customer")}</th>
+                    <th>{t("fd.payment")}</th>
+                    <th className="num">{t("fd.amount")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.rows.map((row) => (
+                    <tr key={`${row.type}-${row.id}`}>
+                      <td>{formatDateTime(row.date, locale)}</td>
+                      <td>{statusLabel("txType", row.type, locale)}</td>
+                      <td>{row.reference}</td>
+                      <td>{statusLabel("channel", row.channel, locale)}</td>
+                      <td>{locale === "en" ? row.locationEn || row.location : row.location || branchName(row.branchId)}</td>
+                      <td>{row.customer || "—"}</td>
+                      <td>{statusLabel("payment", row.paymentMethod, locale)}</td>
+                      <td className="num">{money(row.amount)}</td>
+                    </tr>
+                  ))}
+                  {!list.rows.length ? <tr><td colSpan={8}>{t("fd.noRows")}</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+            <p className="fd-muted">{t("fd.serviceNote")}</p>
+            {list.truncated ? <p className="fd-muted">{t("fd.truncated")}</p> : null}
+          </>
+        ) : null}
+      </section>
+
+      <section className="card fd-card">
+        <h2>{t("fd.exports")}</h2>
+        <p className="fd-muted">{t("fd.exportsHint")}</p>
+        <div className="fd-export-grid">
+          {EXPORTS.map((name) => (
+            <div key={name} className="fd-export-row">
+              <span>{t(`fd.export.${name}`)}</span>
+              <span className="fd-export">
+                {["csv", "xlsx", "pdf"].map((format) => (
+                  <button key={format} type="button" className="btn-touch" onClick={() => download(name, format)}>{format.toUpperCase()}</button>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+      {msg ? <div role="alert" className="fd-alert">{msg}</div> : null}
     </div>
   );
 }

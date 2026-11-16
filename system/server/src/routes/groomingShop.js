@@ -1,15 +1,17 @@
 import crypto from "crypto";
 import { Router } from "express";
-import jwt from "jsonwebtoken";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { d, fmt, riyals } from "../lib/money.js";
 import { prisma } from "../lib/prisma.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { quotePromotions } from "../lib/promotions.js";
-import { minutesOf, qatarDateTime, qatarParts, slotTaken, weekdayOf } from "../lib/groomingSlots.js";
+import { claimSlot, minutesOf, qatarDateTime, slotTaken, weekdayOf } from "../lib/groomingSlots.js";
 import { sweepExpiredHolds } from "../lib/webOrder.js";
+import { lookupOnReturn } from "../lib/paymentLookup.js";
+import { customerSession } from "../lib/customerSession.js";
+import { LOCK_TX } from "../lib/payments.js";
+import { mailCustomer, mailStaff } from "../lib/mailer.js";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
 function publicBase() {
   return (process.env.APP_PUBLIC_URL || process.env.CLIENT_URL || "http://localhost:5173").replace(/\/$/, "");
@@ -26,25 +28,12 @@ async function shopOrg() {
   return prisma.organization.findFirst({ orderBy: { createdAt: "asc" } });
 }
 
-function customerFromHeader(req) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) return null;
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== "CUSTOMER" || !payload.sub) return null;
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
 function publicPackage(row) {
   return {
     id: row.id,
     name: row.name,
     nameEn: row.nameEn,
-    price: Number(row.price),
+    price: riyals(row.price),
     durationMin: row.durationMin,
     included: row.included,
     includedEn: row.includedEn,
@@ -52,10 +41,21 @@ function publicPackage(row) {
   };
 }
 
-function publicBooking(row) {
+function cancelDeadline(row, org) {
+  const hours = Math.max(0, Number(org?.bookingCancelHours ?? 24));
+  return new Date(new Date(row.startAt).getTime() - hours * 60 * 60 * 1000);
+}
+
+function publicBooking(row, org) {
+  const deadline = cancelDeadline(row, org);
   return {
     id: row.id,
+    reference: row.reference,
     status: row.status,
+    note: row.notes,
+    paid: d(row.amountPaid) > 0,
+    cancelUntil: deadline,
+    canCancel: row.status === "CONFIRMED" && new Date() < deadline,
     visitKind: row.visitKind,
     startAt: row.startAt,
     endAt: row.endAt,
@@ -63,8 +63,8 @@ function publicBooking(row) {
     breed: row.breed,
     ageText: row.ageText,
     address: row.address,
-    amount: Number(row.amount),
-    homeFee: Number(row.homeFee),
+    amount: riyals(row.amount),
+    homeFee: riyals(row.homeFee),
     package: row.service ? { id: row.service.id, name: row.service.name, nameEn: row.service.nameEn } : null,
   };
 }
@@ -88,7 +88,7 @@ router.get("/packages/:id", async (req, res) => {
     include: { petLinks: { include: { petType: true } } },
   });
   if (!row) return res.status(404).json({ error: "Package not found" });
-  res.json({ ...publicPackage(row), homeVisitFee: Number(org.homeVisitFee) });
+  res.json({ ...publicPackage(row), homeVisitFee: riyals(org.homeVisitFee) });
 });
 
 router.get("/availability", async (req, res) => {
@@ -113,6 +113,7 @@ router.get("/availability", async (req, res) => {
     for (let startMin = open; startMin + duration <= close; startMin += duration) {
       const start = qatarDateTime(date, startMin);
       const end = qatarDateTime(date, startMin + duration);
+      if (start <= new Date()) continue;
       const taken = await slotTaken(prisma, org.id, start, end);
       if (taken < schedule.capacity) {
         slots.push({ startAt: start.toISOString(), endAt: end.toISOString(), seatsLeft: schedule.capacity - taken });
@@ -123,7 +124,7 @@ router.get("/availability", async (req, res) => {
 });
 
 router.get("/bookings", async (req, res) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to see bookings" });
   const rows = await prisma.appointment.findMany({
@@ -132,23 +133,27 @@ router.get("/bookings", async (req, res) => {
     orderBy: { startAt: "desc" },
     take: 50,
   });
-  res.json(rows.map(publicBooking));
+  res.json(rows.map((row) => publicBooking(row, org)));
 });
 
 router.get("/bookings/:id", async (req, res) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to see bookings" });
-  const row = await prisma.appointment.findFirst({
+  let row = await prisma.appointment.findFirst({
     where: { id: req.params.id, organizationId: org.id, customerId: session.sub },
     include: { service: true },
   });
   if (!row) return res.status(404).json({ error: "Booking not found" });
-  res.json(publicBooking(row));
+  // FR-76: back from the payment page — the server looks the payment up itself.
+  if (await lookupOnReturn(req, "appointment", row, row.status === "PENDING_PAYMENT")) {
+    row = await prisma.appointment.findUnique({ where: { id: row.id }, include: { service: true } });
+  }
+  res.json(publicBooking(row, org));
 });
 
 router.post("/bookings/:id/cancel", async (req, res) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to cancel a booking" });
   const row = await prisma.appointment.findFirst({
@@ -158,11 +163,27 @@ router.post("/bookings/:id/cancel", async (req, res) => {
   if (row.status !== "CONFIRMED") {
     return res.status(400).json({ error: "This booking can only be cancelled while it is confirmed" });
   }
-  const updated = await prisma.appointment.update({
-    where: { id: row.id },
-    data: { status: "CANCELLED" },
+  // FR-52: only until the cut-off set by the owner (hours before the start).
+  const deadline = cancelDeadline(row, org);
+  if (new Date() >= deadline) {
+    return res.status(400).json({
+      error: `Bookings can be cancelled up to ${org.bookingCancelHours} hours before they start. Please contact us.`,
+      code: "CANCEL_WINDOW_CLOSED",
+    });
+  }
+  const paid = d(row.amountPaid) > 0;
+  // Guarded: a parallel staff change or retry cannot cancel twice. A paid cancel is flagged for a refund.
+  const moved = await prisma.appointment.updateMany({
+    where: { id: row.id, status: "CONFIRMED" },
+    data: { status: "CANCELLED", ...(paid ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}) },
   });
-  res.json({ id: updated.id, status: updated.status });
+  if (!moved.count) return res.status(409).json({ error: "This booking changed. Refresh and try again." });
+  if (paid) {
+    await mailStaff(org.id, "alertBooking", `Grooming booking ${row.reference || row.id} was cancelled by the customer. A refund of ${fmt(row.amountPaid)} QAR is due.`);
+  }
+  const customer = await prisma.customer.findUnique({ where: { id: session.sub } });
+  await mailCustomer(customer, "booking", { reference: row.reference || row.id.slice(-8).toUpperCase(), status: "CANCELLED", startAt: row.startAt });
+  res.json({ id: row.id, reference: row.reference, status: "CANCELLED", refundDue: paid });
 });
 
 router.post("/book", async (req, res) => {
@@ -177,8 +198,9 @@ router.post("/book", async (req, res) => {
     if (!org) return res.status(400).json({ error: "The shop is not ready" });
     await sweepExpiredHolds();
     const body = req.body || {};
-    const session = customerFromHeader(req);
-    const email = String(body.email || session?.email || "").trim().toLowerCase();
+    const session = await customerSession(req, res);
+    // FR-05: a signed-in customer always books as themselves (body email is ignored).
+    const email = String(session?.email || body.email || "").trim().toLowerCase();
     const name = String(body.name || "").trim();
     const phone = String(body.phone || "").trim();
     const petName = String(body.petName || "").trim();
@@ -186,17 +208,21 @@ router.post("/book", async (req, res) => {
     const ageText = String(body.ageText || "").trim();
     const visitKind = String(body.visitKind || "").toUpperCase() === "HOME" ? "HOME" : "SHOP";
     const startAt = new Date(String(body.startAt || ""));
-    const endAt = new Date(String(body.endAt || ""));
+    const note = String(body.note ?? body.notes ?? "").trim().slice(0, 1000) || null;
     if (!email || !name || !phone || !petName || !breed || !ageText) {
       return res.status(400).json({ error: "Name, email, phone, and the pet's name, breed, and age are required" });
     }
-    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt) {
+    if (Number.isNaN(startAt.getTime())) {
       return res.status(400).json({ error: "Choose a free time" });
     }
+    if (startAt <= new Date()) return res.status(400).json({ error: "That time has already passed" });
     const service = await prisma.groomingService.findFirst({
       where: { id: String(body.packageId || ""), organizationId: org.id, active: true },
     });
     if (!service) return res.status(400).json({ error: "That package is not available" });
+    // The end always comes from the package, never from the browser.
+    const duration = Math.max(10, service.durationMin || 60);
+    const endAt = new Date(startAt.getTime() + duration * 60 * 1000);
     let area = null;
     let address = null;
     if (visitKind === "HOME") {
@@ -209,19 +235,6 @@ router.post("/book", async (req, res) => {
       }
       if (!area) return res.status(400).json({ error: "Choose an area for the home visit" });
     }
-    const taken = await slotTaken(prisma, org.id, startAt, endAt);
-    const local = qatarParts(startAt);
-    const schedules = await prisma.groomingSchedule.findMany({
-      where: { organizationId: org.id, weekday: local.weekday, isActive: true },
-    });
-    const startMinutes = local.minutes;
-    const fits = schedules.some((schedule) => {
-      const open = minutesOf(schedule.startTime);
-      const close = minutesOf(schedule.endTime);
-      return open != null && close != null && startMinutes >= open && startMinutes < close && taken < schedule.capacity;
-    });
-    if (!fits) return res.status(400).json({ error: "That time is no longer free" });
-
     const customer = await prisma.$transaction(async (tx) => {
       const found = await tx.customer.findFirst({
         where: { organizationId: org.id, email: { equals: email, mode: "insensitive" } },
@@ -237,20 +250,23 @@ router.post("/book", async (req, res) => {
     const branch = org.websiteBranchId
       ? await prisma.branch.findFirst({ where: { id: org.websiteBranchId, organizationId: org.id, isActive: true } })
       : await prisma.branch.findFirst({ where: { organizationId: org.id, isActive: true, kind: { not: "VAN" } } });
-    const homeFee = visitKind === "HOME" ? org.homeVisitFee : new Prisma.Decimal(0);
-    const gross = service.price.add(homeFee);
+    // Whole dirhams (NFR-03).
+    const homeFee = visitKind === "HOME" ? d(org.homeVisitFee) : 0;
+    const gross = d(service.price) + homeFee;
     const promo = await quotePromotions(prisma, {
       organizationId: org.id,
       channel: "GROOMING",
       lines: [],
-      goods: Number(gross),
+      goods: gross,
       code: body.code,
     });
-    let amount = gross.sub(promo.discountDec);
-    if (amount.lessThan(0)) amount = new Prisma.Decimal(0);
+    let amount = gross - promo.discount;
+    if (amount < 0) amount = 0;
     const holdMinutes = Math.max(5, Number(org.holdMinutes) || 20);
     const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
-    const booking = await prisma.appointment.create({
+    const booking = await prisma.$transaction(async (tx) => {
+      await claimSlot(tx, { organizationId: org.id, startAt, endAt, grid: duration });
+      return tx.appointment.create({
       data: {
         organizationId: org.id,
         branchId: branch?.id || null,
@@ -268,18 +284,20 @@ router.post("/book", async (req, res) => {
         startAt,
         endAt,
         holdExpiresAt: expiresAt,
+        notes: note,
         createdByUserId: staff.id,
       },
-    });
-    if (Number(amount) <= 0) {
-      await prisma.appointment.update({ where: { id: booking.id }, data: { status: "CONFIRMED" } });
-      return res.status(201).json({ bookingId: booking.id, total: 0 });
+      });
+    }, LOCK_TX);
+    if (amount <= 0) {
+      await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CONFIRMED" } });
+      return res.status(201).json({ bookingId: booking.id, reference: booking.reference, total: 0 });
     }
     const [first, ...rest] = name.split(/\s+/);
     const payment = await createSkipcashPayment({
       Uid: crypto.randomUUID(),
       KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-      Amount: Number(amount).toFixed(2),
+      Amount: fmt(amount),
       FirstName: (first || "Customer").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Customer",
       LastName: (rest.join(" ") || "Catio").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Catio",
       Phone: phone.slice(0, 15),
@@ -289,16 +307,16 @@ router.post("/book", async (req, res) => {
       WebhookUrl: `${(process.env.API_PUBLIC_URL || process.env.APP_PUBLIC_URL || "http://localhost:4000").replace(/\/$/, "")}/api/shop/payments/skipcash`,
       ReturnUrl: `${publicBase()}/shop/grooming/bookings/${booking.id}`,
     }).catch(async (err) => {
-      await prisma.appointment.update({ where: { id: booking.id }, data: { status: "CANCELLED" } });
+      await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
       throw err;
     });
     await prisma.appointment.update({
       where: { id: booking.id },
       data: { gatewayPaymentId: payment.id, paymentReference: payment.id },
     });
-    res.status(201).json({ bookingId: booking.id, payUrl: payment.payUrl, total: Number(amount) });
+    res.status(201).json({ bookingId: booking.id, reference: booking.reference, payUrl: payment.payUrl, total: riyals(amount) });
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message || "Booking failed" });
+    res.status(e.status || 400).json({ error: e.message || "Booking failed", ...(e.errorAr ? { errorAr: e.errorAr, errorEn: e.message } : {}) });
   }
 });
 

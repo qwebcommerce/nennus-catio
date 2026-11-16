@@ -13,7 +13,6 @@ const STORAGE_KEY = "petstore-print-paper-v1";
 
 const DEFAULTS = {
   retail: "A4",
-  wholesale: "A4",
   reports: "A4",
   other: "A4",
 };
@@ -39,7 +38,6 @@ export function loadPrintPaperSizes() {
     const o = JSON.parse(raw);
     return {
       retail: normalize(o.retail),
-      wholesale: normalize(o.wholesale),
       reports: normalize(o.reports),
       other: normalize(o.other),
     };
@@ -51,7 +49,6 @@ export function loadPrintPaperSizes() {
 export function savePrintPaperSizes(sizes) {
   const next = {
     retail: normalize(sizes.retail),
-    wholesale: normalize(sizes.wholesale),
     reports: normalize(sizes.reports),
     other: normalize(sizes.other),
   };

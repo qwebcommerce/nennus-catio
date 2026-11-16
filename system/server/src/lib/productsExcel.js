@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { riyals, toDirhams } from "./money.js";
 
 export const PRODUCTS_SHEET = "Products";
 
@@ -134,18 +135,6 @@ export function buildProductSampleExcelBuffer() {
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 }
 
-/** تحويل تاريخ من Excel (رقم تسلسلي أو نص) */
-export function parseExpiryCell(v) {
-  if (v === "" || v == null) return null;
-  if (typeof v === "number" && Number.isFinite(v) && v > 20000 && v < 1000000) {
-    const utc = Math.round((v - 25569) * 86400 * 1000);
-    const d = new Date(utc);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(String(v).trim());
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 function categoryName(p) {
   return p.productCategory?.name || p.category || "";
 }
@@ -168,14 +157,12 @@ export function buildProductsExcelBuffer(products, inventoryByProductId) {
       barcode: p.barcode ?? "",
       category: categoryName(p),
       subcategory: subcategoryName(p),
-      cost: p.cost != null ? Number(p.cost) : "",
-      price: Number(p.price),
-      wholesalePrice: p.wholesalePrice != null ? Number(p.wholesalePrice) : "",
+      cost: p.cost != null ? riyals(p.cost) : "",
+      price: riyals(p.price),
       imageUrl: p.imageUrl ?? "",
       isActive: p.isActive ? "yes" : "no",
       stockQty: inv ? inv.quantity : "",
       minStock: inv ? inv.minStockLevel : "",
-      expiryDate: p.expiryDate ? new Date(p.expiryDate).toISOString().slice(0, 10) : "",
       description: p.description ?? "",
     };
   });
@@ -215,6 +202,12 @@ export function parseNumber(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** A sheet money cell (riyals, at most 2 decimals) → whole dirhams; null when empty or invalid (NFR-03). */
+export function parseMoneyCell(v) {
+  if (v === "" || v == null) return null;
+  return toDirhams(typeof v === "number" ? v : String(v).replace(/,/g, ".").replace(/\s/g, ""));
+}
+
 /**
  * Normalize sheet rows for import preview / confirm.
  * Skips blank name+nameEn rows. Preserves Excel field names used by the importer.
@@ -230,7 +223,7 @@ export function normalizeImportPreviewRows(rawRows) {
     const name = cellText(r.name);
     const nameEn = cellText(r.nameEn);
     if (!name && !nameEn && !cellText(r.category) && !cellText(r.sku)) continue;
-    const priceNum = parseNumber(r.price);
+    const priceNum = parseMoneyCell(r.price);
     const rowNum = i + 2;
     out.push({
       key: `excel-${rowNum}-${out.length}`,

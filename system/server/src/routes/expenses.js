@@ -1,13 +1,20 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { fmt, parseMoney, riyals } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
+import { qatarRange } from "../lib/qatarTime.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("finance", "view"));
 
 const CATEGORIES = new Set(["RENT", "PAYROLL", "ELECTRICITY", "INTERNET", "OTHER"]);
+const SOURCES = new Set(["CASH", "BANK"]);
+const BAD_AMOUNT = { error: "المبلغ غير صالح", errorAr: "المبلغ غير صالح (بحد أقصى منزلتين عشريتين)", errorEn: "Enter a valid amount (at most 2 decimals)" };
+const BAD_SOURCE = { error: "اختر الدفع من النقد أو من البنك", errorAr: "اختر الدفع من النقد أو من البنك", errorEn: "Choose whether it was paid from cash or from the bank" };
 
 function parseDate(s) {
   const d = new Date(String(s));
@@ -15,23 +22,18 @@ function parseDate(s) {
 }
 
 /** قائمة مصاريف مع فلترة */
-router.get("/", requireRole("ADMIN", "MANAGER"), requirePermission("expenses"), async (req, res) => {
+router.get("/", async (req, res) => {
   const orgId = req.user.organizationId;
-  const from = req.query.from ? parseDate(req.query.from) : null;
-  const to = req.query.to ? parseDate(req.query.to) : null;
+  const dates = req.query.from || req.query.to ? qatarRange(req.query, { defaultFrom: new Date(0) }) : null;
+  if ((req.query.from || req.query.to) && !dates) return res.status(400).json({ error: "تاريخ غير صالح", errorAr: "تاريخ غير صالح", errorEn: "Invalid date" });
   const cat = req.query.category ? String(req.query.category).toUpperCase() : null;
+  const source = req.query.paidFrom ? String(req.query.paidFrom).toUpperCase() : null;
 
   const where = {
     organizationId: orgId,
-    ...(from || to
-      ? {
-          expenseDate: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {}),
+    ...(dates ? { expenseDate: { gte: dates.from, lt: dates.to } } : {}),
     ...(cat && CATEGORIES.has(cat) ? { category: cat } : {}),
+    ...(source && SOURCES.has(source) ? { paidFrom: source } : {}),
   };
 
   const rows = await prisma.expense.findMany({
@@ -40,58 +42,66 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requirePermission("expenses"), 
     take: 500,
     include: { createdBy: { select: { id: true, name: true } } },
   });
-  res.json(rows);
+  res.json(toApi("Expense", rows));
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), requirePermission("expenses"), async (req, res) => {
+router.post("/", requireModule("finance", "create"), async (req, res) => {
   const orgId = req.user.organizationId;
-  const { category, amount, description, expenseDate } = req.body || {};
+  const { category, amount, description, expenseDate, paidFrom } = req.body || {};
   const cat = String(category || "").toUpperCase();
   if (!CATEGORIES.has(cat)) {
-    return res.status(400).json({ error: "فئة مصروف غير صالحة" });
+    return res.status(400).json({ error: "فئة مصروف غير صالحة", errorAr: "فئة مصروف غير صالحة", errorEn: "Invalid expense category" });
   }
-  const amt = Number(amount);
-  if (!Number.isFinite(amt) || amt < 0) {
-    return res.status(400).json({ error: "المبلغ غير صالح" });
-  }
+  const amt = parseMoney(amount, { allowZero: false });
+  if (!amt) return res.status(400).json(BAD_AMOUNT);
+  const source = String(paidFrom || "").toUpperCase();
+  if (!SOURCES.has(source)) return res.status(400).json(BAD_SOURCE);
   const ed = expenseDate ? parseDate(expenseDate) : null;
   if (!ed) {
     return res.status(400).json({ error: "تاريخ المصروف مطلوب" });
   }
 
-  const row = await prisma.expense.create({
-    data: {
-      organizationId: orgId,
-      category: cat,
-      amount: new Prisma.Decimal(amt.toFixed(2)),
-      description:
-        description != null && String(description).trim()
-          ? String(description).trim().slice(0, 500)
-          : null,
-      expenseDate: ed,
-      createdByUserId: req.user.sub,
-    },
-    include: { createdBy: { select: { id: true, name: true } } },
+  const row = await prisma.$transaction(async (tx) => {
+    const created = await tx.expense.create({
+      data: {
+        organizationId: orgId,
+        category: cat,
+        amount: amt,
+        paidFrom: source,
+        description:
+          description != null && String(description).trim()
+            ? String(description).trim().slice(0, 500)
+            : null,
+        expenseDate: ed,
+        createdByUserId: req.user.sub,
+      },
+      include: { createdBy: { select: { id: true, name: true } } },
+    });
+    await writeAudit(
+      {
+        userId: req.user.sub,
+        action: "EXPENSE_CREATE",
+        entityType: "Expense",
+        entityId: created.id,
+        summary: `${cat} ${fmt(amt)} ${source}`,
+      },
+      tx
+    );
+    return created;
   });
 
-  await writeAudit({
-    userId: req.user.sub,
-    action: "EXPENSE_CREATE",
-    entityType: "Expense",
-    entityId: row.id,
-    summary: `${cat} ${amt}`,
-  });
-
-  res.status(201).json(row);
+  res.status(201).json(toApi("Expense", row));
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER"), requirePermission("expenses"), async (req, res) => {
+router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
   const orgId = req.user.organizationId;
-  const { category, amount, description, expenseDate } = req.body || {};
+  const { category, amount, description, expenseDate, paidFrom } = req.body || {};
+  const version = requireVersion(req);
   const existing = await prisma.expense.findFirst({
     where: { id: req.params.id, organizationId: orgId },
   });
   if (!existing) return res.status(404).json({ error: "غير موجود" });
+  assertVersion(existing, version);
 
   const data = {};
   if (category != null) {
@@ -100,9 +110,14 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER"), requirePermission("expense
     data.category = cat;
   }
   if (amount != null) {
-    const amt = Number(amount);
-    if (!Number.isFinite(amt) || amt < 0) return res.status(400).json({ error: "المبلغ غير صالح" });
-    data.amount = new Prisma.Decimal(amt.toFixed(2));
+    const amt = parseMoney(amount, { allowZero: false });
+    if (!amt) return res.status(400).json(BAD_AMOUNT);
+    data.amount = amt;
+  }
+  if (paidFrom != null) {
+    const source = String(paidFrom).toUpperCase();
+    if (!SOURCES.has(source)) return res.status(400).json(BAD_SOURCE);
+    data.paidFrom = source;
   }
   if (description !== undefined) {
     data.description =
@@ -116,21 +131,62 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER"), requirePermission("expense
     data.expenseDate = ed;
   }
 
-  const row = await prisma.expense.update({
-    where: { id: existing.id },
-    data,
-    include: { createdBy: { select: { id: true, name: true } } },
+  const row = await prisma.$transaction(async (tx) => {
+    const updated = await versionedUpdate(tx, "expense", {
+      id: existing.id,
+      version,
+      data,
+      include: { createdBy: { select: { id: true, name: true } } },
+    });
+    await writeAudit(
+      {
+        userId: req.user.sub,
+        action: "EXPENSE_UPDATE",
+        entityType: "Expense",
+        entityId: existing.id,
+        summary: `${updated.category} ${fmt(updated.amount)}`,
+        meta: {
+          before: {
+            category: existing.category,
+            amount: riyals(existing.amount),
+            description: existing.description,
+            expenseDate: existing.expenseDate,
+          },
+          changes: Object.keys(data),
+        },
+      },
+      tx
+    );
+    return updated;
   });
-  res.json(row);
+  res.json(toApi("Expense", row));
 });
 
-router.delete("/:id", requireRole("ADMIN", "MANAGER"), requirePermission("expenses"), async (req, res) => {
+router.delete("/:id", requireModule("finance", "delete"), async (req, res) => {
   const orgId = req.user.organizationId;
   const existing = await prisma.expense.findFirst({
     where: { id: req.params.id, organizationId: orgId },
   });
   if (!existing) return res.status(404).end();
-  await prisma.expense.delete({ where: { id: existing.id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.expense.delete({ where: { id: existing.id } });
+    await writeAudit(
+      {
+        userId: req.user.sub,
+        action: "EXPENSE_DELETE",
+        entityType: "Expense",
+        entityId: existing.id,
+        summary: `${existing.category} ${fmt(existing.amount)}`,
+        meta: {
+          category: existing.category,
+          amount: riyals(existing.amount),
+          description: existing.description,
+          expenseDate: existing.expenseDate,
+        },
+      },
+      tx
+    );
+  });
   res.status(204).end();
 });
 

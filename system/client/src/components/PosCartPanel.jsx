@@ -3,11 +3,7 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { productDisplayName } from "../utils/productName.js";
 import { isUnitPriceAtOrBelowCost } from "../utils/saleCostWarning.js";
 import { ProductImagePreview } from "./ProductImagePreview.jsx";
-
-function modifierLabel(m, locale) {
-  if (locale === "en") return m.label || m.key;
-  return m.labelAr || m.label || m.key;
-}
+import { lineAmount } from "../store/cartStore.js";
 
 /**
  * Premium cart list for POS left panel — qty steppers, line totals, empty state.
@@ -59,9 +55,8 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
           const key = line.lineKey || line.productId;
           const weight = line.sellBy === "WEIGHT";
           const shownQty = weight ? Number((line.quantity / 1000).toFixed(3)) : line.quantity;
-          const lineTotal = weight ? line.unitPrice * (line.quantity / 1000) : line.unitPrice * line.quantity;
+          const lineTotal = lineAmount(line);
           const belowCost = isUnitPriceAtOrBelowCost(line.unitPrice, line.cost);
-          const mods = Array.isArray(line.modifiers) ? line.modifiers : [];
           return (
             <li key={key} className="pos-cart-line">
               <div className="pos-cart-line__media">
@@ -81,11 +76,6 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
                     ×
                   </button>
                 </div>
-                {mods.length ? (
-                  <div className="pos-cart-line__mods" style={{ fontSize: 12, color: "var(--muted)" }}>
-                    {mods.map((m) => modifierLabel(m, locale)).join(" · ")}
-                  </div>
-                ) : null}
                 <div className="pos-cart-line__price">
                   {line.unitPrice.toFixed(2)} {t("common.currency")}
                   <span className="pos-cart-line__each"> / {weight ? t("pos.perKg") : t("cart.each")}</span>

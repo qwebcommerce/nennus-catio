@@ -9,7 +9,7 @@
       "root": "system/server",
       "framework": "express",
       "entrypoint": "src/app.js",
-      "buildCommand": "prisma generate"
+      "buildCommand": "prisma generate && node scripts/migrate-on-deploy.mjs"
     }
   },
   "rewrites": [
@@ -24,6 +24,12 @@
       "destination": {
         "service": "client"
       }
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/email",
+      "schedule": "17 3 * * *"
     }
   ]
 }

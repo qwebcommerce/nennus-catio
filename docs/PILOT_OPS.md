@@ -1,6 +1,6 @@
 # Pilot operations guide
 
-Short runbook for Icodo POS pilots (MVP retail / grocery / pharmacy).
+Short runbook for the Nennus Catio pilot (shop till, van, website).
 
 ## Roles & permissions (defaults)
 
@@ -13,23 +13,23 @@ Short runbook for Icodo POS pilots (MVP retail / grocery / pharmacy).
 | Receivables | ✓ | ✓ | — |
 | Purchases / transfers / count / returns | ✓ | ✓ | — |
 | Cash session | ✓ | ✓ | ✓ |
-| Loyalty | ✓ | ✓ | — |
-| HR / accounting / automations | ✓ | ✓ | — |
-| Users / branches / plan / permissions | ✓ | — | — |
+| Finance / exports | ✓ | ✓ (finance) | — |
+| Users / locations / permissions | ✓ | — | — |
 
 Admins always bypass permission checks. Customize matrices under **Administration → Permissions**.
 
-## Plan branch limit
+## Email
 
-- Each organization has `plan` (`FREE` / `PREMIUM`) and `maxBranches` (default **3**).
-- Creating a branch past the limit returns `403` with code `BRANCH_LIMIT`.
-- Platform admins raise the limit via **Platform → Organizations → Record plan purchase**.
-- The new limit cannot be lower than the current branch count (`PLAN_LIMIT_TOO_LOW`).
-- Tenant admins see usage on **Plan** and **Branches**.
+- Every email goes into the `EmailOutbox` table first and is sent from there, with retries
+  (1, 2, 4 … minutes, up to 8 attempts). A failed send never fails the sale, order or registration.
+- Set `RESEND_API_KEY`, `SHOP_FROM_EMAIL`, `APP_PUBLIC_URL` (links in emails) and `CRON_SECRET`.
+- Vercel Cron calls `/api/cron/email` every 10 minutes with `Authorization: Bearer $CRON_SECRET`
+  (a schedule this frequent needs a Vercel Pro plan; on Hobby use a daily schedule or an external cron).
+- Rows with `status = 'FAILED'` gave up; check `lastError`.
 
 ## Daily backup (recommended)
 
-### Option A — Supabase dashboard
+### Option A — database provider backups
 
 1. Open the project → **Database → Backups**.
 2. Confirm automatic backups are on (PITR on paid plans if available).
@@ -44,7 +44,7 @@ chmod +x scripts/backup-db.sh
 ./scripts/backup-db.sh
 ```
 
-Dumps land in `backups/` (gitignored). Keep at least 7 days of dumps for pilots.
+Dumps land in `backups/` (gitignored). Keep at least 7 days of dumps.
 
 ### Restore
 
@@ -67,11 +67,11 @@ cd system/server && npx prisma migrate deploy
 
 ## Pilot support checklist
 
-1. Open **Cash** before cash sales (POS warns if no session).
-2. Confirm **offline sync queue** is empty at end of day.
-3. For pharmacy/grocery: receive stock **with expiry dates**, then use **Lots** on Products.
-4. Reprint invoices from **Sales history**; refunds from the same row when allowed.
-5. Escalate plan / branch limit changes to platform admin.
+1. Open **Cash** before cash sales on the till and before each van run (POS warns if no session).
+2. Close the cash-up at the end of the day (counted cash, card total, difference).
+3. Reprint invoices from **Sales history**; refunds from the same row when allowed.
+4. Check **Finance** for the day (dates are Qatar days, both ends included) and export what you need.
+5. Check open supplier bills by age on **Purchase orders** and record payments (cash or bank).
 
 ## Platform console language
 

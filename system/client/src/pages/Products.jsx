@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, apiBlob, apiUploadExcel, apiUploadImage } from "../api/client.js";
+import { api, apiBlob, apiUploadExcel, apiUploadImage, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -8,7 +8,6 @@ import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { BarcodeLabelPrint } from "../components/BarcodeLabelPrint.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
-import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 
 function emptyProductForm() {
   return {
@@ -31,6 +30,8 @@ function emptyProductForm() {
     sku: "",
     barcode: "",
     stock: "",
+    stockOriginal: "",
+    stockReason: "",
     minStockLevel: "5",
     sellBy: "PIECE",
     petTypeIds: [],
@@ -56,10 +57,6 @@ export default function Products() {
   const [printProduct, setPrintProduct] = useState(null);
   const [printBarcodeCode, setPrintBarcodeCode] = useState("");
   const [low, setLow] = useState([]);
-  const [lotsProduct, setLotsProduct] = useState(null);
-  const [lotsRows, setLotsRows] = useState([]);
-  const [lotsLoading, setLotsLoading] = useState(false);
-  const [lotsMsg, setLotsMsg] = useState("");
   const [form, setForm] = useState(() => emptyProductForm());
   const [formMode, setFormMode] = useState(null); // null | "create" | "edit"
   const [editId, setEditId] = useState("");
@@ -83,7 +80,6 @@ export default function Products() {
 
   const activeBranchId = useActiveBranchId();
   const canEditProducts = can("productsEdit");
-  const showLots = isVerticalFeatureEnabled("lotsExpiry", user?.businessVertical);
 
   const catalogLabel = (row) => {
     if (!row) return "";
@@ -130,6 +126,7 @@ export default function Products() {
         setTotal(Array.isArray(res) ? res.length : 0);
       }
       setLow(l);
+      return res && Array.isArray(res.items) ? res.items : Array.isArray(res) ? res : [];
     } finally {
       setListLoading(false);
     }
@@ -198,6 +195,8 @@ export default function Products() {
       sku: p.sku || "",
       barcode: p.barcode || "",
       stock: inv?.quantity != null ? String(inv.quantity) : "",
+      stockOriginal: inv?.quantity != null ? String(inv.quantity) : "",
+      stockReason: "",
       minStockLevel: inv?.minStockLevel != null ? String(inv.minStockLevel) : "5",
       sellBy: p.sellBy || "PIECE",
       petTypeIds: Array.isArray(p.petLinks) ? p.petLinks.map((link) => link.petTypeId || link.petType?.id).filter(Boolean) : [],
@@ -207,15 +206,23 @@ export default function Products() {
       leadTimeDays: p.leadTimeDays != null ? String(p.leadTimeDays) : "",
       houseDeliveryFee: p.houseDeliveryFee != null ? String(p.houseDeliveryFee) : "0",
       takesStock: p.takesStock !== false,
+      // NFR-13: the save names the version this copy was loaded at.
+      version: p.version,
       variants: Array.isArray(p.variants)
         ? p.variants.map((v) => ({
             id: v.id,
+            version: v.version,
             label: v.label || "",
             labelEn: v.labelEn || "",
             sku: v.sku || "",
             price: String(v.price ?? ""),
             packWeight: v.packWeight != null ? String(v.packWeight) : "",
             isActive: v.isActive !== false,
+            ...(() => {
+              const st = Array.isArray(v.stocks) ? v.stocks.find((row) => row.branchId === activeBranchId) : null;
+              const qty = st?.quantity != null ? String(st.quantity) : "0";
+              return { stock: qty, stockOriginal: qty, minStockLevel: st?.minStockLevel != null ? String(st.minStockLevel) : "5", minOriginal: st?.minStockLevel != null ? String(st.minStockLevel) : "5" };
+            })(),
           }))
         : [],
     });
@@ -297,6 +304,7 @@ export default function Products() {
           .filter((v) => String(v.label || v.labelEn || "").trim() && v.price !== "")
           .map((v) => ({
             id: v.id,
+            version: v.version,
             label: v.label || v.labelEn,
             labelEn: v.labelEn,
             sku: v.sku || null,
@@ -327,13 +335,28 @@ export default function Products() {
       } else if (formMode === "edit" && editId) {
         await api(`/api/products/${editId}`, {
           method: "PATCH",
-          body: catalogBody,
+          body: { ...catalogBody, version: form.version },
         });
         const bid = activeBranchId;
-        if (bid) {
+        const reason = String(form.stockReason || "").trim();
+        const savedVariants = (form.variants || []).filter((v) => v.id);
+        if (bid && savedVariants.length) {
+          // Stock and low-stock level are kept per variant at this location (FR-17, FR-92).
+          for (const v of savedVariants) {
+            const body = {};
+            if (String(v.stock) !== String(v.stockOriginal)) body.quantity = Number(v.stock);
+            if (String(v.minStockLevel) !== String(v.minOriginal)) body.minStockLevel = Number(v.minStockLevel);
+            if (body.quantity !== undefined && !reason) throw new Error(t("products.stockReasonRequired"));
+            if (Object.keys(body).length) {
+              await api(`/api/inventory/variants/${v.id}/${bid}`, { method: "PATCH", body: { ...body, reason } });
+            }
+          }
+        } else if (bid) {
+          const stockChanged = String(form.stock) !== String(form.stockOriginal);
+          if (stockChanged && !reason) throw new Error(t("products.stockReasonRequired"));
           await api(`/api/inventory/${editId}/${bid}`, {
             method: "PATCH",
-            body: { quantity: stockQty, minStockLevel: stockThreshold },
+            body: { ...(stockChanged ? { quantity: stockQty, reason } : {}), minStockLevel: stockThreshold },
           });
         }
         showToast(t("products.toastUpdated"), "success");
@@ -341,8 +364,16 @@ export default function Products() {
       closeFormModal();
       await load();
     } catch (ex) {
-      setFormError(ex.message || t("products.saveFailed"));
-      showToast(ex.message || t("products.saveFailed"), "error");
+      const message = isStaleEdit(ex) ? editErrorMessage(ex, t) : ex.message || t("products.saveFailed");
+      showToast(message, "error");
+      if (isStaleEdit(ex) && editId) {
+        // Someone else saved this product first: reload it into the form (their values, new version).
+        const rows = await load().catch(() => null);
+        const fresh = Array.isArray(rows) ? rows.find((row) => row.id === editId) : null;
+        if (fresh) openEditModal(fresh);
+        else closeFormModal();
+      }
+      setFormError(message);
     } finally {
       setFormBusy(false);
     }
@@ -363,12 +394,13 @@ export default function Products() {
     try {
       await api(`/api/products/${p.id}`, {
         method: "PATCH",
-        body: { isActive: !p.isActive },
+        body: { isActive: !p.isActive, version: p.version },
       });
       showToast(p.isActive ? t("products.toastDisabled") : t("products.toastEnabled"), "success");
       await load();
     } catch (e) {
-      showToast(e.message || t("products.saveFailed"), "error");
+      showToast(isStaleEdit(e) ? editErrorMessage(e, t) : e.message || t("products.saveFailed"), "error");
+      if (isStaleEdit(e)) await load().catch(() => {});
     }
   };
 
@@ -407,28 +439,6 @@ export default function Products() {
     setTimeout(() => window.print(), 180);
   };
 
-  const openLots = async (p) => {
-    if (!activeBranchId) {
-      showToast(t("products.needBranchForLots"), "error");
-      return;
-    }
-    setLotsProduct(p);
-    setLotsRows([]);
-    setLotsMsg("");
-    setLotsLoading(true);
-    try {
-      const q = new URLSearchParams();
-      q.set("branchId", activeBranchId);
-      const res = await api(`/api/products/${encodeURIComponent(p.id)}/lots?${q.toString()}`);
-      setLotsRows(Array.isArray(res?.lots) ? res.lots : []);
-      if (!(res?.lots || []).length) setLotsMsg(t("products.lotsEmpty"));
-    } catch (e) {
-      setLotsMsg(e.message || t("products.lotsLoadFailed"));
-    } finally {
-      setLotsLoading(false);
-    }
-  };
-
   const toggleSelectAllOnPage = () => {
     if (allSelectedOnPage) {
       setSelectedIds((prev) => prev.filter((id) => !idsOnPage.includes(id)));
@@ -446,9 +456,12 @@ export default function Products() {
     try {
       for (const id of ids) {
         try {
+          // The version shown on this page; a product picked on another page is read first.
+          const shown = list.find((row) => row.id === id);
+          const version = shown ? shown.version : (await api(`/api/products/${id}`)).version;
           await api(`/api/products/${id}`, {
             method: "PATCH",
-            body: { isActive },
+            body: { isActive, version },
           });
           ok += 1;
         } catch {
@@ -710,7 +723,7 @@ export default function Products() {
             {low.slice(0, 8).map((r) => (
               <li key={r.id}>
                 {t("products.lowStockLine", {
-                  name: r.product.name,
+                  name: `${r.product?.name || "—"}${r.variant ? ` (${r.variant.label})` : ""}${r.branch && !activeBranchId ? ` · ${r.branch.name}` : ""}`,
                   qty: r.quantity,
                   min: r.minStockLevel,
                 })}
@@ -857,16 +870,6 @@ export default function Products() {
                       >
                         {t("products.printBarcode")}
                       </button>
-                      {showLots ? (
-                        <button
-                          type="button"
-                          style={{ ...btnSm, background: "var(--surface2)" }}
-                          onClick={() => openLots(p)}
-                          title={t("products.viewLots")}
-                        >
-                          {t("products.viewLots")}
-                        </button>
-                      ) : null}
                       {canEditProducts ? (
                         <>
                           <button type="button" style={btnSm} onClick={() => openEditModal(p)}>
@@ -1143,6 +1146,17 @@ export default function Products() {
                   onChange={(e) => setForm({ ...form, minStockLevel: e.target.value })}
                 />
               </label>
+              {formMode === "edit" ? (
+                <label style={fld}>
+                  <span>{t("products.stockReason")}</span>
+                  <input
+                    style={inp}
+                    value={form.stockReason}
+                    placeholder={t("products.stockReasonHint")}
+                    onChange={(e) => setForm({ ...form, stockReason: e.target.value })}
+                  />
+                </label>
+              ) : null}
               <label style={fld}>
                 <span>{t("products.nameEnField")} *</span>
                 <input
@@ -1284,6 +1298,42 @@ export default function Products() {
                         }))
                       }
                     />
+                    {formMode === "edit" && variant.id && activeBranchId ? (
+                      <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
+                          <span>{t("products.variantStockHere")}</span>
+                          <input
+                            style={inp}
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={variant.stock}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                variants: f.variants.map((row, i) => (i === index ? { ...row, stock: e.target.value } : row)),
+                              }))
+                            }
+                          />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
+                          <span>{t("products.variantLowStockHere")}</span>
+                          <input
+                            style={inp}
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={variant.minStockLevel}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                variants: f.variants.map((row, i) => (i === index ? { ...row, minStockLevel: e.target.value } : row)),
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
                 <button
@@ -1599,101 +1649,6 @@ export default function Products() {
                 {importBusy ? t("products.saving") : t("products.excelSaveDrafts")}
               </button>
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      {lotsProduct ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 70,
-            display: "grid",
-            placeItems: "center",
-            padding: 16,
-            background: "rgba(15, 23, 42, 0.55)",
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setLotsProduct(null);
-          }}
-        >
-          <div className="card" style={{ width: "min(720px, 100%)", maxHeight: "85vh", overflow: "auto" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: 18 }}>{t("products.lotsTitle")}</h2>
-                <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
-                  {productDisplayName(lotsProduct, locale)}
-                </p>
-              </div>
-              <button type="button" className="btn-touch" onClick={() => setLotsProduct(null)}>
-                {t("common.cancel")}
-              </button>
-            </div>
-            <p style={{ margin: "10px 0 0", fontSize: 13, color: "var(--muted)" }}>{t("products.lotsIntro")}</p>
-            {lotsLoading ? (
-              <div style={{ padding: 16 }}>{t("common.loading")}</div>
-            ) : lotsMsg && !lotsRows.length ? (
-              <div style={{ padding: "16px 0", color: "var(--muted)" }}>{lotsMsg}</div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 12 }}>
-                <thead>
-                  <tr style={{ color: "var(--muted)", textAlign: "start" }}>
-                    <th style={thCell}>{t("products.lotReceived")}</th>
-                    <th style={thCell}>{t("products.colExpiry")}</th>
-                    <th style={thCell}>{t("products.lotQtyOnHand")}</th>
-                    <th style={thCell}>{t("products.lotQtyReceived")}</th>
-                    <th style={thCell}>{t("products.colPurchase")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lotsRows.map((lot) => {
-                    const exp = lot.expiryDate ? String(lot.expiryDate).slice(0, 10) : "—";
-                    const days =
-                      lot.expiryDate != null
-                        ? Math.ceil(
-                            (new Date(lot.expiryDate).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) /
-                              86400000,
-                          )
-                        : null;
-                    const tone =
-                      days == null
-                        ? undefined
-                        : days < 0
-                          ? "var(--danger)"
-                          : days <= 30
-                            ? "var(--warning)"
-                            : undefined;
-                    return (
-                      <tr key={lot.id} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td style={tdCell}>
-                          {lot.receivedAt
-                            ? new Date(lot.receivedAt).toLocaleDateString(locale === "en" ? "en-GB" : "ar-SA")
-                            : "—"}
-                        </td>
-                        <td style={{ ...tdCell, color: tone, fontWeight: tone ? 700 : undefined }}>
-                          {exp}
-                          {days != null ? (
-                            <div style={{ fontSize: 11, fontWeight: 500 }}>
-                              {days < 0
-                                ? t("products.lotExpired")
-                                : t("products.lotDaysLeft", { days: String(days) })}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td style={tdCell}>{Number(lot.quantityOnHand ?? 0)}</td>
-                        <td style={tdCell}>{Number(lot.quantityReceived ?? 0)}</td>
-                        <td style={tdCell}>
-                          {lot.unitCost != null ? Number(lot.unitCost).toFixed(2) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
           </div>
         </div>
       ) : null}

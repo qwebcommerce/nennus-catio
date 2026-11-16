@@ -2,14 +2,13 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
+import { qatarDateTime, qatarTime, qatarToday } from "../../utils/qatarTime.js";
+import { statusLabel } from "../../utils/statusLabels.js";
+import { formatDateTime } from "../../utils/qatarDate.js";
 
-const TOKEN_KEY = "nennus.shopToken";
-
+/** The customer session is an httpOnly cookie (nc_customer); api() sends credentials. */
 function shopApi(path, options = {}) {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const headers = { ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return api(path, { ...options, headers });
+  return api(path, options);
 }
 
 export function ShopGrooming() {
@@ -41,7 +40,7 @@ export function ShopGroomingBook() {
   const [slots, setSlots] = useState([]);
   const [form, setForm] = useState({
     date: "", startAt: "", endAt: "", visitKind: "SHOP", name: "", email: "", phone: "",
-    petName: "", breed: "", ageText: "", areaId: "", address: "", code: "",
+    petName: "", breed: "", ageText: "", areaId: "", address: "", note: "", code: "",
   });
   const [msg, setMsg] = useState("");
   useEffect(() => {
@@ -56,7 +55,10 @@ export function ShopGroomingBook() {
     e.preventDefault();
     setMsg("");
     try {
-      const result = await shopApi("/api/shop/grooming/book", { method: "POST", body: { ...form, packageId } });
+      // The server sets the end time from the package; only the start is sent.
+      const body = { ...form, note: form.visitKind === "HOME" ? form.note : "", packageId };
+      delete body.endAt;
+      const result = await shopApi("/api/shop/grooming/book", { method: "POST", body });
       if (result.payUrl) window.location.href = result.payUrl;
     } catch (err) {
       setMsg(err.message);
@@ -77,14 +79,14 @@ export function ShopGroomingBook() {
           <button type="button" className={form.visitKind === "HOME" ? "is-active" : ""} onClick={() => setForm({ ...form, visitKind: "HOME" })}>{t("shop.homeVisit")}</button>
         </div>
         <div className="site-flow__pair">
-          <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
+          <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required min={qatarToday()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
           <label className="site-flow__field"><span>{t("shop.window")}</span>
             <select required value={form.startAt} onChange={(e) => {
               const slot = slots.find((row) => row.startAt === e.target.value);
               setForm({ ...form, startAt: slot?.startAt || "", endAt: slot?.endAt || "" });
             }}>
               <option value="">{t("shop.window")}</option>
-              {slots.map((slot) => <option key={slot.startAt} value={slot.startAt}>{new Date(slot.startAt).toLocaleTimeString()} · {slot.seatsLeft}</option>)}
+              {slots.map((slot) => <option key={slot.startAt} value={slot.startAt}>{qatarTime(slot.startAt, locale)} · {slot.seatsLeft}</option>)}
             </select>
           </label>
         </div>
@@ -93,10 +95,11 @@ export function ShopGroomingBook() {
             <label className="site-flow__field"><span>{t("shop.area")}</span>
               <select required value={form.areaId} onChange={set("areaId")}>
                 <option value="">{t("shop.area")}</option>
-                {(meta?.areas || []).map((area) => <option key={area.id} value={area.id}>{area.city ? `${area.city} · ` : ""}{area.name}</option>)}
+                {(meta?.areas || []).map((area) => <option key={area.id} value={area.id}>{area.city ? `${area.city} · ` : ""}{locale === "en" ? area.nameEn || area.name : area.name || area.nameEn}</option>)}
               </select>
             </label>
             <label className="site-flow__field"><span>{t("shop.address")}</span><textarea required value={form.address} onChange={set("address")} /></label>
+            <label className="site-flow__field"><span>{t("shop.visitNote")}</span><textarea maxLength={1000} value={form.note} onChange={set("note")} /></label>
           </>
         ) : null}
         <div className="site-flow__pair">
@@ -117,6 +120,12 @@ export function ShopGroomingBook() {
   );
 }
 
+/** Back from SkipCash: the return URL carries ?id=<payment id>. The server looks it up itself (FR-76). */
+function returnQuery() {
+  const paymentId = new URLSearchParams(window.location.search).get("id");
+  return paymentId ? `?paymentId=${encodeURIComponent(paymentId)}` : "";
+}
+
 export function ShopBookings() {
   const { id } = useParams();
   const { t, locale } = useI18n();
@@ -124,7 +133,7 @@ export function ShopBookings() {
   const [one, setOne] = useState(null);
   const [msg, setMsg] = useState("");
   const load = () => {
-    if (id) shopApi(`/api/shop/grooming/bookings/${id}`).then(setOne).catch((e) => setMsg(e.message));
+    if (id) shopApi(`/api/shop/grooming/bookings/${id}${returnQuery()}`).then(setOne).catch((e) => setMsg(e.message));
     else shopApi("/api/shop/grooming/bookings").then(setRows).catch((e) => setMsg(e.message));
   };
   useEffect(() => { load(); }, [id]);
@@ -135,12 +144,20 @@ export function ShopBookings() {
       {one ? (
         <article className="card">
           <strong>{locale === "en" ? one.package?.nameEn || one.package?.name : one.package?.name}</strong>
-          <div>{one.status} · {new Date(one.startAt).toLocaleString()}</div>
+          <div>{t("shop.reference")}: {one.reference}</div>
+          <div>{statusLabel("booking", one.status, locale)} · {qatarDateTime(one.startAt, locale)} ({t("shop.qatarTime")})</div>
           <div>{Number(one.amount).toFixed(2)} QAR</div>
-          {one.status === "CONFIRMED" ? <button type="button" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button> : null}
+          {one.note ? <div>{t("shop.visitNote")}: {one.note}</div> : null}
+          {one.canCancel ? (
+            <>
+              <div>{t("shop.cancelUntil")} {qatarDateTime(one.cancelUntil, locale)}</div>
+              <button type="button" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button>
+            </>
+          ) : null}
+          {one.status === "CANCELLED" && one.paid ? <div>{t("shop.refundDue")}</div> : null}
         </article>
       ) : rows.map((row) => (
-        <Link key={row.id} to={`/shop/grooming/bookings/${row.id}`}>{row.status} · {new Date(row.startAt).toLocaleString()}</Link>
+        <Link key={row.id} to={`/shop/grooming/bookings/${row.id}`}>{row.reference} · {statusLabel("booking", row.status, locale)} · {qatarDateTime(row.startAt, locale)}</Link>
       ))}
       {msg ? <div>{msg}</div> : null}
     </div>
@@ -178,17 +195,39 @@ export function ShopHouses() {
 
 export function ShopRelocation() {
   const { id } = useParams();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState([]);
   const [one, setOne] = useState(null);
   const [form, setForm] = useState({ destination: "", petSummary: "" });
   const [files, setFiles] = useState([]);
   const [msg, setMsg] = useState("");
-  const load = () => {
-    if (id) shopApi(`/api/shop/relocation/${id}`).then(setOne).catch((e) => setMsg(e.message));
-    else shopApi("/api/shop/relocation").then(setRows).catch((e) => setMsg(e.message));
+  const [signedIn, setSignedIn] = useState(true);
+  const onErr = (e) => {
+    if (e?.status === 401) setSignedIn(false);
+    else setMsg(e.message);
   };
-  useEffect(() => { load(); }, [id]);
+  const load = () => {
+    if (id) shopApi(`/api/shop/relocation/${id}${returnQuery()}`).then(setOne).catch(onErr);
+    else shopApi("/api/shop/relocation").then(setRows).catch(onErr);
+  };
+  /** Documents open through a 5-minute signed link, downloaded as an attachment. */
+  const downloadDoc = async (docId) => {
+    try {
+      const link = await shopApi(`/api/shop/relocation/${one.id}/documents/${docId}/link`, { method: "POST" });
+      const a = document.createElement("a");
+      a.href = `${import.meta.env.VITE_API_URL || ""}${link.url}`;
+      a.rel = "noopener";
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      setMsg(e.message);
+    }
+  };
+  useEffect(() => {
+    if (signedIn) load();
+  }, [id, signedIn]);
   const readFiles = async (list) => {
     const docs = [];
     for (const file of list) {
@@ -217,7 +256,7 @@ export function ShopRelocation() {
     <div className="site-flow site-flow--narrow">
       <p className="eyebrow">{t("shop.relocation")}</p>
       <h1>{t("shop.relocation")}</h1>
-      {!localStorage.getItem(TOKEN_KEY) ? (
+      {!signedIn ? (
         <div className="site-flow__card">
           <p className="site-flow__lead">{t("shop.signInToContinue")}</p>
           <Link className="button button--primary" to="/shop/account">{t("shop.signIn")}</Link>
@@ -226,26 +265,30 @@ export function ShopRelocation() {
       {one ? (
         <article className="site-flow__card">
           <h2>{one.destination}</h2>
-          <div className="site-flow__total"><span>{one.status}</span>{one.quoteAmount != null ? <span>{Number(one.quoteAmount).toFixed(2)} QAR</span> : null}</div>
+          <p className="site-flow__lead">{t("shop.reference")}: {one.reference}</p>
+          <div className="site-flow__total"><span>{statusLabel("relocation", one.status, locale)}</span>{one.quoteAmount != null ? <span>{Number(one.quoteAmount).toFixed(2)} QAR</span> : null}</div>
           {one.quoteNote ? <p className="site-flow__lead">{one.quoteNote}</p> : null}
           <div className="site-flow__list">
-            {(one.history || []).map((entry, index) => <div className="site-flow__item" key={index}><span>{entry.status}</span><span>{entry.note}</span></div>)}
+            {(one.history || []).map((entry, index) => <div className="site-flow__item" key={index}><span>{statusLabel("relocation", entry.status, locale)}{entry.at ? ` · ${formatDateTime(entry.at, locale)}` : ""}</span><span>{entry.note}</span></div>)}
+          </div>
+          <div className="site-flow__list">
+            {(one.documents || []).map((doc) => <button type="button" className="site-flow__item" key={doc.id} onClick={() => downloadDoc(doc.id)}><span>{doc.fileName}</span></button>)}
           </div>
           {one.status === "QUOTE_SENT" ? <button className="button button--primary" type="button" onClick={() => shopApi(`/api/shop/relocation/${one.id}/pay`, { method: "POST", body: {} }).then((r) => { if (r.payUrl) window.location.href = r.payUrl; }).catch((e) => setMsg(e.message))}>{t("shop.pay")}</button> : null}
         </article>
-      ) : (
+      ) : signedIn ? (
         <>
           <form className="site-flow__card" onSubmit={submit}>
             <label className="site-flow__field"><span>{t("shop.destination")}</span><input required value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} /></label>
             <label className="site-flow__field"><span>{t("shop.pets")}</span><textarea required value={form.petSummary} onChange={(e) => setForm({ ...form, petSummary: e.target.value })} /></label>
-            <label className="site-flow__field"><span>{t("shop.documents")}</span><input required type="file" multiple onChange={(e) => setFiles([...e.target.files])} /></label>
+            <label className="site-flow__field"><span>{t("shop.documents")}</span><input required type="file" multiple accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={(e) => setFiles([...e.target.files])} /><small>{t("shop.docTypes")}</small></label>
             <button className="button button--primary" type="submit">{t("common.add")}</button>
           </form>
           <div className="site-flow__list">
-            {rows.map((row) => <Link key={row.id} to={`/shop/relocation/${row.id}`}><span>{row.destination}</span><span>{row.status}</span></Link>)}
+            {rows.map((row) => <Link key={row.id} to={`/shop/relocation/${row.id}`}><span>{row.reference} · {row.destination}</span><span>{statusLabel("relocation", row.status, locale)}</span></Link>)}
           </div>
         </>
-      )}
+      ) : null}
       {msg ? <div className="site-flow__alert">{msg}</div> : null}
     </div>
   );

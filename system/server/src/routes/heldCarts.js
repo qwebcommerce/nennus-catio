@@ -1,17 +1,17 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { lineAmount, riyals } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { unitPriceDecimalForSale } from "../lib/productPricing.js";
-import { resolveLineModifiers } from "../lib/productModifiers.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("pos", "view"));
 
 const MAX_HELD_PER_USER_BRANCH = 15;
 
-async function normalizeCartPayload(db, organizationId, branchId, rawItems, useWholesale = false) {
+async function normalizeCartPayload(db, organizationId, branchId, rawItems) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new Error("السلة فارغة");
   }
@@ -29,13 +29,10 @@ async function normalizeCartPayload(db, organizationId, branchId, rawItems, useW
     const want = Math.max(1, Math.floor(Number(line.quantity) || 1));
     const qty = Math.min(want, stock);
     if (qty < 1) continue;
-    const { selected, delta } = resolveLineModifiers(
-      product,
-      line.modifiers || line.modifierKeys
-    );
-    const base = Number(unitPriceDecimalForSale(product, useWholesale));
-    const unitPrice = Math.round((base + delta) * 100) / 100;
+    // The payload is the till's cart snapshot (riyals for the screen); subtotal is whole dirhams.
+    const unitPrice = riyals(product.price);
     out.push({
+      dirhams: lineAmount(product.price, qty, product.sellBy),
       productId: product.id,
       name: product.name,
       nameEn: product.nameEn,
@@ -43,15 +40,12 @@ async function normalizeCartPayload(db, organizationId, branchId, rawItems, useW
       unitPrice,
       quantity: qty,
       maxStock: stock,
-      modifiers: selected.length ? selected : undefined,
-      lineKey: selected.length
-        ? `${product.id}::${selected.map((m) => m.key).sort().join(",")}`
-        : product.id,
+      lineKey: product.id,
     });
   }
   if (!out.length) throw new Error("لا توجد أصناف صالحة أو المخزون غير كافٍ");
-  const subtotal = out.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
-  return { items: out, subtotal };
+  const subtotal = out.reduce((s, i) => s + i.dirhams, 0);
+  return { items: out.map(({ dirhams, ...item }) => item), subtotal };
 }
 
 router.get("/", async (req, res) => {
@@ -65,34 +59,26 @@ router.get("/", async (req, res) => {
     branchId: String(bid),
     branch: { organizationId: req.user.organizationId },
   };
-  if (req.user.role === "ASSOCIATE") {
-    where.userId = req.user.sub;
-  }
   const rows = await prisma.heldCart.findMany({
     where,
     orderBy: { createdAt: "desc" },
     take: 50,
     include: { user: { select: { id: true, name: true, nameEn: true, role: true } } },
   });
-  res.json(rows);
+  res.json(toApi("HeldCart", rows));
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireModule("pos", "create"), async (req, res) => {
   const {
     branchId: bodyBranch,
     label,
     items: rawItems,
     customerId,
     discountInput,
-    taxPercent,
-    useWholesalePricing: useWholesaleRaw,
     paymentMethod: paymentMethodRaw,
     deliveryAddress: deliveryAddressRaw,
-    guestPhone: guestPhoneRaw,
-    tableNumber: tableNumberRaw,
     orderNote: orderNoteRaw,
   } = req.body || {};
-  const useWholesalePricing = Boolean(useWholesaleRaw);
   const bid = bodyBranch || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
   if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== String(bid)) {
@@ -114,15 +100,12 @@ router.post("/", async (req, res) => {
       req.user.organizationId,
       bid,
       rawItems,
-      useWholesalePricing
     );
     const payload = {
       items,
-      useWholesalePricing,
       customerId:
         customerId != null && String(customerId).trim() ? String(customerId).trim() : "",
       discountInput: discountInput != null ? String(discountInput) : "",
-      taxPercent: taxPercent != null ? String(taxPercent) : "0",
       paymentMethod:
         paymentMethodRaw != null && String(paymentMethodRaw).trim()
           ? String(paymentMethodRaw).trim().toUpperCase().slice(0, 20)
@@ -130,14 +113,6 @@ router.post("/", async (req, res) => {
       deliveryAddress:
         deliveryAddressRaw != null && String(deliveryAddressRaw).trim()
           ? String(deliveryAddressRaw).trim().slice(0, 500)
-          : "",
-      guestPhone:
-        guestPhoneRaw != null && String(guestPhoneRaw).trim()
-          ? String(guestPhoneRaw).trim().slice(0, 40)
-          : "",
-      tableNumber:
-        tableNumberRaw != null && String(tableNumberRaw).trim()
-          ? String(tableNumberRaw).trim().slice(0, 40)
           : "",
       orderNote:
         orderNoteRaw != null && String(orderNoteRaw).trim()
@@ -151,7 +126,7 @@ router.post("/", async (req, res) => {
         label: label != null && String(label).trim() ? String(label).trim().slice(0, 80) : null,
         payload,
         lineCount: items.length,
-        subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+        subtotal,
       },
       include: { user: { select: { id: true, name: true, nameEn: true, role: true } } },
     });
@@ -165,14 +140,14 @@ router.post("/", async (req, res) => {
       summary: `Held ${created.lineCount} lines`,
     });
 
-    res.status(201).json(created);
+    res.status(201).json(toApi("HeldCart", created));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "فشل تعليق السلة";
     res.status(400).json({ error: msg });
   }
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireModule("pos", "create"), async (req, res) => {
   const row = await prisma.heldCart.findFirst({
     where: {
       id: req.params.id,

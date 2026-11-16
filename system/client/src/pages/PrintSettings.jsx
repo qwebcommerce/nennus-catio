@@ -9,7 +9,6 @@ export default function PrintSettings() {
 
   const fields = [
     ["retail", "printSettings.retail", "printSettings.retailHint"],
-    ["wholesale", "printSettings.wholesale", "printSettings.wholesaleHint"],
     ["reports", "printSettings.reports", "printSettings.reportsHint"],
     ["other", "printSettings.other", "printSettings.otherHint"],
   ];

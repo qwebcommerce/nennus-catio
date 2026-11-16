@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
-import { getPostAuthPath } from "../lib/onboardingPath.js";
 import { AuthShell } from "../marketing/AuthShell.jsx";
 import { useMarketingCopy } from "../marketing/copy.js";
 import { PasswordField } from "../components/PasswordField.jsx";
@@ -25,7 +24,7 @@ export default function Login() {
     );
   }
   if (user) {
-    return <Navigate to={getPostAuthPath(user)} replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   const submit = async (e) => {
@@ -33,8 +32,8 @@ export default function Login() {
     setErr("");
     setDbUrlInfo(null);
     try {
-      const loggedIn = await login(email, password);
-      nav(getPostAuthPath(loggedIn), { replace: true });
+      await login(email, password);
+      nav("/dashboard", { replace: true });
     } catch (x) {
       setErr(x.message || t("login.failed"));
       const info = x?.data?.urlInfo;
@@ -64,6 +63,9 @@ export default function Login() {
           required
           autoComplete="current-password"
         />
+        <p style={{ margin: "-4px 0 12px", textAlign: "end", fontSize: 14 }}>
+          <Link to="/forgot-password">{t("pw.forgotLink")}</Link>
+        </p>
         {err ? <div className="mkt-error">{err}</div> : null}
         {dbUrlInfo ? (
           <div

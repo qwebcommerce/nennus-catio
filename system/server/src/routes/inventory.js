@@ -1,248 +1,24 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
-import { resolveStoredImageUrl } from "../lib/productImageUrl.js";
-import { calendarDaysUntilExpiryUTC } from "../lib/productExpiry.js";
-import {
-  moveLotsBetweenBranches,
-  syncLotsToTargetQuantity,
-} from "../lib/inventoryLots.js";
 import { executeInventoryTransfer } from "../lib/inventoryTransfer.js";
-import {
-  dbUnavailableMessage,
-  dbUnavailableMessageEn,
-  isDbUnavailableError,
-} from "../lib/dbErrors.js";
+import { lockStockRow, setStockCount } from "../lib/stockLedger.js";
+import { fmt } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
+import { listLowStock } from "../lib/lowStock.js";
 
 const router = Router();
 router.use(authMiddleware);
-
-/** Browse inventory lots across products — ?branchId=&q=&inStock=1&withinDays= */
-router.get("/lots", requirePermission("productsView"), async (req, res) => {
-  try {
-    const orgId = req.user.organizationId;
-    const branchIdRaw =
-      req.query.branchId != null && String(req.query.branchId).trim()
-        ? String(req.query.branchId).trim()
-        : null;
-    // Admins may omit branchId to browse all branches; others default to their branch.
-    const branchId =
-      branchIdRaw ||
-      (req.user.role === "ADMIN" ? null : req.user.branchId || null);
-    if (
-      req.user.role !== "ADMIN" &&
-      req.user.branchId &&
-      branchId &&
-      req.user.branchId !== branchId
-    ) {
-      return res.status(403).json({ error: "غير مصرح لهذا الفرع" });
-    }
-    const q = req.query.q != null ? String(req.query.q).trim() : "";
-    const productId =
-      req.query.productId != null && String(req.query.productId).trim()
-        ? String(req.query.productId).trim()
-        : "";
-    const inStockOnly = String(req.query.inStock ?? "1") !== "0";
-    const withinRaw = Number.parseInt(String(req.query.withinDays ?? ""), 10);
-    const withinDays = Number.isFinite(withinRaw)
-      ? Math.max(0, Math.min(365, withinRaw))
-      : null;
-
-    const where = {
-      organizationId: orgId,
-      ...(branchId ? { branchId } : {}),
-      ...(productId ? { productId } : {}),
-      ...(inStockOnly ? { quantityOnHand: { gt: 0 } } : {}),
-      ...(q
-        ? {
-            product: {
-              OR: [
-                { name: { contains: q, mode: "insensitive" } },
-                { nameEn: { contains: q, mode: "insensitive" } },
-                { sku: { contains: q, mode: "insensitive" } },
-                { barcode: { contains: q, mode: "insensitive" } },
-              ],
-            },
-          }
-        : {}),
-    };
-
-    if (withinDays != null) {
-      const now = new Date();
-      const end = new Date(now);
-      end.setUTCDate(end.getUTCDate() + withinDays);
-      where.expiryDate = { not: null, lte: end };
-    }
-
-    const lots = await prisma.inventoryLot.findMany({
-      where,
-      include: {
-        product: {
-          select: {
-            id: true,
-            name: true,
-            nameEn: true,
-            sku: true,
-            barcode: true,
-            imageUrl: true,
-            isActive: true,
-          },
-        },
-        branch: { select: { id: true, name: true, nameEn: true } },
-      },
-      orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }],
-      take: 500,
-    });
-
-    const mapped = lots.map((lot) => ({
-      ...lot,
-      product: lot.product
-        ? {
-            ...lot.product,
-            imageUrl: resolveStoredImageUrl(lot.product.imageUrl),
-          }
-        : lot.product,
-      daysUntilExpiry: lot.expiryDate
-        ? calendarDaysUntilExpiryUTC(lot.expiryDate)
-        : null,
-    }));
-
-    res.json({ lots: mapped });
-  } catch (e) {
-    if (isDbUnavailableError(e)) {
-      return res.status(503).json({
-        error: dbUnavailableMessage,
-        errorAr: dbUnavailableMessage,
-        errorEn: dbUnavailableMessageEn,
-        code: "DB_UNAVAILABLE",
-      });
-    }
-    const msg = e instanceof Error ? e.message : "فشل تحميل الدفعات";
-    res.status(400).json({ error: msg });
-  }
-});
-
-/** منتجات/دفعات منتهية أو قرب انتهاء الصلاحية — ?withinDays=30 (افتراضي) */
-router.get("/expiry-alerts", async (req, res) => {
-  try {
-    const branchId =
-      req.query.branchId != null && String(req.query.branchId).trim()
-        ? String(req.query.branchId).trim()
-        : req.user.branchId || null;
-    const orgId = req.user.organizationId;
-    const withinRaw = Number.parseInt(String(req.query.withinDays ?? "30"), 10);
-    const withinDays = Number.isFinite(withinRaw) ? Math.max(0, Math.min(365, withinRaw)) : 30;
-
-    const out = [];
-    const seenKeys = new Set();
-
-    const lotWhere = {
-      organizationId: orgId,
-      quantityOnHand: { gt: 0 },
-      expiryDate: { not: null },
-      ...(branchId ? { branchId } : {}),
-    };
-    const lots = await prisma.inventoryLot.findMany({
-      where: lotWhere,
-      include: {
-        product: { select: { id: true, name: true, nameEn: true, sku: true, imageUrl: true, isActive: true } },
-        branch: { select: { id: true, name: true, nameEn: true } },
-      },
-      orderBy: { expiryDate: "asc" },
-      take: 500,
-    });
-
-    for (const lot of lots) {
-      if (!lot.product?.isActive) continue;
-      const days = calendarDaysUntilExpiryUTC(lot.expiryDate);
-      if (days === null || days > withinDays) continue;
-      const status = days < 0 ? "expired" : days === 0 ? "today" : "soon";
-      const key = `lot:${lot.id}`;
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      out.push({
-        source: "lot",
-        lotId: lot.id,
-        product: {
-          ...lot.product,
-          imageUrl: resolveStoredImageUrl(lot.product.imageUrl),
-        },
-        branchId: lot.branchId,
-        branchName: lot.branch?.name || null,
-        quantityOnHand: Number(lot.quantityOnHand),
-        expiryDate: lot.expiryDate,
-        daysUntilExpiry: days,
-        status,
-      });
-    }
-
-    const products = await prisma.product.findMany({
-      where: {
-        organizationId: orgId,
-        isActive: true,
-        expiryDate: { not: null },
-      },
-      include: branchId
-        ? { inventories: { where: { branchId } } }
-        : { inventories: true },
-      orderBy: { expiryDate: "asc" },
-    });
-
-    for (const p of products) {
-      const days = calendarDaysUntilExpiryUTC(p.expiryDate);
-      if (days === null || days > withinDays) continue;
-      const key = `product:${p.id}`;
-      if (seenKeys.has(`lot-product:${p.id}`) || out.some((r) => r.product?.id === p.id && r.source === "lot")) {
-        // Prefer lot-level rows when present for same product
-        continue;
-      }
-      if (seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      const status = days < 0 ? "expired" : days === 0 ? "today" : "soon";
-      out.push({
-        source: "product",
-        product: {
-          ...p,
-          imageUrl: resolveStoredImageUrl(p.imageUrl),
-        },
-        daysUntilExpiry: days,
-        status,
-      });
-    }
-
-    out.sort((a, b) => a.daysUntilExpiry - b.daysUntilExpiry);
-    res.json(out);
-  } catch (e) {
-    console.error("[expiry-alerts]", e);
-    res.status(500).json({ error: "تعذر جلب تنبيهات الصلاحية" });
-  }
-});
+router.use(requireModule("warehouses", "view"));
 
 router.get("/low-stock", async (req, res) => {
   const branchId = req.query.branchId || req.user.branchId;
-  const orgId = req.user.organizationId;
-  const rows = await prisma.inventory.findMany({
-    where: branchId
-      ? {
-          branchId: String(branchId),
-          branch: { organizationId: orgId },
-          product: { organizationId: orgId },
-        }
-      : {
-          branch: { organizationId: orgId },
-          product: { organizationId: orgId },
-        },
-    include: { product: true, branch: true },
-  });
-  const low = rows.filter((r) => r.quantity <= r.minStockLevel);
-  res.json(low);
+  res.json(await listLowStock(prisma, req.user.organizationId, branchId || null));
 });
 
-router.post("/reconcile", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("stockCount"), async (req, res) => {
+router.post("/reconcile", requireModule("warehouses", "edit"), async (req, res) => {
   const { branchId, lines } = req.body || {};
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
@@ -256,70 +32,74 @@ router.post("/reconcile", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
   const br = await findBranchInOrg(prisma, orgId, bid);
   if (!br) return res.status(400).json({ error: "فرع غير صالح" });
 
-  // Only apply lines that change quantity (full catalog posts are common from the UI).
+  // Only lines that change quantity write a movement (full catalogue posts are common from the UI).
   const normalized = [];
   for (const line of lines) {
     const productId = String(line.productId || "");
     if (!productId) continue;
-    const q = Math.max(0, Math.floor(Number(line.quantity) || 0));
+    const q = Number(line.quantity);
+    if (!Number.isInteger(q) || q < 0) {
+      return res.status(400).json({
+        error: "الكمية المعدودة يجب أن تكون عدداً صحيحاً",
+        errorAr: "الكمية المعدودة يجب أن تكون عدداً صحيحاً",
+        errorEn: "A counted quantity must be a whole number of zero or more",
+      });
+    }
     const pr = await prisma.product.findFirst({
       where: { id: productId, organizationId: orgId },
+      include: { variants: { select: { id: true } } },
     });
     if (!pr) return res.status(400).json({ error: `منتج غير صالح: ${productId}` });
-    normalized.push({ productId, quantity: q });
+    const variantId = line.variantId ? String(line.variantId) : null;
+    if (variantId && !pr.variants.some((v) => v.id === variantId)) {
+      return res.status(400).json({ error: `الحجم غير تابع للمنتج: ${pr.name}`, errorEn: `Variant is not on ${pr.name}` });
+    }
+    // A product with variants keeps its stock per variant; a product-level count would start a second stock.
+    if (!variantId && pr.variants.length) continue;
+    normalized.push({ productId, variantId, quantity: q });
   }
   if (!normalized.length) {
     return res.status(400).json({ error: "لا توجد بنود" });
   }
+  const note = String(req.body?.reason || req.body?.note || "Stock count").trim().slice(0, 300) || "Stock count";
 
   try {
-    await prisma.$transaction(async (tx) => {
-      for (const line of normalized) {
-        await tx.inventory.upsert({
-          where: {
-            productId_branchId: { productId: line.productId, branchId: bid },
-          },
-          create: {
+    const changes = await prisma.$transaction(
+      async (tx) => {
+        const out = [];
+        for (const line of normalized) {
+          const r = await setStockCount(tx, {
+            orgId,
+            userId: req.user.sub,
             productId: line.productId,
+            variantId: line.variantId,
             branchId: bid,
             quantity: line.quantity,
-            minStockLevel: 5,
-          },
-          update: { quantity: line.quantity },
-        });
-        await syncLotsToTargetQuantity(tx, {
-          orgId,
-          branchId: bid,
-          productId: line.productId,
-          targetQty: line.quantity,
-        });
-      }
-    });
+            note,
+          });
+          if (r.delta) out.push({ ...line, before: r.before, delta: r.delta });
+        }
+        return out;
+      },
+      { maxWait: 15000, timeout: 60000 },
+    );
     await writeAudit({
       userId: req.user.sub,
       action: "INVENTORY_RECONCILE",
       entityType: "Inventory",
       entityId: bid,
       branchId: bid,
-      summary: `Reconcile ${normalized.length} lines`,
+      summary: `Stock count: ${changes.length} of ${normalized.length} lines changed`,
+      meta: { reason: note, changes: changes.slice(0, 100) },
     });
-    scheduleInventoryWebhook(orgId, {
-      event: "inventory.reconcile",
-      meta: { branchId: bid, lineCount: normalized.length },
-      lines: normalized.map((line) => ({
-        branchId: bid,
-        productId: line.productId,
-        quantityDelta: 0,
-      })),
-    });
-    res.json({ ok: true });
+    res.json({ ok: true, changed: changes.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "فشل الجرد";
-    res.status(400).json({ error: msg });
+    res.status(e?.status || 400).json({ error: msg, ...(e?.errorEn ? { errorAr: e.errorAr, errorEn: e.errorEn } : {}) });
   }
 });
 
-router.post("/transfer", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("transfer"), async (req, res) => {
+router.post("/transfer", requireModule("warehouses", "edit"), async (req, res) => {
   const { fromBranchId, toBranchId, items } = req.body || {};
   const from = String(fromBranchId || "");
   const to = String(toBranchId || "");
@@ -351,143 +131,149 @@ router.post("/transfer", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePerm
   }
 });
 
-/** تعديل مخزون مع idempotency للمزامنة بعد العمل دون اتصال */
-router.post("/offline-upsert", requireRole("ADMIN", "MANAGER"), async (req, res) => {
-  const {
-    clientMutationId: cmRaw,
-    productId,
-    branchId,
-    quantity,
-    minStockLevel,
-    deviceId: _deviceId,
-  } = req.body || {};
-  const cmid = cmRaw != null && String(cmRaw).trim() ? String(cmRaw).trim() : null;
-  if (!cmid) return res.status(400).json({ error: "clientMutationId مطلوب" });
-  if (!productId || !branchId) {
-    return res.status(400).json({ error: "productId و branchId مطلوبان" });
-  }
-  const bid = String(branchId);
-  if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== bid) {
-    return res.status(403).json({ error: "لا يمكن التعديل لفروع أخرى" });
-  }
-
-  const cached = await prisma.offlineInventoryReceipt.findFirst({
-    where: { clientMutationId: cmid, organizationId: req.user.organizationId },
-  });
-  if (cached) {
-    return res.status(200).json(cached.payload);
-  }
-
-  const br = await findBranchInOrg(prisma, req.user.organizationId, bid);
-  if (!br) return res.status(400).json({ error: "فرع غير صالح" });
-  const prodOk = await prisma.product.findFirst({
-    where: { id: String(productId), organizationId: req.user.organizationId },
-  });
-  if (!prodOk) return res.status(400).json({ error: "منتج غير صالح" });
-
-  try {
-    const inv = await prisma.inventory.upsert({
-      where: {
-        productId_branchId: {
-          productId: String(productId),
-          branchId: bid,
-        },
-      },
-      create: {
-        productId: String(productId),
-        branchId: bid,
-        quantity: Math.max(0, Number(quantity) || 0),
-        minStockLevel: Math.max(0, Number(minStockLevel) || 5),
-      },
-      update: {
-        ...(quantity != null && { quantity: Math.max(0, Number(quantity)) }),
-        ...(minStockLevel != null && {
-          minStockLevel: Math.max(0, Number(minStockLevel)),
-        }),
-      },
-      include: { product: true, branch: true },
-    });
-    const payload = JSON.parse(JSON.stringify(inv));
-    try {
-      await prisma.offlineInventoryReceipt.create({
-        data: {
-          clientMutationId: cmid,
-          organizationId: req.user.organizationId,
-          payload,
-        },
-      });
-    } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-        const again = await prisma.offlineInventoryReceipt.findFirst({
-          where: { clientMutationId: cmid, organizationId: req.user.organizationId },
-        });
-        if (again) return res.status(200).json(again.payload);
-      }
-      throw e;
-    }
-    scheduleInventoryWebhook(req.user.organizationId, {
-      event: "inventory.offline_upsert",
-      meta: { branchId: bid, productId: String(productId) },
-      lines: [
-        {
-          branchId: bid,
-          productId: String(productId),
-          quantityDelta: 0,
-        },
-      ],
-    });
-    res.status(201).json(payload);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "فشل التحديث";
-    res.status(400).json({ error: msg });
-  }
-});
-
-router.patch("/:productId/:branchId", requireRole("ADMIN", "MANAGER"), async (req, res) => {
-  const { quantity, minStockLevel } = req.body || {};
+/**
+ * Staff adjustment (FR-17) and low-stock level (FR-92) for one balance.
+ * Body: { quantity? (counted number) | delta? (+/-), reason (required when stock changes), minStockLevel?, variantId? }
+ * A stock change writes an ADJUSTMENT movement and an audit row; it never overwrites stock silently.
+ */
+async function adjustBalance(req, res, { productId, variantId, branchId }) {
+  const { quantity, delta, minStockLevel } = req.body || {};
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 300);
   const orgId = req.user.organizationId;
-  const br = await findBranchInOrg(prisma, orgId, req.params.branchId);
+  const br = await findBranchInOrg(prisma, orgId, branchId);
   if (!br) return res.status(404).json({ error: "غير موجود" });
   const pr = await prisma.product.findFirst({
-    where: { id: req.params.productId, organizationId: orgId },
+    where: { id: productId, organizationId: orgId },
+    include: { variants: { select: { id: true } } },
   });
   if (!pr) return res.status(404).json({ error: "غير موجود" });
-  const inv = await prisma.inventory.upsert({
-    where: {
-      productId_branchId: {
-        productId: req.params.productId,
-        branchId: req.params.branchId,
-      },
-    },
-    create: {
-      productId: req.params.productId,
-      branchId: req.params.branchId,
-      quantity: Math.max(0, Number(quantity) || 0),
-      minStockLevel: Math.max(0, Number(minStockLevel) || 5),
-    },
-    update: {
-      ...(quantity != null && { quantity: Math.max(0, Number(quantity)) }),
-      ...(minStockLevel != null && {
-        minStockLevel: Math.max(0, Number(minStockLevel)),
-      }),
-    },
-    include: { product: true, branch: true },
+  if (variantId && !pr.variants.some((v) => v.id === variantId)) {
+    return res.status(404).json({ error: "غير موجود" });
+  }
+
+  let level = null;
+  if (minStockLevel != null && minStockLevel !== "") {
+    level = Number(minStockLevel);
+    if (!Number.isInteger(level) || level < 0) {
+      return res.status(400).json({
+        error: "حد المخزون المنخفض يجب أن يكون عدداً صحيحاً",
+        errorAr: "حد المخزون المنخفض يجب أن يكون عدداً صحيحاً",
+        errorEn: "The low-stock level must be a whole number of zero or more",
+      });
+    }
+  }
+  const wantsQty = quantity != null && quantity !== "";
+  const wantsDelta = delta != null && delta !== "" && Number(delta) !== 0;
+  if ((wantsQty || wantsDelta) && !variantId && pr.variants.length) {
+    return res.status(400).json({
+      error: "اختر الحجم — مخزون هذا المنتج لكل حجم",
+      errorAr: "اختر الحجم — مخزون هذا المنتج لكل حجم",
+      errorEn: "This product keeps stock per variant. Choose the variant.",
+    });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let change = null;
+      if (wantsQty || wantsDelta) {
+        const row = await lockStockRow(tx, { productId, variantId, branchId });
+        const target = wantsQty ? Number(quantity) : Number(row.quantity) + Number(delta);
+        if (wantsDelta && !Number.isInteger(Number(delta))) {
+          const err = new Error("الكمية يجب أن تكون عدداً صحيحاً");
+          err.status = 400;
+          err.errorAr = err.message;
+          err.errorEn = "The change must be a whole number";
+          throw err;
+        }
+        if (target !== Number(row.quantity) && !reason) {
+          const err = new Error("اذكر سبب تعديل المخزون");
+          err.status = 400;
+          err.errorAr = err.message;
+          err.errorEn = "Give a reason for the stock adjustment";
+          err.code = "ADJUSTMENT_REASON_REQUIRED";
+          throw err;
+        }
+        change = await setStockCount(tx, {
+          orgId,
+          userId: req.user.sub,
+          productId,
+          variantId,
+          branchId,
+          quantity: target,
+          note: reason,
+        });
+      } else {
+        await lockStockRow(tx, { productId, variantId, branchId });
+      }
+      if (level != null) {
+        if (variantId) {
+          await tx.variantStock.update({
+            where: { variantId_branchId: { variantId, branchId } },
+            data: { minStockLevel: level },
+          });
+        } else {
+          await tx.inventory.update({
+            where: { productId_branchId: { productId, branchId } },
+            data: { minStockLevel: level },
+          });
+        }
+      }
+      const row = variantId
+        ? await tx.variantStock.findUnique({
+            where: { variantId_branchId: { variantId, branchId } },
+            include: { branch: true, variant: true },
+          })
+        : await tx.inventory.findUnique({
+            where: { productId_branchId: { productId, branchId } },
+            include: { product: true, branch: true },
+          });
+      return { row, change };
+    });
+    if (result.change?.delta) {
+      await writeAudit({
+        userId: req.user.sub,
+        action: "STOCK_ADJUSTMENT",
+        entityType: variantId ? "VariantStock" : "Inventory",
+        entityId: result.row.id,
+        branchId,
+        summary: `Adjust ${pr.nameEn || pr.name}${variantId ? ` (${result.row.variant?.labelEn || result.row.variant?.label || variantId})` : ""}: ${result.change.before} -> ${result.change.after} (${result.change.delta > 0 ? "+" : ""}${result.change.delta}). Reason: ${reason}`,
+        meta: { productId, variantId, before: result.change.before, after: result.change.after, delta: result.change.delta, reason },
+      });
+    }
+    if (level != null) {
+      await writeAudit({
+        userId: req.user.sub,
+        action: "LOW_STOCK_LEVEL",
+        entityType: variantId ? "VariantStock" : "Inventory",
+        entityId: result.row.id,
+        branchId,
+        summary: `Low-stock level ${level}`,
+        meta: { productId, variantId, minStockLevel: level },
+      });
+    }
+    const change = result.change && result.change.unitCost !== undefined ? { ...result.change, unitCost: fmt(result.change.unitCost) } : result.change;
+    res.json({ ...toApi(variantId ? "VariantStock" : "Inventory", result.row), adjustment: change });
+  } catch (e) {
+    res.status(e?.status || 400).json({
+      error: e instanceof Error ? e.message : "فشل التعديل",
+      ...(e?.errorEn ? { errorAr: e.errorAr, errorEn: e.errorEn } : {}),
+      ...(typeof e?.code === "string" && !e.code.startsWith("P") ? { code: e.code } : {}),
+    });
+  }
+}
+
+router.patch("/variants/:variantId/:branchId", requireModule("warehouses", "edit"), async (req, res) => {
+  const variant = await prisma.productVariant.findFirst({
+    where: { id: req.params.variantId, organizationId: req.user.organizationId },
+    select: { id: true, productId: true },
   });
-  scheduleInventoryWebhook(orgId, {
-    event: "inventory.patch",
-    meta: {
-      branchId: req.params.branchId,
-      productId: req.params.productId,
-    },
-    lines: [
-      {
-        branchId: req.params.branchId,
-        productId: req.params.productId,
-        quantityDelta: 0,
-      },
-    ],
-  });
-  res.json(inv);
+  if (!variant) return res.status(404).json({ error: "غير موجود" });
+  return adjustBalance(req, res, { productId: variant.productId, variantId: variant.id, branchId: req.params.branchId });
+});
+
+router.patch("/:productId/:branchId", requireModule("warehouses", "edit"), async (req, res) => {
+  const variantId = req.body?.variantId ? String(req.body.variantId) : null;
+  return adjustBalance(req, res, { productId: req.params.productId, variantId, branchId: req.params.branchId });
 });
 
 export default router;

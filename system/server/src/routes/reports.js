@@ -1,10 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { d, money } from "../lib/money.js";
+import { qatarDayKey, qatarDayStart, qatarRange } from "../lib/qatarTime.js";
+import { COUNTED_SALE } from "../lib/financeData.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requirePermission("reports"));
+router.use(requireModule("finance", "view"));
 
 function branchScope(req, branchId) {
   const orgId = req.user.organizationId;
@@ -17,48 +20,26 @@ function branchScope(req, branchId) {
   return { branch: { organizationId: orgId } };
 }
 
-function parseDateEndOfDay(s) {
-  const d = new Date(String(s));
-  if (Number.isNaN(d.getTime())) return null;
-  d.setHours(23, 59, 59, 999);
-  return d;
-}
-
-function parseDateStart(s) {
-  const d = new Date(String(s));
-  if (Number.isNaN(d.getTime())) return null;
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
+/** Day and month keys are Qatar calendar days. */
 function dayKey(d) {
-  const x = new Date(d);
-  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  return qatarDayKey(new Date(d));
 }
 
 function monthKey(d) {
-  const x = new Date(d);
-  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}`;
+  return qatarDayKey(new Date(d)).slice(0, 7);
 }
 
-function eachPeriodKey(from, to, groupBy) {
+/** Period keys from the Qatar day of `from` to the Qatar day before `toExclusive`. */
+function eachPeriodKey(from, toExclusive, groupBy) {
   const keys = [];
-  if (groupBy === "month") {
-    const cur = new Date(from.getFullYear(), from.getMonth(), 1);
-    const endM = new Date(to.getFullYear(), to.getMonth(), 1);
-    while (cur <= endM) {
-      keys.push(monthKey(cur));
-      cur.setMonth(cur.getMonth() + 1);
-    }
-  } else {
-    const cur = new Date(from);
-    cur.setHours(0, 0, 0, 0);
-    const endDay = new Date(to);
-    endDay.setHours(0, 0, 0, 0);
-    while (cur <= endDay) {
-      keys.push(dayKey(cur));
-      cur.setDate(cur.getDate() + 1);
-    }
+  const first = qatarDayKey(from);
+  const last = qatarDayKey(new Date(toExclusive.getTime() - 1));
+  let cur = qatarDayStart(first);
+  const end = qatarDayStart(last);
+  while (cur <= end) {
+    const key = groupBy === "month" ? monthKey(cur) : dayKey(cur);
+    if (keys[keys.length - 1] !== key) keys.push(key);
+    cur = new Date(cur.getTime() + 24 * 60 * 60 * 1000);
   }
   return keys;
 }
@@ -80,15 +61,11 @@ router.get("/analytics", async (req, res) => {
     return res.status(403).json({ error: "غير مصرح" });
   }
 
-  let from = req.query.from ? parseDateStart(req.query.from) : null;
-  let to = req.query.to ? parseDateEndOfDay(req.query.to) : null;
-  if (!from || !to) {
-    to = new Date();
-    to.setHours(23, 59, 59, 999);
-    from = new Date(to);
-    from.setDate(from.getDate() - 29);
-    from.setHours(0, 0, 0, 0);
-  }
+  // Inclusive Qatar days; default is the last 30 days.
+  const last30 = qatarDayStart(qatarDayKey(new Date(Date.now() - 29 * 24 * 60 * 60 * 1000)));
+  const range = qatarRange(req.query, { defaultFrom: last30 });
+  if (!range) return res.status(400).json({ error: "تاريخ غير صالح", errorAr: "تاريخ غير صالح", errorEn: "Invalid date" });
+  const { from, to } = range;
 
   const branchId =
     req.query.branchId || (req.user.role === "ADMIN" ? null : req.user.branchId);
@@ -97,7 +74,8 @@ router.get("/analytics", async (req, res) => {
   const sales = await prisma.sale.findMany({
     where: {
       ...bf,
-      createdAt: { gte: from, lte: to },
+      ...COUNTED_SALE,
+      createdAt: { gte: from, lt: to },
     },
     select: { total: true, createdAt: true },
   });
@@ -105,7 +83,7 @@ router.get("/analytics", async (req, res) => {
   const expenses = await prisma.expense.findMany({
     where: {
       organizationId: orgId,
-      expenseDate: { gte: from, lte: to },
+      expenseDate: { gte: from, lt: to },
     },
     select: { amount: true, expenseDate: true, category: true },
   });
@@ -121,43 +99,30 @@ router.get("/analytics", async (req, res) => {
 
   for (const s of sales) {
     const k = groupBy === "month" ? monthKey(s.createdAt) : dayKey(s.createdAt);
-    if (!salesByPeriod.has(k)) salesByPeriod.set(k, 0);
-    salesByPeriod.set(k, salesByPeriod.get(k) + Number(s.total));
+    salesByPeriod.set(k, (salesByPeriod.get(k) || 0) + d(s.total));
   }
 
   for (const e of expenses) {
     const k = groupBy === "month" ? monthKey(e.expenseDate) : dayKey(e.expenseDate);
-    if (!expensesByPeriod.has(k)) expensesByPeriod.set(k, 0);
-    expensesByPeriod.set(k, expensesByPeriod.get(k) + Number(e.amount));
+    expensesByPeriod.set(k, (expensesByPeriod.get(k) || 0) + d(e.amount));
   }
 
   const series = periodKeys.map((key) => ({
     period: key,
-    sales: round2(salesByPeriod.get(key) || 0),
-    expenses: round2(expensesByPeriod.get(key) || 0),
-    net: round2((salesByPeriod.get(key) || 0) - (expensesByPeriod.get(key) || 0)),
+    sales: money(salesByPeriod.get(key) || 0),
+    expenses: money(expensesByPeriod.get(key) || 0),
+    net: money((salesByPeriod.get(key) || 0) - (expensesByPeriod.get(key) || 0)),
   }));
 
-  const expenseByCategory = {
-    RENT: 0,
-    PAYROLL: 0,
-    ELECTRICITY: 0,
-    INTERNET: 0,
-    OTHER: 0,
-  };
+  const byCategory = { RENT: 0, PAYROLL: 0, ELECTRICITY: 0, INTERNET: 0, OTHER: 0 };
   let expenseTotal = 0;
   for (const e of expenses) {
-    const a = Number(e.amount);
-    expenseTotal += a;
-    if (expenseByCategory[e.category] != null) {
-      expenseByCategory[e.category] += a;
-    }
+    expenseTotal += d(e.amount);
+    if (byCategory[e.category] != null) byCategory[e.category] += d(e.amount);
   }
-  Object.keys(expenseByCategory).forEach((k) => {
-    expenseByCategory[k] = round2(expenseByCategory[k]);
-  });
+  const expenseByCategory = Object.fromEntries(Object.entries(byCategory).map(([k, v]) => [k, money(v)]));
 
-  const salesTotal = sales.reduce((s, x) => s + Number(x.total), 0);
+  const salesTotal = sales.reduce((acc, x) => acc + d(x.total), 0);
 
   res.json({
     from: from.toISOString(),
@@ -166,17 +131,13 @@ router.get("/analytics", async (req, res) => {
     series,
     expenseByCategory,
     totals: {
-      sales: round2(salesTotal),
-      expenses: round2(expenseTotal),
-      net: round2(salesTotal - expenseTotal),
+      sales: money(salesTotal),
+      expenses: money(expenseTotal),
+      net: money(salesTotal - expenseTotal),
     },
     salesCount: sales.length,
     expenseCount: expenses.length,
   });
 });
-
-function round2(n) {
-  return Math.round(Number(n) * 100) / 100;
-}
 
 export default router;

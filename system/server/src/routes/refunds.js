@@ -2,14 +2,19 @@ import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { authMiddleware, requireRole, requirePermission, requireModule } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
-import { assessRefundRisk } from "../lib/cashierCopilot.js";
-import { sendError } from "../lib/apiError.js";
+import { moveStock } from "../lib/stockLedger.js";
+import { cashPortionFromSale } from "../lib/saleCash.js";
+import { mailCustomer } from "../lib/mailer.js";
+import { d, divRound, fmt, splitProportional } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
+
+const api = (refund) => toApi("Refund", refund);
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("pos", "view"));
 
 router.get("/", async (req, res) => {
   const { branchId, limit = "50" } = req.query;
@@ -27,7 +32,7 @@ router.get("/", async (req, res) => {
       sale: { select: { id: true, total: true, createdAt: true, invoiceNumber: true } },
     },
   });
-  res.json(rows);
+  res.json(api(rows));
 });
 
 const refundInclude = {
@@ -37,7 +42,51 @@ const refundInclude = {
   user: { select: { name: true } },
 };
 
-router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("refunds"), requireModule("pos", "refund"), async (req, res) => {
+/** Till refund tenders. A refund goes back the way the customer paid unless staff choose otherwise. */
+const REFUND_METHODS = new Set(["CASH", "CARD", "FAWRAN", "PAYMENT_LINK"]);
+
+function refundError(errorAr, errorEn, status = 400, code) {
+  const err = new Error(errorAr);
+  err.status = status;
+  err.errorAr = errorAr;
+  err.errorEn = errorEn;
+  if (code) err.code = code;
+  return err;
+}
+
+/** Money columns are whole dirhams (NFR-03): the "cents" below are dirhams. */
+const cents = (v) => d(v);
+
+/**
+ * What the customer actually paid for each sale line, in dirhams: the line subtotal less its
+ * promotion discount, less its share of sale-level discounts, scaled to the amount paid.
+ * Rounding leftovers go to the lines with the largest remainders so the lines add up exactly.
+ */
+function paidCentsByLine(sale) {
+  const nets = sale.items.map((it) => Math.max(0, cents(it.subtotal) - cents(it.discountAmount)));
+  const sumNet = nets.reduce((a, b) => a + b, 0);
+  const total = cents(sale.total);
+  const goods = Math.max(0, total - cents(sale.deliveryFee));
+  const paid = Math.max(0, Math.min(total, cents(sale.amountPaid)));
+  const paidGoods = total > 0 ? divRound(goods * paid, total) : 0;
+  const out = new Map();
+  if (sumNet <= 0 || paidGoods <= 0) {
+    for (const it of sale.items) out.set(it.id, 0);
+    return { byLine: out, paid };
+  }
+  const base = splitProportional(paidGoods, nets);
+  sale.items.forEach((it, i) => out.set(it.id, base[i]));
+  return { byLine: out, paid };
+}
+
+function defaultRefundMethod(sale) {
+  const pm = String(sale.paymentMethod || "");
+  if (REFUND_METHODS.has(pm)) return pm;
+  if (pm === "SPLIT") return cashPortionFromSale(sale) > 0 ? "CASH" : "CARD";
+  return null;
+}
+
+router.post("/", requireModule("pos", "refund"), async (req, res) => {
   const {
     branchId,
     saleId,
@@ -46,12 +95,34 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     clientMutationId: clientMutationIdRaw,
     deviceId: _deviceId,
     restock: restockRaw,
+    method: methodRaw,
   } = req.body || {};
-  const restock = restockRaw !== false;
+  // FR-80: goods go back on the shelf only when staff mark them as returned.
+  const restock = restockRaw === true || restockRaw === "true";
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "لا توجد أصناف للإرجاع" });
+  }
+  if (saleId == null || !String(saleId).trim()) {
+    return res.status(400).json({
+      error: "اختر الفاتورة التي يُرجع منها",
+      errorAr: "اختر الفاتورة التي يُرجع منها",
+      errorEn: "A refund must name the sale it comes from",
+      code: "REFUND_SALE_REQUIRED",
+    });
+  }
+  let methodChoice = null;
+  if (methodRaw != null && String(methodRaw).trim()) {
+    methodChoice = String(methodRaw).trim().toUpperCase();
+    if (!REFUND_METHODS.has(methodChoice)) {
+      return res.status(400).json({
+        error: "طريقة الإرجاع غير معروفة",
+        errorAr: "طريقة الإرجاع غير معروفة",
+        errorEn: "Unknown refund method",
+        code: "REFUND_METHOD_INVALID",
+      });
+    }
   }
   if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== bid) {
     return res.status(403).json({ error: "لا يمكن الإرجاع لفرع آخر" });
@@ -77,227 +148,193 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       if (existing.branchId !== bid || existing.userId !== req.user.sub) {
         return res.status(409).json({ error: "تعارض معرف المزامنة" });
       }
-      return res.status(200).json(existing);
+      return res.status(200).json(api(existing));
     }
   }
 
-  let saleRef = null;
-  let saleItemsByProduct = null;
-  if (saleId != null && String(saleId).trim()) {
-    saleRef = await prisma.sale.findFirst({
-      where: { id: String(saleId), branch: { organizationId: orgId } },
-      include: {
-        items: {
-          include: {
-            lotUsages: {
-              select: { inventoryLotId: true, quantity: true },
-            },
-          },
-        },
-      },
-    });
-    if (!saleRef) return res.status(400).json({ error: "فاتورة غير موجودة" });
-    if (saleRef.branchId !== bid) return res.status(400).json({ error: "الفاتورة من فرع آخر" });
-
-    const priorRefunds = await prisma.refund.findMany({
-      where: { saleId: saleRef.id, branch: { organizationId: orgId } },
-      include: { items: true },
-    });
-    const alreadyRefunded = new Map();
-    for (const r of priorRefunds) {
-      for (const it of r.items) {
-        alreadyRefunded.set(
-          it.productId,
-          (alreadyRefunded.get(it.productId) || 0) + Number(it.quantity || 0),
-        );
-      }
-    }
-
-    saleItemsByProduct = new Map();
-    for (const it of saleRef.items) {
-      const prev = saleItemsByProduct.get(it.productId) || {
-        quantity: 0,
-        unitPrice: it.unitPrice,
-        lotUsages: [],
-        costAmount: 0,
-        variantId: it.variantId || null,
-        mixedVariant: false,
-      };
-      prev.quantity += Number(it.quantity || 0);
-      prev.costAmount += Number(it.costAmount || 0);
-      if ((it.variantId || null) !== prev.variantId) prev.mixedVariant = true;
-      prev.lotUsages.push(...(it.lotUsages || []));
-      saleItemsByProduct.set(it.productId, prev);
-    }
-
-    for (const [productId, meta] of saleItemsByProduct) {
-      const left = meta.quantity - (alreadyRefunded.get(productId) || 0);
-      saleItemsByProduct.set(productId, { ...meta, remaining: Math.max(0, left) });
-    }
-  }
-
+  const sid = String(saleId).trim();
   try {
-    // Aggregate duplicate refund lines
-    const qtyByProduct = new Map();
-    for (const line of items) {
-      const productId = String(line?.productId || "");
-      if (!productId) continue;
-      const qty = Math.max(1, Math.floor(Number(line.quantity) || 1));
-      qtyByProduct.set(productId, (qtyByProduct.get(productId) || 0) + qty);
-    }
-    if (!qtyByProduct.size) throw new Error("لا توجد أصناف للإرجاع");
-
-    let total = new Prisma.Decimal(0);
-    const lineData = [];
-
-    for (const [productId, qty] of qtyByProduct) {
-      const product = await prisma.product.findFirst({
-        where: { id: productId, organizationId: orgId },
-      });
-      if (!product) throw new Error(`منتج غير موجود: ${productId}`);
-
-      let unitPrice = product.price;
-      if (saleItemsByProduct) {
-        const sold = saleItemsByProduct.get(productId);
-        if (!sold) {
-          throw new Error(`المنتج غير موجود في الفاتورة: ${product.name}`);
+    const refund = await prisma.$transaction(
+      async (tx) => {
+        // Lock the sale so two refunds of the same sale cannot both pass the limits below.
+        const locked = await tx.$queryRaw`
+          SELECT s.id FROM "Sale" s JOIN "Branch" b ON b.id = s."branchId"
+          WHERE s.id = ${sid} AND b."organizationId" = ${orgId} FOR UPDATE OF s`;
+        if (!locked.length) throw refundError("فاتورة غير موجودة", "Sale not found");
+        const sale = await tx.sale.findUnique({
+          where: { id: sid },
+          include: {
+            items: { include: { product: { select: { id: true, name: true, sellBy: true } } }, orderBy: { id: "asc" } },
+            refunds: { include: { items: true } },
+          },
+        });
+        if (sale.branchId !== bid) throw refundError("الفاتورة من فرع آخر", "This sale was taken at another location");
+        if (sale.webStatus === "PENDING_PAYMENT" || sale.webStatus === "CANCELLED") {
+          throw refundError("هذا الطلب غير مدفوع", "This order was not paid");
         }
-        if (qty > sold.remaining) {
-          throw new Error(
-            `كمية الإرجاع تتجاوز المتاح من الفاتورة لـ ${product.name} (متبقي ${sold.remaining})`,
+
+        const { byLine: paidByLine, paid } = paidCentsByLine(sale);
+        if (paid <= 0) throw refundError("لا يوجد مبلغ مدفوع على هذه الفاتورة", "Nothing was paid on this sale");
+
+        // What earlier refunds already took from each line.
+        const lineState = new Map(
+          sale.items.map((it) => [it.id, { line: it, refQty: 0, refCents: 0, reqQty: 0 }]),
+        );
+        let priorTotalCents = 0;
+        for (const r of sale.refunds) {
+          priorTotalCents += cents(r.total);
+          for (const ri of r.items) {
+            const linked = ri.saleItemId ? lineState.get(ri.saleItemId) : null;
+            if (linked) {
+              linked.refQty += ri.quantity;
+              linked.refCents += cents(ri.subtotal);
+              continue;
+            }
+            // Older rows carry only the product: spread over that product's lines in order.
+            let qtyLeft = ri.quantity;
+            for (const st of lineState.values()) {
+              if (qtyLeft <= 0) break;
+              if (st.line.productId !== ri.productId) continue;
+              const room = st.line.quantity - st.refQty;
+              if (room <= 0) continue;
+              const take = Math.min(room, qtyLeft);
+              st.refQty += take;
+              st.refCents += divRound(cents(ri.subtotal) * take, ri.quantity);
+              qtyLeft -= take;
+            }
+          }
+        }
+
+        // Match the requested lines to sale lines.
+        for (const raw of items) {
+          const productId = String(raw?.productId || "");
+          const saleItemId = raw?.saleItemId ? String(raw.saleItemId) : "";
+          const variantId = raw?.variantId ? String(raw.variantId) : "";
+          const candidates = [...lineState.values()].filter((st) =>
+            saleItemId
+              ? st.line.id === saleItemId
+              : st.line.productId === productId && (!variantId || st.line.variantId === variantId),
+          );
+          if (!candidates.length) {
+            throw refundError("الصنف غير موجود في الفاتورة", "This item is not on the sale");
+          }
+          const product = candidates[0].line.product;
+          const n = Number(raw?.quantity);
+          const qty = product.sellBy === "WEIGHT" ? Math.round(n) : n;
+          if (!Number.isFinite(n) || !Number.isInteger(qty) || qty < 1) {
+            throw refundError(
+              product.sellBy === "WEIGHT" ? `وزن غير صالح: ${product.name}` : `كمية غير صالحة: ${product.name}`,
+              product.sellBy === "WEIGHT"
+                ? `Enter a weight in grams above zero: ${product.name}`
+                : `Enter a whole quantity above zero: ${product.name}`,
+            );
+          }
+          let left = qty;
+          for (const st of candidates) {
+            if (left <= 0) break;
+            const room = st.line.quantity - st.refQty - st.reqQty;
+            if (room <= 0) continue;
+            const take = Math.min(room, left);
+            st.reqQty += take;
+            left -= take;
+          }
+          if (left > 0) {
+            throw refundError(
+              `كمية الإرجاع تتجاوز المتبقي في الفاتورة لـ ${product.name}`,
+              `The refund is more than is left on the sale for ${product.name}`,
+            );
+          }
+        }
+
+        // Money per line from what was paid; never more than is left on the line.
+        let totalCents = 0;
+        const lineData = [];
+        for (const st of lineState.values()) {
+          if (!st.reqQty) continue;
+          const lineQty = st.line.quantity;
+          const linePaid = paidByLine.get(st.line.id) || 0;
+          const lineLeft = Math.max(0, linePaid - st.refCents);
+          const closesLine = st.refQty + st.reqQty >= lineQty;
+          // A part refund is its share of what was paid, rounded half away from zero to a
+          // dirham; the refund that closes the line takes exactly what is left on it.
+          const amount = closesLine ? lineLeft : Math.min(lineLeft, divRound(linePaid * st.reqQty, lineQty));
+          totalCents += amount;
+          const lineCost = d(st.line.costAmount);
+          lineData.push({
+            saleItemId: st.line.id,
+            productId: st.line.productId,
+            variantId: st.line.variantId || null,
+            quantity: st.reqQty,
+            unitPrice: st.line.unitPrice,
+            subtotal: amount,
+            costAmount: restock && lineQty > 0 ? divRound(lineCost * st.reqQty, lineQty) : null,
+            unitCost: st.line.unitCost,
+          });
+        }
+        if (priorTotalCents + totalCents > paid) {
+          throw refundError("مجموع المرتجعات يتجاوز المدفوع على الفاتورة", "Refunds cannot add up to more than was paid on the sale");
+        }
+
+        const method = methodChoice || defaultRefundMethod(sale);
+        if (!method) {
+          throw refundError("اختر طريقة إرجاع المبلغ", "Choose how the money is refunded", 400, "REFUND_METHOD_REQUIRED");
+        }
+        const openSession = await tx.cashSession.findFirst({
+          where: { branchId: bid, closedAt: null },
+          select: { id: true },
+        });
+        if (method === "CASH" && totalCents > 0 && !openSession) {
+          throw refundError(
+            "لا توجد جلسة صندوق مفتوحة — افتح الصندوق قبل الإرجاع النقدي",
+            "Open the till before giving a cash refund",
           );
         }
-        unitPrice = sold.unitPrice;
-      }
 
-      const subtotal = unitPrice.mul(qty);
-      total = total.add(subtotal);
-      const sold = saleItemsByProduct?.get(productId);
-      const share = sold && sold.quantity > 0 ? (Number(sold.costAmount) * qty) / sold.quantity : 0;
-      lineData.push({
-        productId,
-        quantity: qty,
-        unitPrice,
-        subtotal,
-        variantId: sold && !sold.mixedVariant ? sold.variantId : null,
-        costAmount: restock ? share : null,
-        saleLots: sold?.lotUsages || [],
-      });
-    }
-
-    const refundRisk = assessRefundRisk({
-      totalAmount: Number(total),
-      note,
-    });
-    if (!refundRisk.canProceed) {
-      return sendError(
-        res,
-        400,
-        "يلزم إدخال سبب للإرجاع عالي القيمة",
-        "A note/reason is required for high-value refunds",
-        { code: "REFUND_NOTE_REQUIRED", risk: refundRisk },
-      );
-    }
-
-    const refund = await prisma.$transaction(async (tx) => {
-      const created = await tx.refund.create({
-        data: {
-          branchId: bid,
-          userId: req.user.sub,
-          saleId: saleRef?.id ?? null,
-          ...(clientMutationId ? { clientMutationId } : {}),
-          total,
-          note: note != null && String(note).trim() ? String(note).trim() : null,
-          items: {
-            create: lineData.map((l) => ({
-              productId: l.productId,
-              quantity: l.quantity,
-              unitPrice: l.unitPrice,
-              subtotal: l.subtotal,
-              ...(l.costAmount != null ? { costAmount: new Prisma.Decimal(Number(l.costAmount).toFixed(4)) } : {}),
-            })),
-          },
-        },
-        include: refundInclude,
-      });
-
-      for (const l of lineData) {
-        if (!restock) continue;
-        if (l.variantId) {
-          await tx.variantStock.upsert({
-            where: { variantId_branchId: { variantId: l.variantId, branchId: bid } },
-            create: { variantId: l.variantId, branchId: bid, quantity: l.quantity, minStockLevel: 5 },
-            update: { quantity: { increment: l.quantity } },
-          });
-          continue;
-        }
-        await tx.inventory.upsert({
-          where: {
-            productId_branchId: { productId: l.productId, branchId: bid },
-          },
-          create: {
-            productId: l.productId,
+        const created = await tx.refund.create({
+          data: {
             branchId: bid,
-            quantity: l.quantity,
-            minStockLevel: 5,
-          },
-          update: {
-            quantity: { increment: l.quantity },
+            userId: req.user.sub,
+            saleId: sale.id,
+            ...(clientMutationId ? { clientMutationId } : {}),
+            total: totalCents,
+            method,
+            cashSessionId: openSession?.id ?? null,
+            note: note != null && String(note).trim() ? String(note).trim() : null,
+            items: {
+              create: lineData.map((l) => ({
+                productId: l.productId,
+                saleItemId: l.saleItemId,
+                variantId: l.variantId,
+                quantity: l.quantity,
+                unitPrice: l.unitPrice,
+                subtotal: l.subtotal,
+                ...(l.costAmount != null ? { costAmount: l.costAmount } : {}),
+              })),
+            },
           },
         });
 
-        // Restore FEFO lots from original sale when possible; otherwise create a return lot.
-        let left = l.quantity;
-        const usages = [...(l.saleLots || [])].reverse(); // restore last consumed first
-        for (const u of usages) {
-          if (left <= 0) break;
-          const take = Math.min(left, Number(u.quantity || 0));
-          if (take <= 0) continue;
-          const lot = await tx.inventoryLot.findFirst({
-            where: { id: u.inventoryLotId, organizationId: orgId },
-          });
-          if (!lot) continue;
-          if (lot.branchId === bid) {
-            await tx.inventoryLot.update({
-              where: { id: lot.id },
-              data: { quantityOnHand: { increment: take } },
-            });
-          } else {
-            await tx.inventoryLot.create({
-              data: {
-                organizationId: orgId,
-                productId: l.productId,
-                branchId: bid,
-                receivedAt: new Date(),
-                expiryDate: lot.expiryDate,
-                quantityReceived: take,
-                quantityOnHand: take,
-                unitCost: lot.unitCost,
-                note: `refund-restore:${created.id}`,
-              },
+        if (restock) {
+          // FR-78/80: back to the location the sale was taken from, with a RETURN movement.
+          for (const l of lineData) {
+            await moveStock(tx, {
+              orgId,
+              userId: req.user.sub,
+              productId: l.productId,
+              variantId: l.variantId,
+              branchId: sale.branchId,
+              delta: l.quantity,
+              reason: "RETURN",
+              note: created.id,
+              receiptUnitCost: l.unitCost != null ? d(l.unitCost) : null,
             });
           }
-          left -= take;
         }
-        if (left > 0) {
-          await tx.inventoryLot.create({
-            data: {
-              organizationId: orgId,
-              productId: l.productId,
-              branchId: bid,
-              receivedAt: new Date(),
-              expiryDate: null,
-              quantityReceived: left,
-              quantityOnHand: left,
-              unitCost: null,
-              note: `refund:${created.id}`,
-            },
-          });
-        }
-      }
 
-      return created;
-    });
+        return tx.refund.findUnique({ where: { id: created.id }, include: refundInclude });
+      },
+      { maxWait: 10000, timeout: 60000 },
+    );
 
     await writeAudit({
       userId: req.user.sub,
@@ -305,21 +342,17 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       entityType: "Refund",
       entityId: refund.id,
       branchId: bid,
-      summary: `Refund total ${refund.total}`,
-      meta: { lines: refund.items?.length, saleId: saleRef?.id ?? null },
+      summary: `Refund total ${fmt(refund.total)} ${refund.method}${restock ? " restocked" : ""}`,
+      meta: { lines: refund.items?.length, saleId: refund.saleId, method: refund.method, restock },
     });
 
-    scheduleInventoryWebhook(orgId, {
-      event: "refund.created",
-      meta: { refundId: refund.id, branchId: bid },
-      lines: lineData.map((l) => ({
-        branchId: bid,
-        productId: l.productId,
-        quantityDelta: l.quantity,
-      })),
-    });
+    // Refund email to the customer (FR-85). Queued; never fails the saved refund.
+    if (refund.saleId) {
+      const sale = await prisma.sale.findUnique({ where: { id: refund.saleId }, select: { id: true, invoiceNumber: true, customer: true } });
+      if (sale?.customer) await mailCustomer(sale.customer, "refund", { reference: sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount: fmt(refund.total) });
+    }
 
-    res.status(201).json(refund);
+    res.status(201).json(api(refund));
   } catch (e) {
     if (
       clientMutationId &&
@@ -334,11 +367,15 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
         include: refundInclude,
       });
       if (replay) {
-        return res.status(200).json(replay);
+        return res.status(200).json(api(replay));
       }
     }
     const msg = e instanceof Error ? e.message : "فشل تسجيل الإرجاع";
-    res.status(400).json({ error: msg });
+    res.status(e?.status || 400).json({
+      error: msg,
+      ...(e?.errorAr ? { errorAr: e.errorAr, errorEn: e.errorEn } : {}),
+      ...(e?.code && typeof e.code === "string" && !e.code.startsWith("P") ? { code: e.code } : {}),
+    });
   }
 });
 

@@ -18,36 +18,21 @@ import saleRoutes from "./routes/sales.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import userRoutes from "./routes/users.js";
 import permissionsRoutes from "./routes/permissions.js";
-import syncRoutes from "./routes/sync.js";
 import customerRoutes from "./routes/customers.js";
 import refundRoutes from "./routes/refunds.js";
 import supplierRoutes from "./routes/suppliers.js";
 import purchaseRoutes from "./routes/purchases.js";
-import intelligenceRoutes from "./routes/intelligence.js";
-import pricingIntelligenceRoutes from "./routes/pricingIntelligence.js";
-import cashierIntelligenceRoutes from "./routes/cashierIntelligence.js";
-import ownerBriefRoutes from "./routes/ownerBrief.js";
-import costIntelligenceRoutes from "./routes/costIntelligence.js";
-import stockBalancerRoutes from "./routes/stockBalancer.js";
-import customerRfmRoutes from "./routes/customerRfm.js";
 import cashSessionRoutes from "./routes/cashSessions.js";
 import auditRoutes from "./routes/audit.js";
 import heldCartRoutes from "./routes/heldCarts.js";
-import platformRoutes from "./routes/platform.js";
 import notificationRoutes from "./routes/notifications.js";
-import loyaltySettingsRoutes from "./routes/loyaltySettings.js";
-import taxSettingsRoutes from "./routes/taxSettings.js";
 import orgSettingsRoutes from "./routes/orgSettings.js";
 import productImagesRoutes from "./routes/productImages.js";
-import couponsRoutes from "./routes/coupons.js";
-import employeesRoutes from "./routes/employees.js";
-import payrollRoutes from "./routes/payroll.js";
-import employeeLoansRoutes from "./routes/employeeLoans.js";
 import petTypeRoutes from "./routes/petTypes.js";
 import purchaseOrderRoutes from "./routes/purchaseOrders.js";
 import shopRoutes from "./routes/shop.js";
 import groomingShopRoutes from "./routes/groomingShop.js";
-import { relocationShop, relocationStaff } from "./routes/relocation.js";
+import { relocationFiles, relocationShop, relocationStaff } from "./routes/relocation.js";
 import onlineOrderRoutes from "./routes/onlineOrders.js";
 import deliverySetupRoutes from "./routes/deliverySetup.js";
 import promotionRoutes from "./routes/promotions.js";
@@ -55,17 +40,12 @@ import financeRoutes from "./routes/finance.js";
 import vehicleRoutes from "./routes/vehicles.js";
 import exportRoutes from "./routes/exports.js";
 import customerAccountsRoutes from "./routes/customerAccounts.js";
-import zakatRoutes from "./routes/zakat.js";
 import expensesRoutes from "./routes/expenses.js";
 import reportsRoutes from "./routes/reports.js";
 import appointmentsRoutes from "./routes/appointments.js";
-import accountingRoutes from "./routes/accounting.js";
-import automationsRoutes from "./routes/automations.js";
-import commissionsRoutes from "./routes/commissions.js";
-import planRoutes from "./routes/plan.js";
-import onboardingRoutes from "./routes/onboarding.js";
-import billingWebhookRoutes from "./routes/billingWebhook.js";
+import cronRoutes from "./routes/cron.js";
 import { prisma } from "./lib/prisma.js";
+import { csrfGuard } from "./middleware/auth.js";
 import {
   dbUnavailableMessage,
   isDbUnavailableError,
@@ -93,12 +73,36 @@ if (process.env.VERCEL) {
 }
 
 app.use(helmetMiddleware);
-app.use(cors({ origin: true, credentials: true }));
-/** Stripe webhook needs raw body — mount before express.json() */
-app.use("/api/billing", billingWebhookRoutes);
+/**
+ * Sessions are httpOnly cookies, so cross-origin credentialed requests are limited to
+ * the app's own origins (same-origin requests send no CORS check at all).
+ */
+function allowedOrigins() {
+  return [process.env.APP_PUBLIC_URL, process.env.CLIENT_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
+    .map((o) => String(o || "").trim().replace(/\/$/, ""))
+    .filter(Boolean);
+}
+app.use(
+  cors({
+    credentials: true,
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      const o = origin.replace(/\/$/, "");
+      if (allowedOrigins().includes(o)) return cb(null, true);
+      if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)) {
+        return cb(null, true);
+      }
+      return cb(null, false);
+    },
+  })
+);
 app.use(express.json({ limit: "8mb" }));
+app.use("/api", csrfGuard);
 app.use("/api/auth/login", loginRateLimiter);
-app.use("/api/auth/register-organization", loginRateLimiter);
+app.use("/api/auth/forgot-password", loginRateLimiter);
+app.use("/api/auth/reset-password", loginRateLimiter);
+app.use("/api/auth/change-password", loginRateLimiter);
+app.use("/api/shop/login", loginRateLimiter);
 app.use("/api", apiRateLimiter);
 
 app.get("/api/health", (_req, res) => {
@@ -137,46 +141,26 @@ app.use("/api/sales", saleRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/permissions", permissionsRoutes);
-app.use("/api/sync", syncRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/customer-accounts", customerAccountsRoutes);
-app.use("/api/zakat", zakatRoutes);
 app.use("/api/expenses", expensesRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/appointments", appointmentsRoutes);
-app.use("/api/accounting", accountingRoutes);
-app.use("/api/automations", automationsRoutes);
-app.use("/api/commissions", commissionsRoutes);
-app.use("/api/plan", planRoutes);
-app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/refunds", refundRoutes);
 app.use("/api/suppliers", supplierRoutes);
 app.use("/api/purchases", purchaseRoutes);
-app.use("/api/intelligence", intelligenceRoutes);
-app.use("/api/intelligence/pricing", pricingIntelligenceRoutes);
-app.use("/api/intelligence/cashier", cashierIntelligenceRoutes);
-app.use("/api/intelligence/brief", ownerBriefRoutes);
-app.use("/api/intelligence/cost", costIntelligenceRoutes);
-app.use("/api/intelligence/balancer", stockBalancerRoutes);
-app.use("/api/intelligence/customers", customerRfmRoutes);
 app.use("/api/cash-sessions", cashSessionRoutes);
 app.use("/api/audit-logs", auditRoutes);
 app.use("/api/held-carts", heldCartRoutes);
-app.use("/api/platform", platformRoutes);
 app.use("/api/notifications", notificationRoutes);
-app.use("/api/loyalty-settings", loyaltySettingsRoutes);
-app.use("/api/tax-settings", taxSettingsRoutes);
 app.use("/api/org-settings", orgSettingsRoutes);
 app.use("/api/product-images", productImagesRoutes);
-app.use("/api/coupons", couponsRoutes);
-app.use("/api/employees", employeesRoutes);
-app.use("/api/payroll", payrollRoutes);
-app.use("/api/employee-loans", employeeLoansRoutes);
 app.use("/api/pet-types", petTypeRoutes);
 app.use("/api/purchase-orders", purchaseOrderRoutes);
 app.use("/api/shop/grooming", groomingShopRoutes);
 app.use("/api/shop/relocation", relocationShop);
 app.use("/api/relocation", relocationStaff);
+app.use("/api/relocation-files", relocationFiles);
 app.use("/api/shop", shopRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/finance", financeRoutes);
@@ -184,6 +168,7 @@ app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/exports", exportRoutes);
 app.use("/api/online-orders", onlineOrderRoutes);
 app.use("/api/delivery-setup", deliverySetupRoutes);
+app.use("/api/cron", cronRoutes);
 
 /**
  * Local single-process mode: serve the Vite build from the same Express port.
@@ -222,6 +207,7 @@ app.use((err, _req, res, _next) => {
       errorAr: err.errorAr || err.message,
       errorEn: err.errorEn || err.message,
       ...(err.code ? { code: err.code } : {}),
+      ...(err.extra && typeof err.extra === "object" ? err.extra : {}),
     });
   }
   if (err?.status && Number(err.status) >= 400 && Number(err.status) < 500) {

@@ -3,22 +3,23 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { signToken } from "../middleware/auth.js";
-import jwt from "jsonwebtoken";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
+import { customerSession, endCustomerSession, startCustomerSession } from "../lib/customerSession.js";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
-import { commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
+import { assertStockForHolds, commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
+import { LOCK_TX, statusError } from "../lib/payments.js";
+import { applyGatewayResult } from "../lib/gatewayNotify.js";
+import { lookupOnReturn } from "../lib/paymentLookup.js";
+import { minutesOf, qatarNowMinutes, qatarToday } from "../lib/groomingSlots.js";
 import { quotePromotions } from "../lib/promotions.js";
-import { mailCustomer, mailStaff, sendMail } from "../lib/mailer.js";
+import { d, fmt, lineAmount, riyals } from "../lib/money.js";
+import { mailConfigured, mailCustomer, mailStaff } from "../lib/mailer.js";
+import { publicBase as publicUrl } from "../lib/publicUrl.js";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
-function publicBase() {
-  return (
-    process.env.APP_PUBLIC_URL ||
-    process.env.CLIENT_URL ||
-    "http://localhost:5173"
-  ).replace(/\/$/, "");
+function publicBase(req) {
+  return publicUrl(req);
 }
 
 async function shopOrg() {
@@ -41,22 +42,6 @@ async function websiteBranch(org) {
   return branch;
 }
 
-function customerFromHeader(req) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) return null;
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== "CUSTOMER" || !payload.sub) return null;
-    return payload;
-  } catch {
-    return null;
-  }
-}
-
-function money(n) {
-  return new Prisma.Decimal(Number(n).toFixed(2));
-}
 
 function unitsFor(product, raw) {
   const n = Number(raw);
@@ -78,9 +63,9 @@ function unitsFor(product, raw) {
   return qty;
 }
 
+/** Line amount in whole dirhams: a weight line is grams × price per kg, rounded half away from zero. */
 function lineMoney(product, price, units) {
-  if (product.sellBy === "WEIGHT") return price.mul(units).div(1000);
-  return price.mul(units);
+  return lineAmount(price, units, product.sellBy);
 }
 
 function publicProduct(product, branchId) {
@@ -93,7 +78,7 @@ function publicProduct(product, branchId) {
       label: v.label,
       labelEn: v.labelEn,
       sku: v.sku,
-      price: Number(v.price),
+      price: riyals(v.price),
       packWeight: v.packWeight != null ? Number(v.packWeight) : null,
       available: open ? 99 : stock?.quantity ?? 0,
     };
@@ -108,14 +93,14 @@ function publicProduct(product, branchId) {
     description: product.description,
     descriptionEn: product.descriptionEn,
     sellBy: product.sellBy,
-    price: Number(product.price),
+    price: riyals(product.price),
     images,
     categoryId: product.categoryId,
     category: product.productCategory,
     petTypes: (product.petLinks || []).map((link) => link.petType),
     isPetHouse: product.isPetHouse === true,
     leadTimeDays: product.leadTimeDays,
-    houseDeliveryFee: Number(product.houseDeliveryFee || 0),
+    houseDeliveryFee: riyals(product.houseDeliveryFee || 0),
     takesStock: product.takesStock !== false,
     variants,
     available: variants.length ? null : open ? 99 : own?.quantity ?? 0,
@@ -132,10 +117,10 @@ function weekdayOf(iso) {
   return date ? date.getUTCDay() : null;
 }
 
-async function seatsUsed(windowId, isoDate) {
+async function seatsUsed(windowId, isoDate, db = prisma) {
   const deliveryDate = civilDate(isoDate);
   if (!deliveryDate) return 0;
-  return prisma.sale.count({
+  return db.sale.count({
     where: {
       deliveryWindowId: windowId,
       deliveryDate,
@@ -160,27 +145,32 @@ router.get("/meta", async (req, res) => {
     prisma.deliveryArea.findMany({ where: { organizationId: org.id, isActive: true }, orderBy: { name: "asc" } }),
     prisma.deliveryWindow.findMany({ where: { organizationId: org.id, isActive: true }, orderBy: { startTime: "asc" } }),
   ]);
-  const seatRows = branch
-    ? await prisma.stockHold.groupBy({
-        by: ["windowId"],
-        where: {
-          organizationId: org.id,
-          windowId: { not: null },
-          OR: [
-            { status: "COMMITTED" },
-            { status: "HELD", expiresAt: { gt: new Date() } },
-          ],
-        },
-        _count: { _all: true },
-      })
-    : [];
-  const taken = new Map(seatRows.map((row) => [row.windowId, row._count._all]));
+  // Seats are per window per date (FR-41). With ?date= every window reports that date;
+  // otherwise each window reports its next date from today (Qatar).
+  const askedDate = civilDate(req.query.date) ? String(req.query.date) : null;
+  const today = qatarToday();
+  const windowDates = new Map();
+  for (const w of windows) {
+    let date = askedDate;
+    if (!date) {
+      const start = civilDate(today);
+      for (let i = 0; i < 7; i += 1) {
+        const d = new Date(start.getTime() + i * 86400000);
+        if (w.weekday == null || d.getUTCDay() === w.weekday) {
+          date = d.toISOString().slice(0, 10);
+          break;
+        }
+      }
+    }
+    const runs = date && (w.weekday == null || weekdayOf(date) === w.weekday);
+    windowDates.set(w.id, { date, used: runs && branch ? await seatsUsed(w.id, date) : null, runs });
+  }
   res.json({
     location: branch ? { id: branch.id, name: branch.name, nameEn: branch.nameEn } : null,
     petTypes,
     categories,
     whatsappNumber: org.whatsappNumber || "",
-    homeVisitFee: Number(org.homeVisitFee || 0),
+    homeVisitFee: riyals(org.homeVisitFee || 0),
     business: {
       name: org.name,
       phone: org.phone || "",
@@ -190,7 +180,7 @@ router.get("/meta", async (req, res) => {
       hoursEn: org.hoursTextEn || "",
       whatsapp: org.whatsappNumber || "",
     },
-    areas: areas.map((a) => ({ id: a.id, name: a.name, nameEn: a.nameEn, city: a.city, fee: Number(a.fee) })),
+    areas: areas.map((a) => ({ id: a.id, name: a.name, nameEn: a.nameEn, city: a.city, fee: riyals(a.fee) })),
     windows: windows.map((w) => ({
       id: w.id,
       label: w.label,
@@ -198,7 +188,8 @@ router.get("/meta", async (req, res) => {
       weekday: w.weekday,
       startTime: w.startTime,
       endTime: w.endTime,
-      seatsLeft: Math.max(0, w.seats - (taken.get(w.id) || 0)),
+      date: windowDates.get(w.id)?.date || null,
+      seatsLeft: windowDates.get(w.id)?.runs ? Math.max(0, w.seats - (windowDates.get(w.id)?.used || 0)) : 0,
     })),
   });
 });
@@ -289,22 +280,19 @@ router.get("/products/:id", async (req, res) => {
   res.json(dto);
 });
 
-async function sendVerifyEmail(email, token) {
-  const key = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.SHOP_FROM_EMAIL?.trim() || process.env.ONBOARDING_NOTIFY_FROM_EMAIL?.trim();
-  const link = `${publicBase()}/shop/verify?token=${encodeURIComponent(token)}`;
-  if (!key || !from) return { sent: false, link: process.env.NODE_ENV === "production" ? null : link };
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: [email],
-      subject: "Confirm your Nennus Catio account",
-      text: `Confirm your account: ${link}`,
-    }),
-  });
-  return { sent: res.ok, link: process.env.NODE_ENV === "production" ? null : link };
+/** FR-01: a confirmation link is valid for 48 hours. */
+const VERIFY_TTL_MS = 48 * 60 * 60 * 1000;
+
+/** Queues the verification email in the customer's language. Never throws. */
+async function sendVerifyEmail(customer, token, req) {
+  const link = `${publicBase(req)}/shop/verify?token=${encodeURIComponent(token)}`;
+  const queued = await mailCustomer(customer, "verify", { name: customer.name, link });
+  return { sent: Boolean(queued) && mailConfigured(), link: process.env.NODE_ENV === "production" ? null : link };
+}
+
+function bodyLocale(req) {
+  const raw = String(req.body?.locale || req.body?.lang || "").toLowerCase();
+  return raw === "en" || raw === "ar" ? raw : null;
 }
 
 router.post("/register", async (req, res) => {
@@ -314,30 +302,35 @@ router.post("/register", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const phone = String(req.body?.phone || "").trim() || null;
+  const locale = bodyLocale(req);
   if (!name || !email || password.length < 8) {
     return res.status(400).json({ error: "Name, email, and a password of at least 8 characters are required" });
   }
   const existing = await prisma.customer.findFirst({
     where: { organizationId: org.id, email: { equals: email, mode: "insensitive" } },
+    omit: { passwordHash: false },
   });
   const token = crypto.randomBytes(24).toString("hex");
   const verifyTokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const verifyExpiresAt = new Date(Date.now() + VERIFY_TTL_MS);
   const passwordHash = await bcrypt.hash(password, 10);
   let customer = existing;
-  if (existing?.passwordHash) {
+  if (existing?.passwordHash && existing.emailVerifiedAt) {
     return res.status(409).json({ error: "An account with this email already exists. Sign in instead." });
   }
   if (existing) {
+    // FR-05: a guest (or unconfirmed) record keeps its name and phone until the email is
+    // confirmed; the customer edits the profile after signing in.
     customer = await prisma.customer.update({
       where: { id: existing.id },
-      data: { name, phone, passwordHash, verifyTokenHash, emailVerifiedAt: null },
+      data: { passwordHash, verifyTokenHash, verifyExpiresAt, emailVerifiedAt: null, ...(locale ? { locale } : {}) },
     });
   } else {
     customer = await prisma.customer.create({
-      data: { organizationId: org.id, name, email, phone, passwordHash, verifyTokenHash },
+      data: { organizationId: org.id, name, email, phone, passwordHash, verifyTokenHash, verifyExpiresAt, ...(locale ? { locale } : {}) },
     });
   }
-  const mail = await sendVerifyEmail(email, token);
+  const mail = await sendVerifyEmail(customer, token, req);
   res.status(201).json({ id: customer.id, email, verifyEmailSent: mail.sent, verifyLink: mail.link });
 });
 
@@ -347,17 +340,15 @@ router.post("/verify", async (req, res) => {
   const verifyTokenHash = crypto.createHash("sha256").update(token).digest("hex");
   const customer = await prisma.customer.findFirst({ where: { verifyTokenHash } });
   if (!customer) return res.status(400).json({ error: "This confirmation link is not valid" });
-  await prisma.customer.update({
+  if (customer.verifyExpiresAt && customer.verifyExpiresAt < new Date()) {
+    return res.status(400).json({ error: "This confirmation link has expired. Register again to get a new one.", code: "VERIFY_EXPIRED" });
+  }
+  const verified = await prisma.customer.update({
     where: { id: customer.id },
-    data: { emailVerifiedAt: new Date(), verifyTokenHash: null },
+    data: { emailVerifiedAt: new Date(), verifyTokenHash: null, verifyExpiresAt: null },
   });
-  const session = signToken({
-    sub: customer.id,
-    role: "CUSTOMER",
-    organizationId: customer.organizationId,
-    email: customer.email,
-  });
-  res.json({ token: session, name: customer.name, email: customer.email });
+  startCustomerSession(res, verified);
+  res.json({ ok: true, name: verified.name, email: verified.email });
 });
 
 router.post("/login", async (req, res) => {
@@ -366,6 +357,7 @@ router.post("/login", async (req, res) => {
   const password = String(req.body?.password || "");
   const customer = await prisma.customer.findFirst({
     where: { organizationId: org?.id || "", email: { equals: email, mode: "insensitive" } },
+    omit: { passwordHash: false },
   });
   if (!customer?.passwordHash || !(await bcrypt.compare(password, customer.passwordHash))) {
     return res.status(401).json({ error: "Email or password is incorrect" });
@@ -373,13 +365,13 @@ router.post("/login", async (req, res) => {
   if (!customer.emailVerifiedAt) {
     return res.status(403).json({ error: "Confirm your email before signing in", code: "EMAIL_UNVERIFIED" });
   }
-  const token = signToken({
-    sub: customer.id,
-    role: "CUSTOMER",
-    organizationId: customer.organizationId,
-    email: customer.email,
-  });
-  res.json({ token, name: customer.name, email: customer.email });
+  startCustomerSession(res, customer);
+  res.json({ ok: true, name: customer.name, email: customer.email });
+});
+
+router.post("/logout", (_req, res) => {
+  endCustomerSession(res);
+  res.json({ ok: true });
 });
 
 router.post("/forgot", async (req, res) => {
@@ -397,9 +389,10 @@ router.post("/forgot", async (req, res) => {
       resetExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
     },
   });
-  const link = `${publicBase()}/shop/reset?token=${encodeURIComponent(token)}`;
-  const sent = await sendMail({ to: customer.email, subject: "Reset your Nennus Catio password", text: link });
-  res.json({ ok: true, resetLink: !sent && process.env.NODE_ENV !== "production" ? link : null });
+  const link = `${publicBase(req)}/shop/reset?token=${encodeURIComponent(token)}`;
+  const locale = bodyLocale(req);
+  await mailCustomer(locale ? { ...customer, locale } : customer, "reset", { link });
+  res.json({ ok: true, resetLink: !mailConfigured() && process.env.NODE_ENV !== "production" ? link : null });
 });
 
 router.post("/reset", async (req, res) => {
@@ -419,13 +412,17 @@ router.post("/reset", async (req, res) => {
       resetTokenHash: null,
       resetExpiresAt: null,
       emailVerifiedAt: customer.emailVerifiedAt || new Date(),
+      verifyTokenHash: null,
+      verifyExpiresAt: null,
+      // Ends every session issued before the reset.
+      sessionVersion: { increment: 1 },
     },
   });
   res.json({ ok: true });
 });
 
-function requireCustomer(req, res) {
-  const session = customerFromHeader(req);
+async function requireCustomer(req, res) {
+  const session = await customerSession(req, res);
   if (!session) {
     res.status(401).json({ error: "Sign in to continue" });
     return null;
@@ -433,32 +430,115 @@ function requireCustomer(req, res) {
   return session;
 }
 
-router.get("/me", async (req, res) => {
-  const session = requireCustomer(req, res);
-  if (!session) return;
+function publicPet(pet) {
+  // Pet notes are staff-only (FR-03) and never leave the server on a shop route.
+  return { id: pet.id, name: pet.name, breed: pet.breed, ageText: pet.ageText, petTypeId: pet.petTypeId, version: pet.version };
+}
+
+async function accountView(session) {
   const customer = await prisma.customer.findFirst({
     where: { id: session.sub, organizationId: session.organizationId },
-    include: { pets: true, addresses: true },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      locale: true,
+      version: true,
+      pets: { select: { id: true, name: true, breed: true, ageText: true, petTypeId: true, version: true }, orderBy: { createdAt: "asc" } },
+      addresses: { orderBy: { createdAt: "asc" } },
+    },
   });
-  if (!customer) return res.status(404).json({ error: "Account not found" });
-  res.json({
-    id: customer.id,
-    name: customer.name,
-    email: customer.email,
-    phone: customer.phone,
-    pets: customer.pets.map((pet) => ({
-      id: pet.id,
-      name: pet.name,
-      breed: pet.breed,
-      ageText: pet.ageText,
-      petTypeId: pet.petTypeId,
-    })),
-    addresses: customer.addresses,
+  if (!customer) return null;
+  return { ...customer, pets: customer.pets.map(publicPet) };
+}
+
+router.get("/me", async (req, res) => {
+  const session = await requireCustomer(req, res);
+  if (!session) return;
+  const view = await accountView(session);
+  if (!view) return res.status(404).json({ error: "Account not found" });
+  res.json(view);
+});
+
+/** FR-02: the customer edits name, phone and preferred language. Email is the account key. */
+router.patch("/me", async (req, res) => {
+  const session = await requireCustomer(req, res);
+  if (!session) return;
+  const body = req.body || {};
+  const version = requireVersion(req);
+  const data = {};
+  if (body.name !== undefined) {
+    const name = String(body.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Name is required" });
+    data.name = name.slice(0, 120);
+  }
+  if (body.phone !== undefined) data.phone = String(body.phone || "").trim().slice(0, 40) || null;
+  if (body.locale !== undefined) {
+    if (body.locale !== "ar" && body.locale !== "en") return res.status(400).json({ error: "Language must be ar or en" });
+    data.locale = body.locale;
+  }
+  if (!Object.keys(data).length) return res.status(400).json({ error: "Nothing to update" });
+  await versionedUpdate(prisma, "customer", {
+    id: session.sub,
+    version,
+    data,
+    where: { organizationId: session.organizationId },
+    select: { id: true },
   });
+  res.json(await accountView(session));
+});
+
+router.patch("/me/pets/:id", async (req, res) => {
+  const session = await requireCustomer(req, res);
+  if (!session) return;
+  const version = requireVersion(req);
+  const pet = await prisma.customerPet.findFirst({ where: { id: req.params.id, customerId: session.sub } });
+  if (!pet) return res.status(404).json({ error: "Pet not found" });
+  assertVersion(pet, version);
+  const data = {};
+  if (req.body?.name !== undefined) {
+    const name = String(req.body.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Pet name is required" });
+    data.name = name;
+  }
+  for (const key of ["breed", "ageText"]) {
+    if (req.body?.[key] !== undefined) data[key] = String(req.body[key] || "").trim() || null;
+  }
+  if (req.body?.petTypeId !== undefined) data.petTypeId = req.body.petTypeId ? String(req.body.petTypeId) : null;
+  const updated = await versionedUpdate(prisma, "customerPet", {
+    id: pet.id,
+    version,
+    data,
+    where: { customerId: session.sub },
+  });
+  res.json(publicPet(updated));
+});
+
+router.delete("/me/pets/:id", async (req, res) => {
+  const session = await requireCustomer(req, res);
+  if (!session) return;
+  const pet = await prisma.customerPet.findFirst({
+    where: { id: req.params.id, customerId: session.sub },
+    include: { _count: { select: { relocationLinks: true } } },
+  });
+  if (!pet) return res.status(404).json({ error: "Pet not found" });
+  if (pet._count.relocationLinks) return res.status(400).json({ error: "This pet is on a relocation request" });
+  await prisma.customerPet.delete({ where: { id: pet.id } });
+  res.json({ ok: true });
+});
+
+router.delete("/me/addresses/:id", async (req, res) => {
+  const session = await requireCustomer(req, res);
+  if (!session) return;
+  const row = await prisma.customerAddress.findFirst({ where: { id: req.params.id, customerId: session.sub } });
+  if (!row) return res.status(404).json({ error: "Address not found" });
+  await prisma.customerAddress.delete({ where: { id: row.id } });
+  res.json({ ok: true });
 });
 
 router.post("/me/pets", async (req, res) => {
-  const session = requireCustomer(req, res);
+  const session = await requireCustomer(req, res);
   if (!session) return;
   const name = String(req.body?.name || "").trim();
   if (!name) return res.status(400).json({ error: "Pet name is required" });
@@ -472,11 +552,11 @@ router.post("/me/pets", async (req, res) => {
       petTypeId: req.body?.petTypeId ? String(req.body.petTypeId) : null,
     },
   });
-  res.status(201).json({ id: pet.id, name: pet.name, breed: pet.breed, ageText: pet.ageText, petTypeId: pet.petTypeId });
+  res.status(201).json(publicPet(pet));
 });
 
 router.post("/me/addresses", async (req, res) => {
-  const session = requireCustomer(req, res);
+  const session = await requireCustomer(req, res);
   if (!session) return;
   const line1 = String(req.body?.line1 || "").trim();
   if (!line1) return res.status(400).json({ error: "Address is required" });
@@ -496,7 +576,7 @@ router.post("/me/addresses", async (req, res) => {
 });
 
 router.get("/orders", async (req, res) => {
-  const session = requireCustomer(req, res);
+  const session = await requireCustomer(req, res);
   if (!session) return;
   const rows = await prisma.sale.findMany({
     where: { customerId: session.sub, orderChannel: "WEBSITE" },
@@ -508,8 +588,13 @@ router.get("/orders", async (req, res) => {
 });
 
 router.get("/orders/:id", async (req, res) => {
-  const session = requireCustomer(req, res);
+  const session = await requireCustomer(req, res);
   if (!session) return;
+  const owned = await prisma.sale.findFirst({
+    where: { id: req.params.id, customerId: session.sub, orderChannel: "WEBSITE" },
+    select: { id: true, webStatus: true, gatewayPaymentId: true },
+  });
+  if (owned) await lookupOnReturn(req, "sale", owned, owned.webStatus === "PENDING_PAYMENT");
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, customerId: session.sub, orderChannel: "WEBSITE" },
     include: { items: { include: { product: { select: { name: true, nameEn: true, sellBy: true } }, variant: true } } },
@@ -521,10 +606,11 @@ router.get("/orders/:id", async (req, res) => {
 function publicOrder(sale) {
   return {
     id: sale.id,
+    reference: sale.reference,
     status: sale.webStatus,
     fulfillment: sale.fulfillment,
-    total: Number(sale.total),
-    deliveryFee: Number(sale.deliveryFee || 0),
+    total: riyals(sale.total),
+    deliveryFee: riyals(sale.deliveryFee || 0),
     deliveryAddress: sale.deliveryAddress,
     createdAt: sale.createdAt,
     items: (sale.items || []).map((item) => ({
@@ -533,14 +619,14 @@ function publicOrder(sale) {
       variant: item.variant?.label || null,
       sellBy: item.product?.sellBy,
       quantity: item.quantity,
-      unitPrice: Number(item.unitPrice),
-      subtotal: Number(item.subtotal),
+      unitPrice: riyals(item.unitPrice),
+      subtotal: riyals(item.subtotal),
     })),
   };
 }
 
 router.post("/orders/:id/cancel", async (req, res) => {
-  const session = requireCustomer(req, res);
+  const session = await requireCustomer(req, res);
   if (!session) return;
   try {
     const sale = await prisma.$transaction(async (tx) => {
@@ -557,13 +643,29 @@ router.post("/orders/:id/cancel", async (req, res) => {
         err.status = 400;
         throw err;
       }
-      await restoreCommittedHolds(tx, row.id);
-      return tx.sale.update({
-        where: { id: row.id },
-        data: { webStatus: "CANCELLED", invoiceStatus: "CANCELLED" },
+      // Guarded: only one of a customer cancel, a staff change or a retry wins.
+      const moved = await tx.sale.updateMany({
+        where: { id: row.id, webStatus: "CONFIRMED" },
+        data: {
+          webStatus: "CANCELLED",
+          invoiceStatus: "CANCELLED",
+          // A paid order cancelled by the customer is flagged so staff refund it (FR-38, FR-77).
+          ...(d(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
+        },
       });
+      if (!moved.count) {
+        const err = new Error("This order can only be cancelled before it is being prepared");
+        err.status = 400;
+        throw err;
+      }
+      await restoreCommittedHolds(tx, row.id);
+      return tx.sale.findUnique({ where: { id: row.id } });
     });
-    res.json({ id: sale.id, status: sale.webStatus });
+    if (d(sale.amountPaid) > 0) {
+      const org = await shopOrg();
+      if (org) await mailStaff(org.id, "alertOrder", `Website order ${sale.reference || sale.id} was cancelled by the customer. A refund of ${fmt(sale.amountPaid)} QAR is due.`);
+    }
+    res.json({ id: sale.id, reference: sale.reference, status: sale.webStatus });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not cancel" });
   }
@@ -614,8 +716,9 @@ router.post("/checkout", async (req, res) => {
     await sweepExpiredHolds();
     const body = req.body || {};
     const fulfillment = String(body.fulfillment || "").toUpperCase() === "PICKUP" ? "PICKUP" : "DELIVERY";
-    const session = customerFromHeader(req);
-    const email = String(body.email || session?.email || "").trim().toLowerCase();
+    const session = await customerSession(req, res);
+    // FR-05: a signed-in customer always orders as themselves (body email is ignored).
+    const email = String(session?.email || body.email || "").trim().toLowerCase();
     const name = String(body.name || "").trim();
     const phone = String(body.phone || "").trim();
     if (!email || !name || !phone) return res.status(400).json({ error: "Name, email, and phone are required" });
@@ -642,6 +745,13 @@ router.post("/checkout", async (req, res) => {
           where: { id: String(body.areaId), organizationId: org.id, isActive: true },
         });
       }
+      // The delivery fee comes from the area on the server, so an area is required (FR-34, FR-40, NFR-08).
+      if (!area) return res.status(400).json({ error: "Choose a delivery area" });
+      const today = qatarToday();
+      const dateIso = String(body.deliveryDate);
+      if (dateIso < today) return res.status(400).json({ error: "The delivery date is in the past" });
+      const furthest = new Date(civilDate(today).getTime() + 90 * 86400000).toISOString().slice(0, 10);
+      if (dateIso > furthest) return res.status(400).json({ error: "Choose a delivery date within the next 90 days" });
       if (body.windowId) {
         windowRow = await prisma.deliveryWindow.findFirst({
           where: { id: String(body.windowId), organizationId: org.id, isActive: true },
@@ -651,6 +761,12 @@ router.post("/checkout", async (req, res) => {
       const day = weekdayOf(body.deliveryDate);
       if (windowRow.weekday != null && windowRow.weekday !== day) {
         return res.status(400).json({ error: "That window is not on the chosen day" });
+      }
+      if (String(body.deliveryDate) === qatarToday()) {
+        const startMin = minutesOf(windowRow.startTime);
+        if (startMin == null || startMin <= qatarNowMinutes()) {
+          return res.status(400).json({ error: "That delivery window has already started today" });
+        }
       }
     }
 
@@ -664,7 +780,9 @@ router.post("/checkout", async (req, res) => {
           data: {
             name: found.name || name,
             phone: found.phone || phone,
-            locale: body.locale === "en" ? "en" : body.locale === "ar" ? "ar" : found.locale,
+            // Only the signed-in owner of the account may change its language.
+            locale:
+              session?.sub === found.id && (body.locale === "en" || body.locale === "ar") ? body.locale : found.locale,
           },
         });
       }
@@ -674,7 +792,8 @@ router.post("/checkout", async (req, res) => {
     });
 
     const prepared = [];
-    let goods = new Prisma.Decimal(0);
+    // NFR-03: whole dirhams from here on.
+    let goods = 0;
     for (const raw of body.items) {
       const product = await prisma.product.findFirst({
         where: { id: String(raw.productId || ""), organizationId: org.id, isActive: true },
@@ -683,11 +802,11 @@ router.post("/checkout", async (req, res) => {
       if (!product) return res.status(400).json({ error: "A product in the cart is no longer available" });
       const units = unitsFor(product, raw.quantity);
       let variant = null;
-      let price = product.price;
+      let price = d(product.price);
       if (product.variants.length) {
         variant = product.variants.find((v) => v.id === raw.variantId && v.isActive);
         if (!variant) return res.status(400).json({ error: `Choose a variant for ${product.nameEn || product.name}` });
-        price = variant.price;
+        price = d(variant.price);
       } else if (raw.variantId) {
         return res.status(400).json({ error: "That variant is not on this product" });
       }
@@ -701,7 +820,7 @@ router.post("/checkout", async (req, res) => {
             where: { productId_branchId: { productId: product.id, branchId: branch.id } },
           });
       const onHand = stockRow?.quantity ?? 0;
-      unitCost = stockRow?.unitCost != null ? Number(stockRow.unitCost) : 0;
+      unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : 0;
         const held = await heldQuantity(prisma, {
           branchId: branch.id,
           productId: product.id,
@@ -712,7 +831,7 @@ router.post("/checkout", async (req, res) => {
         }
       }
       const subtotal = lineMoney(product, price, units);
-      goods = goods.add(subtotal);
+      goods += subtotal;
       prepared.push({
         product,
         variant,
@@ -720,7 +839,7 @@ router.post("/checkout", async (req, res) => {
         price,
         subtotal,
         unitCost,
-        costAmount: product.sellBy === "WEIGHT" ? (unitCost * units) / 1000 : unitCost * units,
+        costAmount: lineAmount(unitCost, units, product.sellBy),
         discount: 0,
       });
     }
@@ -731,33 +850,34 @@ router.post("/checkout", async (req, res) => {
         productId: line.product.id,
         categoryId: line.product.categoryId,
         quantity: line.units,
-        subtotal: Number(line.subtotal),
+        subtotal: line.subtotal,
         sellBy: line.product.sellBy,
       })),
-      goods: Number(goods),
+      goods,
       code: body.code,
     });
     prepared.forEach((line, index) => {
       line.discount = promo.lineDiscounts[index] || 0;
     });
-    goods = goods.sub(promo.discountDec);
-    if (goods.lessThan(0)) goods = new Prisma.Decimal(0);
+    goods -= promo.discount;
+    if (goods < 0) goods = 0;
 
     if (windowRow) {
+      // Early answer only; the locked check inside the hold transaction is the one that counts.
       const used = await seatsUsed(windowRow.id, body.deliveryDate);
       if (used >= windowRow.seats) return res.status(400).json({ error: "That delivery window is full" });
     }
 
-    let fee = area ? area.fee : new Prisma.Decimal(0);
+    let fee = area ? d(area.fee) : 0;
     if (fulfillment === "DELIVERY") {
       for (const line of prepared) {
         if (line.product.isPetHouse) {
           const copies = line.product.sellBy === "WEIGHT" ? 1 : line.units;
-          fee = fee.add(new Prisma.Decimal(line.product.houseDeliveryFee || 0).mul(copies));
+          fee += d(line.product.houseDeliveryFee) * copies;
         }
       }
     }
-    const total = goods.add(fee);
+    const total = goods + fee;
     const holdMinutes = Math.max(5, Number(org.holdMinutes) || 20);
     const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
     const [first, ...rest] = name.split(/\s+/);
@@ -766,7 +886,25 @@ router.post("/checkout", async (req, res) => {
       select: { id: true },
     });
     if (!staff) return res.status(500).json({ error: "Shop checkout needs a staff user on the account" });
+    const stockLines = prepared.filter((line) => line.product.takesStock !== false);
     const sale = await prisma.$transaction(async (tx) => {
+      // FR-41 / NFR-06: lock the window row, then count its seats for that date.
+      if (windowRow) {
+        await tx.$queryRaw`SELECT id FROM "DeliveryWindow" WHERE id = ${windowRow.id} FOR UPDATE`;
+        const used = await seatsUsed(windowRow.id, body.deliveryDate, tx);
+        if (used >= windowRow.seats) throw statusError("That delivery window is full", 400);
+      }
+      // FR-36 / NFR-06: lock the stock balance rows and count live holds inside this transaction.
+      await assertStockForHolds(
+        tx,
+        branch.id,
+        stockLines.map((line) => ({
+          productId: line.product.id,
+          variantId: line.variant?.id || null,
+          units: line.units,
+          label: line.variant?.label || line.product.nameEn || line.product.name,
+        })),
+      );
       const created = await tx.sale.create({
         data: {
           branchId: branch.id,
@@ -784,8 +922,8 @@ router.post("/checkout", async (req, res) => {
           deliveryLng: pin ? new Prisma.Decimal(pin.lng.toFixed(6)) : null,
           deliveryFee: fee,
           total,
-          discountAmount: promo.discountDec,
-          promotionDiscount: promo.discountDec,
+          discountAmount: promo.discount,
+          promotionDiscount: promo.discount,
           taxAmount: 0,
           taxPercent: 0,
           amountPaid: 0,
@@ -800,14 +938,13 @@ router.post("/checkout", async (req, res) => {
               quantity: line.units,
               unitPrice: line.price,
               subtotal: line.subtotal,
-              discountAmount: new Prisma.Decimal(Number(line.discount || 0).toFixed(2)),
-              unitCost: new Prisma.Decimal(Number(line.unitCost || 0).toFixed(4)),
-              costAmount: new Prisma.Decimal(Number(line.costAmount || 0).toFixed(4)),
+              discountAmount: d(line.discount),
+              unitCost: d(line.unitCost),
+              costAmount: d(line.costAmount),
             })),
           },
         },
       });
-      const stockLines = prepared.filter((line) => line.product.takesStock !== false);
       for (let i = 0; i < stockLines.length; i += 1) {
         const line = stockLines[i];
         await tx.stockHold.create({
@@ -840,12 +977,12 @@ router.post("/checkout", async (req, res) => {
         });
       }
       return created;
-    });
+    }, LOCK_TX);
 
     const payment = await createSkipcashPayment({
       Uid: crypto.randomUUID(),
       KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-      Amount: Number(total).toFixed(2),
+      Amount: fmt(total),
       FirstName: (first || "Customer").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Customer",
       LastName: (rest.join(" ") || "Catio").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Catio",
       Phone: phone.slice(0, 15),
@@ -853,7 +990,7 @@ router.post("/checkout", async (req, res) => {
       TransactionId: sale.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 40),
       Custom1: sale.id,
       WebhookUrl: `${(process.env.API_PUBLIC_URL || process.env.APP_PUBLIC_URL || "http://localhost:4000").replace(/\/$/, "")}/api/shop/payments/skipcash`,
-      ReturnUrl: `${publicBase()}/shop/orders/${sale.id}`,
+      ReturnUrl: `${publicBase(req)}/shop/orders/${sale.id}`,
     }).catch(async (err) => {
       await prisma.$transaction(async (tx) => {
         await releaseSaleHolds(tx, sale.id);
@@ -866,7 +1003,7 @@ router.post("/checkout", async (req, res) => {
       where: { id: sale.id },
       data: { gatewayPaymentId: payment.id, paymentReference: payment.id },
     });
-    res.status(201).json({ orderId: sale.id, payUrl: payment.payUrl, total: Number(total) });
+    res.status(201).json({ orderId: sale.id, reference: sale.reference, payUrl: payment.payUrl, total: riyals(total) });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Checkout failed" });
   }
@@ -892,85 +1029,10 @@ router.post("/payments/skipcash", async (req, res) => {
   if (!skipcashWebhookValid(body, req.headers.authorization)) {
     return res.status(401).json({ error: "Invalid signature" });
   }
-  const custom = String(body.Custom1 || "").trim();
-  const statusId = Number(body.StatusId);
-  if (custom.startsWith("till:")) return res.status(200).json({ ok: true });
-  if (custom.startsWith("booking:")) {
-    const booking = await prisma.appointment.findFirst({ where: { id: custom.slice(8) } });
-    if (!booking || booking.status === "CONFIRMED" || booking.status === "CANCELLED") return res.status(200).json({ ok: true });
-    if (statusId === 2 && booking.status === "PENDING_PAYMENT") {
-      await prisma.appointment.update({
-        where: { id: booking.id },
-        data: { status: "CONFIRMED", paymentReference: String(body.PaymentId || booking.paymentReference || "") },
-      });
-      if (booking.customerId) {
-        const buyer = await prisma.customer.findUnique({ where: { id: booking.customerId } });
-        await mailCustomer(buyer, "booking", `Booking ${booking.id} is confirmed.`);
-        await mailStaff(booking.organizationId, "alertBooking", `Grooming booking ${booking.id} is paid.`);
-      }
-    } else if ([3, 4, 5].includes(statusId) && booking.status === "PENDING_PAYMENT") {
-      await prisma.appointment.update({ where: { id: booking.id }, data: { status: "CANCELLED" } });
-    }
-    return res.status(200).json({ ok: true });
-  }
-  if (custom.startsWith("relocation:")) {
-    const request = await prisma.relocationRequest.findFirst({ where: { id: custom.slice(11) } });
-    if (!request || request.status === "PAID" || request.status === "CANCELLED") return res.status(200).json({ ok: true });
-    if (statusId === 2 && request.status === "QUOTE_SENT") {
-      const history = Array.isArray(request.history) ? request.history : [];
-      await prisma.relocationRequest.update({
-        where: { id: request.id },
-        data: {
-          status: "PAID",
-          paymentMethod: "ONLINE",
-          paidAt: new Date(),
-          history: [...history, { at: new Date().toISOString(), status: "PAID", note: "ONLINE" }],
-        },
-      });
-    }
-    return res.status(200).json({ ok: true });
-  }
-  const saleId = custom;
-  const sale = saleId
-    ? await prisma.sale.findFirst({ where: { id: saleId, orderChannel: "WEBSITE" } })
-    : null;
-  if (!sale) return res.status(200).json({ ok: true });
-  if (sale.webStatus === "CONFIRMED" || sale.webStatus === "CANCELLED") return res.status(200).json({ ok: true });
   try {
-    if (statusId === 2) {
-      const paid = Number(body.Amount);
-      if (Number.isFinite(paid) && Math.abs(paid - Number(sale.total)) > 0.05) {
-        await prisma.sale.update({ where: { id: sale.id }, data: { paymentReview: true } });
-        return res.status(200).json({ ok: true, review: true });
-      }
-      await prisma.$transaction(async (tx) => {
-        const current = await tx.sale.findUnique({ where: { id: sale.id } });
-        if (!current || current.webStatus !== "PENDING_PAYMENT") return;
-        await commitSaleHolds(tx, current);
-        await tx.sale.update({
-          where: { id: current.id },
-          data: {
-            webStatus: "CONFIRMED",
-            amountPaid: current.total,
-            amountDue: 0,
-            invoiceStatus: "PAID",
-            paidAt: new Date(),
-            paymentReference: String(body.PaymentId || current.paymentReference || ""),
-          },
-        });
-      });
-      if (sale.customerId) {
-        const buyer = await prisma.customer.findUnique({ where: { id: sale.customerId } });
-        await mailCustomer(buyer, "order", `Order ${sale.id} is confirmed.`);
-        if (buyer) await mailStaff(buyer.organizationId, "alertOrder", `Website order ${sale.id} is paid.`);
-      }
-    } else if ([3, 4, 5].includes(statusId)) {
-      await prisma.$transaction(async (tx) => {
-        await releaseSaleHolds(tx, sale.id);
-        await tx.sale.update({ where: { id: sale.id }, data: { webStatus: "CANCELLED" } });
-      });
-    }
-    res.status(200).json({ ok: true });
+    // Same guarded confirm path as the server's own payment lookup (lib/gatewayNotify.js).
+    const result = await applyGatewayResult(body, { req });
+    res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message || "Could not update the order" });
   }

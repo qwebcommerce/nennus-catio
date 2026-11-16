@@ -1,10 +1,27 @@
-export const PETS = [
-  { id: "cats", en: "Cats", ar: "القطط", image: "/images/cat-care.png" },
-  { id: "dogs", en: "Dogs", ar: "الكلاب", image: "/images/reference-refresh/dog-portrait.png" },
-  { id: "birds", en: "Birds", ar: "الطيور", image: "/images/bird.png" },
-  { id: "small-pets", en: "Small Pets", ar: "الحيوانات الصغيرة", image: "/images/reference-refresh/rabbit-portrait.png" },
-  { id: "other-pets", en: "Other Pets", ar: "حيوانات أخرى", image: "/images/reference-refresh/hamster-portrait.png" },
-  { id: "reptiles", en: "Reptiles", ar: "الزواحف", image: "/images/reference-refresh/tortoise-portrait.png" },
-  { id: "fish", en: "Fish", ar: "الأسماك", image: "/images/reference-refresh/fish-portrait.png" },
-  { id: "exotic-pets", en: "Exotic Pets", ar: "حيوانات غريبة", image: "/images/reference-refresh/lizard-portrait.png" },
+/** Pictures for pet types. The pet types themselves come from staff (Pet types page) via /api/shop/meta. */
+const PICTURES = [
+  { words: ["cat", "kitten", "قط", "قطط"], image: "/images/cat-care.png" },
+  { words: ["dog", "puppy", "كلب", "كلاب"], image: "/images/reference-refresh/dog-portrait.png" },
+  { words: ["bird", "parrot", "طير", "طيور", "ببغ"], image: "/images/bird.png" },
+  { words: ["rabbit", "guinea", "أرنب", "ارنب"], image: "/images/reference-refresh/rabbit-portrait.png" },
+  { words: ["hamster", "rodent", "small", "هامستر", "قوارض"], image: "/images/reference-refresh/hamster-portrait.png" },
+  { words: ["tortoise", "turtle", "reptile", "سلحف", "زواحف", "زاحف"], image: "/images/reference-refresh/tortoise-portrait.png" },
+  { words: ["fish", "aquarium", "سمك", "أسماك"], image: "/images/reference-refresh/fish-portrait.png" },
+  { words: ["lizard", "exotic", "سحلية", "غريب"], image: "/images/reference-refresh/lizard-portrait.png" },
 ];
+const FALLBACK_IMAGE = "/images/cat-care.png";
+
+export function petImage(type) {
+  const blob = `${type?.name || ""} ${type?.nameEn || ""}`.toLowerCase();
+  return PICTURES.find((row) => row.words.some((word) => blob.includes(word)))?.image || FALLBACK_IMAGE;
+}
+
+/** Staff-defined pet types as filter buttons: { id, en, ar, image }. */
+export function petGroups(petTypes) {
+  return (petTypes || []).map((type) => ({
+    id: type.id,
+    en: type.nameEn || type.name,
+    ar: type.name || type.nameEn,
+    image: petImage(type),
+  }));
+}

@@ -1,38 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api } from "../../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
+import { readCart, writeCart } from "../../site/cartStore.js";
+import { CartLines } from "./CartLines.jsx";
+import { statusLabel } from "../../utils/statusLabels.js";
+import { formatDateTime } from "../../utils/qatarDate.js";
+import { lineDirhams, riyals, toDirhams } from "../../utils/money.js";
 
-const CART_KEY = "nennus.shopCart";
-const TOKEN_KEY = "nennus.shopToken";
 
-function readCart() {
-  try {
-    const rows = JSON.parse(localStorage.getItem(CART_KEY) || "[]");
-    return Array.isArray(rows) ? rows : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCart(rows) {
-  localStorage.setItem(CART_KEY, JSON.stringify(rows));
-}
-
+/** The customer session is an httpOnly cookie (nc_customer); api() sends credentials. */
 function shopApi(path, options = {}) {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const headers = { ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return api(path, { ...options, headers });
+  return api(path, options);
 }
 
 function money(n) {
   return Number(n || 0).toFixed(2);
 }
 
+/** Line amount in riyals, worked out in whole dirhams like the server (NFR-03). */
 function lineTotal(line) {
-  if (line.sellBy === "WEIGHT") return (Number(line.price) * Number(line.quantity)) / 1000;
-  return Number(line.price) * Number(line.quantity);
+  return riyals(lineDirhams(line.price, line.quantity, line.sellBy));
 }
 
 export function ShopCatalog() {
@@ -191,12 +179,13 @@ export function ShopCheckout() {
     }
     shopApi(`/api/shop/windows?date=${form.deliveryDate}`).then(setWindows).catch(() => setWindows([]));
   }, [fulfillment, form.deliveryDate]);
-  const goods = useMemo(() => cart.reduce((sum, line) => sum + lineTotal(line), 0), [cart]);
-  const areaFee = meta?.areas?.find((a) => a.id === form.areaId)?.fee || 0;
+  // Summed in whole dirhams, shown in riyals.
+  const goods = useMemo(() => riyals(cart.reduce((sum, line) => sum + lineDirhams(line.price, line.quantity, line.sellBy), 0)), [cart]);
+  const areaFee = toDirhams(meta?.areas?.find((a) => a.id === form.areaId)?.fee || 0);
   const houseFee = fulfillment === "DELIVERY"
-    ? cart.reduce((sum, line) => sum + Number(line.houseDeliveryFee || 0) * (line.sellBy === "WEIGHT" ? 1 : Number(line.quantity) || 1), 0)
+    ? cart.reduce((sum, line) => sum + toDirhams(line.houseDeliveryFee || 0) * (line.sellBy === "WEIGHT" ? 1 : Number(line.quantity) || 1), 0)
     : 0;
-  const fee = areaFee + houseFee;
+  const fee = riyals(areaFee + houseFee);
   const pay = async (e) => {
     e.preventDefault();
     setBusy(true);
@@ -270,12 +259,9 @@ export function ShopCheckout() {
           ) : null}
         </div>
         <aside className="site-flow__card">
-          {cart.length === 0 ? <p className="site-flow__lead">{t("shop.emptyCart")}</p> : cart.map((line, index) => (
-            <div className="site-flow__line" key={`${line.productId}-${line.variantId}-${index}`}>
-              <span>{locale === "en" ? line.nameEn || line.name : line.name} {line.variantLabel}</span>
-              <strong>{money(lineTotal(line))} QAR</strong>
-            </div>
-          ))}
+          {cart.length === 0 ? <p className="site-flow__lead">{t("shop.emptyCart")}</p> : (
+            <CartLines cart={cart} onChange={(rows) => { writeCart(rows); setCart(rows); }} />
+          )}
           <div className="site-flow__line"><span>{t("shop.goods")}</span><span>{money(goods)} QAR</span></div>
           <div className="site-flow__total"><span>{t("shop.fee")}</span><span>{money(fulfillment === "DELIVERY" ? fee : 0)} QAR</span></div>
           <button className="button button--primary" type="submit" disabled={busy || !cart.length}>{busy ? t("common.loading") : t("shop.pay")}</button>
@@ -287,7 +273,7 @@ export function ShopCheckout() {
 }
 
 export function ShopAccount() {
-  const { t } = useI18n();
+  const { t, locale, setLocale } = useI18n();
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "" });
   const [me, setMe] = useState(null);
@@ -295,26 +281,29 @@ export function ShopAccount() {
   const [msgOk, setMsgOk] = useState(false);
   const [pet, setPet] = useState({ name: "", breed: "", ageText: "" });
   const [address, setAddress] = useState({ line1: "", area: "", city: "Doha" });
+  const [profile, setProfile] = useState({ name: "", phone: "", locale: "ar" });
   const loadMe = () => shopApi("/api/shop/me").then(setMe).catch(() => setMe(null));
   useEffect(() => { loadMe(); }, []);
+  useEffect(() => {
+    if (me) setProfile({ name: me.name || "", phone: me.phone || "", locale: me.locale || "ar" });
+  }, [me]);
   const submit = async (e) => {
     e.preventDefault();
     setMsg("");
     try {
       if (mode === "register") {
-        const result = await api("/api/shop/register", { method: "POST", body: form });
+        const result = await api("/api/shop/register", { method: "POST", body: { ...form, locale: locale === "en" ? "en" : "ar" } });
         setMsgOk(true);
         setMsg(result.verifyLink ? result.verifyLink : t("shop.checkEmail"));
         return;
       }
       if (mode === "forgot") {
-        const result = await api("/api/shop/forgot", { method: "POST", body: { email: form.email } });
+        const result = await api("/api/shop/forgot", { method: "POST", body: { email: form.email, locale: locale === "en" ? "en" : "ar" } });
         setMsgOk(true);
         setMsg(result.resetLink || t("shop.resetSent"));
         return;
       }
-      const result = await api("/api/shop/login", { method: "POST", body: { email: form.email, password: form.password } });
-      localStorage.setItem(TOKEN_KEY, result.token);
+      await api("/api/shop/login", { method: "POST", body: { email: form.email, password: form.password } });
       await loadMe();
     } catch (err) {
       setMsgOk(false);
@@ -336,12 +325,41 @@ export function ShopAccount() {
               <Link to="/pet-houses">{t("shop.houses")}</Link>
               <Link to="/shop/relocation">{t("shop.relocation")}</Link>
             </div>
-            <button className="button button--secondary" type="button" onClick={() => { localStorage.removeItem(TOKEN_KEY); setMe(null); }}>{t("shop.signOut")}</button>
+            <button className="button button--secondary" type="button" onClick={() => { api("/api/shop/logout", { method: "POST" }).catch(() => {}); setMe(null); }}>{t("shop.signOut")}</button>
           </div>
+          <section className="site-flow__card">
+            <h2>{t("shop.profile")}</h2>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                // NFR-13: save over the version of the profile that was loaded.
+                const next = await shopApi("/api/shop/me", { method: "PATCH", body: { ...profile, version: me.version } });
+                setMe(next);
+                if (next.locale && next.locale !== locale) setLocale(next.locale);
+                setMsgOk(true);
+                setMsg(t("shop.saved"));
+              } catch (err) {
+                setMsgOk(false);
+                setMsg(editErrorMessage(err, t));
+                // Changed elsewhere (another tab, or the shop): reload the latest profile.
+                if (isStaleEdit(err)) await loadMe();
+              }
+            }}>
+              <label className="site-flow__field"><span>{t("customers.name")}</span><input required value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></label>
+              <label className="site-flow__field"><span>{t("customers.phone")}</span><input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} /></label>
+              <label className="site-flow__field"><span>{t("shop.language")}</span>
+                <select value={profile.locale} onChange={(e) => setProfile({ ...profile, locale: e.target.value })}>
+                  <option value="ar">العربية</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+              <button className="button button--primary" type="submit">{t("common.save")}</button>
+            </form>
+          </section>
           <section className="site-flow__card">
             <h2>{t("shop.pets")}</h2>
             <div className="site-flow__list">
-              {(me.pets || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.name}</span><span>{[row.breed, row.ageText].filter(Boolean).join(" · ")}</span></div>)}
+              {(me.pets || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.name}</span><span>{[row.breed, row.ageText].filter(Boolean).join(" · ")}</span><button type="button" onClick={() => shopApi(`/api/shop/me/pets/${row.id}`, { method: "DELETE" }).then(loadMe).catch((err) => { setMsgOk(false); setMsg(err.message); })}>{t("common.delete")}</button></div>)}
             </div>
             <form onSubmit={async (e) => { e.preventDefault(); await shopApi("/api/shop/me/pets", { method: "POST", body: pet }); setPet({ name: "", breed: "", ageText: "" }); await loadMe(); }}>
               <label className="site-flow__field"><span>{t("shop.petName")}</span><input required value={pet.name} onChange={(e) => setPet({ ...pet, name: e.target.value })} /></label>
@@ -355,7 +373,7 @@ export function ShopAccount() {
           <section className="site-flow__card">
             <h2>{t("shop.addresses")}</h2>
             <div className="site-flow__list">
-              {(me.addresses || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.line1}</span><span>{row.area}</span></div>)}
+              {(me.addresses || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.line1}</span><span>{row.area}</span><button type="button" onClick={() => shopApi(`/api/shop/me/addresses/${row.id}`, { method: "DELETE" }).then(loadMe).catch((err) => { setMsgOk(false); setMsg(err.message); })}>{t("common.delete")}</button></div>)}
             </div>
             <form onSubmit={async (e) => { e.preventDefault(); await shopApi("/api/shop/me/addresses", { method: "POST", body: address }); setAddress({ line1: "", area: "", city: "Doha" }); await loadMe(); }}>
               <label className="site-flow__field"><span>{t("shop.address")}</span><input required value={address.line1} onChange={(e) => setAddress({ ...address, line1: e.target.value })} /></label>
@@ -392,8 +410,7 @@ export function ShopVerify() {
   useEffect(() => {
     const token = params.get("token");
     api("/api/shop/verify", { method: "POST", body: { token } })
-      .then((result) => {
-        localStorage.setItem(TOKEN_KEY, result.token);
+      .then(() => {
         setMsg(t("shop.verified"));
       })
       .catch((e) => setMsg(e.message));
@@ -436,6 +453,12 @@ export function ShopReset() {
   );
 }
 
+/** Back from SkipCash: the return URL carries ?id=<payment id>. The server looks it up itself (FR-76). */
+function returnQuery() {
+  const paymentId = new URLSearchParams(window.location.search).get("id");
+  return paymentId ? `?paymentId=${encodeURIComponent(paymentId)}` : "";
+}
+
 export function ShopOrders() {
   const { id } = useParams();
   const { t, locale } = useI18n();
@@ -443,7 +466,7 @@ export function ShopOrders() {
   const [one, setOne] = useState(null);
   const [msg, setMsg] = useState("");
   useEffect(() => {
-    if (id) shopApi(`/api/shop/orders/${id}`).then(setOne).catch((e) => setMsg(e.message));
+    if (id) shopApi(`/api/shop/orders/${id}${returnQuery()}`).then(setOne).catch((e) => setMsg(e.message));
     else shopApi("/api/shop/orders").then(setRows).catch((e) => setMsg(e.message));
   }, [id]);
   const cancel = async () => {
@@ -456,8 +479,10 @@ export function ShopOrders() {
       <div className="nc-shell" style={{ padding: 28 }}>
         {one ? (
           <>
-            <h1>{one.status}</h1>
-            <div>{money(one.total)} QAR · {one.fulfillment}</div>
+            <h1>{statusLabel("order", one.status, locale)}</h1>
+            <div>{t("shop.reference")}: {one.reference}</div>
+            {one.createdAt ? <div>{formatDateTime(one.createdAt, locale)}</div> : null}
+            <div>{money(one.total)} QAR · {statusLabel("fulfillment", one.fulfillment, locale)}</div>
             {(one.items || []).map((item, index) => (
               <div key={index}>{locale === "en" ? item.nameEn || item.name : item.name} · {item.sellBy === "WEIGHT" ? `${item.quantity / 1000} kg` : item.quantity}</div>
             ))}
@@ -471,7 +496,7 @@ export function ShopOrders() {
   return (
     <div className="nc-shell" style={{ padding: 28 }}>
       <h1>{t("shop.orders")}</h1>
-      {rows.map((row) => <div key={row.id}><Link to={`/shop/orders/${row.id}`}>{row.status} · {money(row.total)} QAR</Link></div>)}
+      {rows.map((row) => <div key={row.id}><Link to={`/shop/orders/${row.id}`}>{row.reference} · {statusLabel("order", row.status, locale)} · {money(row.total)} QAR{row.createdAt ? ` · ${formatDateTime(row.createdAt, locale)}` : ""}</Link></div>)}
       {msg ? <div>{msg}</div> : null}
     </div>
   );

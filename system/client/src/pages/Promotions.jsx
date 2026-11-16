@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 
 const KINDS = ["PERCENT", "FIXED", "PRODUCT", "CATEGORY", "BUNDLE", "BOGO"];
@@ -75,7 +75,7 @@ export default function Promotions() {
         <article key={row.id} className="card">
           <strong>{row.name} · {row.kind} · {row.channel}</strong>
           <div>{row.code || t("shop.automatic")} · {row.active ? t("shop.active") : t("shop.inactive")}</div>
-          <button type="button" onClick={() => api(`/api/promotions/${row.id}`, { method: "PATCH", body: { active: !row.active } }).then(load)}>{row.active ? t("shop.inactive") : t("shop.active")}</button>
+          <button type="button" onClick={() => api(`/api/promotions/${row.id}`, { method: "PATCH", body: { active: !row.active, version: row.version } }).then(load).catch((e) => { setMsg(editErrorMessage(e, t)); if (isStaleEdit(e)) load(); })}>{row.active ? t("shop.inactive") : t("shop.active")}</button>
         </article>
       ))}
       {msg ? <div>{msg}</div> : null}
