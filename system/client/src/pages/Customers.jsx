@@ -1,10 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 
 const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "", creditApproved: false, creditLimit: "" });
+
+/** Edit-form copy of a customer row; keeps `version` so the save names the copy it was loaded from. */
+function editFormOf(c) {
+  return {
+    ...c,
+    accountBalance: Number(c.accountBalance ?? 0).toFixed(2),
+    creditLimit: c.creditLimit != null ? String(c.creditLimit) : "",
+  };
+}
 
 export default function Customers() {
   const { t } = useI18n();
@@ -73,13 +82,35 @@ export default function Customers() {
           accountBalance: Number(String(balRaw).replace(",", ".") || "0"),
           creditApproved: Boolean(editing.creditApproved),
           creditLimit: editing.creditLimit === "" ? null : Number(editing.creditLimit),
+          version: editing.version,
         },
       });
       setEditing(null);
       await load();
       setMsg(t("customers.saved"));
     } catch (x) {
-      setMsg(x.message || t("customers.saveFailed"));
+      setMsg(isStaleEdit(x) ? editErrorMessage(x, t) : x.message || t("customers.saveFailed"));
+      if (isStaleEdit(x)) {
+        // NFR-13: someone else saved this customer first — reload it into the form.
+        const rows = await api(`/api/customers?${new URLSearchParams(q.trim() ? { q: q.trim() } : {}).toString()}`).catch(() => null);
+        if (Array.isArray(rows)) {
+          setList(rows);
+          const fresh = rows.find((c) => c.id === editing.id);
+          setEditing(fresh ? editFormOf(fresh) : null);
+        }
+      }
+    }
+  };
+
+  const saveTags = async (e) => {
+    e.preventDefault();
+    try {
+      const saved = await api(`/api/customers/${recordId}`, { method: "PATCH", body: { tags: record.tags || "", version: record.version } });
+      setRecord((r) => (r ? { ...r, version: saved.version } : r));
+      setMsg(t("customers.saved"));
+    } catch (x) {
+      setMsg(editErrorMessage(x, t));
+      if (isStaleEdit(x)) setRecord(await api(`/api/customers/${recordId}/record`).catch(() => null));
     }
   };
 
@@ -185,7 +216,7 @@ export default function Customers() {
           {(record?.appointments || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.service?.name || t("shop.grooming")} · {row.status}</div>)}
           {(record?.relocationRequests || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.destination} · {row.status}</div>)}
           {recordId && record ? (
-            <form onSubmit={async (e) => { e.preventDefault(); await api(`/api/customers/${recordId}`, { method: "PATCH", body: { tags: record.tags || "" } }); setMsg(t("customers.saved")); }} style={{ display: "flex", gap: 8 }}>
+            <form onSubmit={saveTags} style={{ display: "flex", gap: 8 }}>
               <input placeholder={t("shop.tags")} value={record.tags || ""} onChange={(e) => setRecord({ ...record, tags: e.target.value })} />
               <button className="btn-touch" type="submit">{t("common.save")}</button>
             </form>
@@ -310,13 +341,7 @@ export default function Customers() {
                           <button
                             type="button"
                             className="btn-touch"
-                            onClick={() =>
-                              setEditing({
-                                ...c,
-                                accountBalance: Number(c.accountBalance ?? 0).toFixed(2),
-                                creditLimit: c.creditLimit != null ? String(c.creditLimit) : "",
-                              })
-                            }
+                            onClick={() => setEditing(editFormOf(c))}
                           >
                             {t("common.edit")}
                           </button>

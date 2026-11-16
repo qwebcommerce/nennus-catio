@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { fromQatarInput, qatarTime, qatarToday, toQatarInput } from "../utils/qatarTime.js";
@@ -159,15 +159,21 @@ export default function Appointments() {
     api(`/api/appointments/${a.id}/refund`, { method: "POST", body: { amount: Number(amount) } }).then(loadAppointments).catch(fail);
   };
 
-  const setStatus = async (id, status) => {
+  /** NFR-13: changes send the booking version shown; a stale copy shows the notice and reloads. */
+  const editFailed = (x, fallbackKey) => {
+    setMsg(isStaleEdit(x) ? editErrorMessage(x, t) : x.message || t(fallbackKey));
+    if (isStaleEdit(x)) loadAppointments().catch(() => {});
+  };
+
+  const setStatus = async (a, status) => {
     try {
-      await api(`/api/appointments/${id}`, {
+      await api(`/api/appointments/${a.id}`, {
         method: "PATCH",
-        body: { status },
+        body: { status, version: a.version },
       });
       await loadAppointments();
     } catch (x) {
-      setMsg(x.message || t("appointments.msgStatusFail"));
+      editFailed(x, "appointments.msgStatusFail");
     }
   };
 
@@ -307,17 +313,17 @@ export default function Appointments() {
                   <td style={td}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {(NEXT[a.status] || []).includes("IN_PROGRESS") ? (
-                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "IN_PROGRESS")}>
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a, "IN_PROGRESS")}>
                           {t("shop.inProgress")}
                         </button>
                       ) : null}
                       {(NEXT[a.status] || []).includes("DONE") ? (
-                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "DONE")}>
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a, "DONE")}>
                           {t("appointments.done")}
                         </button>
                       ) : null}
                       {(NEXT[a.status] || []).includes("NO_SHOW") ? (
-                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "NO_SHOW")}>
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a, "NO_SHOW")}>
                           {t("shop.noShow")}
                         </button>
                       ) : null}
@@ -327,13 +333,13 @@ export default function Appointments() {
                           if (!next) return;
                           const start = fromQatarInput(next.trim().slice(0, 16));
                           if (!start) return;
-                          api(`/api/appointments/${a.id}`, { method: "PATCH", body: { startAt: start } }).then(loadAppointments).catch((x) => setMsg(x.message));
+                          api(`/api/appointments/${a.id}`, { method: "PATCH", body: { startAt: start, version: a.version } }).then(loadAppointments).catch((x) => editFailed(x, "appointments.msgStatusFail"));
                         }}>
                           {t("shop.move")}
                         </button>
                       ) : null}
                       {(NEXT[a.status] || []).includes("CANCELLED") ? (
-                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "CANCELLED")}>
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a, "CANCELLED")}>
                           {t("appointments.cancel")}
                         </button>
                       ) : null}

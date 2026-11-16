@@ -39,6 +39,19 @@ export function resolveApiErrorMessage(data, fallback = "Request failed") {
   return fallback;
 }
 
+/**
+ * NFR-13: an edit saved from an older copy of a record is refused with 409 STALE_EDIT
+ * (or 428 VERSION_REQUIRED when no version was sent). Forms reload the record on it.
+ */
+export function isStaleEdit(err) {
+  return err?.code === "STALE_EDIT" || err?.code === "VERSION_REQUIRED";
+}
+
+/** The message to show for a failed save: the bilingual stale-edit notice, else the server message. */
+export function editErrorMessage(err, t) {
+  return isStaleEdit(err) ? t("common.staleEdit") : err?.message || String(err);
+}
+
 export async function api(path, options = {}) {
   const headers = baseHeaders(options.headers);
   let body = options.body;

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -73,10 +73,11 @@ export default function Users() {
   const updateRole = async (u, role) => {
     if (u.isOrgOwner) return;
     try {
-      await api(`/api/users/${u.id}`, { method: "PATCH", body: { role } });
+      await api(`/api/users/${u.id}`, { method: "PATCH", body: { role, version: u.version } });
       await load();
     } catch (err) {
-      showToast(err.message || "Failed", "error");
+      // A stale copy (NFR-13) shows the bilingual notice; the reload brings the latest values.
+      showToast(editErrorMessage(err, t) || "Failed", "error");
       await load();
     }
   };
@@ -91,11 +92,11 @@ export default function Users() {
     try {
       await api(`/api/users/${u.id}`, {
         method: "PATCH",
-        body: { branchId: branchId || null },
+        body: { branchId: branchId || null, version: u.version },
       });
       await load();
     } catch (err) {
-      showToast(err.message || "Failed", "error");
+      showToast(editErrorMessage(err, t) || "Failed", "error");
       await load();
     }
   };

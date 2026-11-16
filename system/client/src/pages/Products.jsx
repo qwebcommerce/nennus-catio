@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { api, apiBlob, apiUploadExcel, apiUploadImage } from "../api/client.js";
+import { api, apiBlob, apiUploadExcel, apiUploadImage, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -126,6 +126,7 @@ export default function Products() {
         setTotal(Array.isArray(res) ? res.length : 0);
       }
       setLow(l);
+      return res && Array.isArray(res.items) ? res.items : Array.isArray(res) ? res : [];
     } finally {
       setListLoading(false);
     }
@@ -205,9 +206,12 @@ export default function Products() {
       leadTimeDays: p.leadTimeDays != null ? String(p.leadTimeDays) : "",
       houseDeliveryFee: p.houseDeliveryFee != null ? String(p.houseDeliveryFee) : "0",
       takesStock: p.takesStock !== false,
+      // NFR-13: the save names the version this copy was loaded at.
+      version: p.version,
       variants: Array.isArray(p.variants)
         ? p.variants.map((v) => ({
             id: v.id,
+            version: v.version,
             label: v.label || "",
             labelEn: v.labelEn || "",
             sku: v.sku || "",
@@ -300,6 +304,7 @@ export default function Products() {
           .filter((v) => String(v.label || v.labelEn || "").trim() && v.price !== "")
           .map((v) => ({
             id: v.id,
+            version: v.version,
             label: v.label || v.labelEn,
             labelEn: v.labelEn,
             sku: v.sku || null,
@@ -330,7 +335,7 @@ export default function Products() {
       } else if (formMode === "edit" && editId) {
         await api(`/api/products/${editId}`, {
           method: "PATCH",
-          body: catalogBody,
+          body: { ...catalogBody, version: form.version },
         });
         const bid = activeBranchId;
         const reason = String(form.stockReason || "").trim();
@@ -359,8 +364,16 @@ export default function Products() {
       closeFormModal();
       await load();
     } catch (ex) {
-      setFormError(ex.message || t("products.saveFailed"));
-      showToast(ex.message || t("products.saveFailed"), "error");
+      const message = isStaleEdit(ex) ? editErrorMessage(ex, t) : ex.message || t("products.saveFailed");
+      showToast(message, "error");
+      if (isStaleEdit(ex) && editId) {
+        // Someone else saved this product first: reload it into the form (their values, new version).
+        const rows = await load().catch(() => null);
+        const fresh = Array.isArray(rows) ? rows.find((row) => row.id === editId) : null;
+        if (fresh) openEditModal(fresh);
+        else closeFormModal();
+      }
+      setFormError(message);
     } finally {
       setFormBusy(false);
     }
@@ -381,12 +394,13 @@ export default function Products() {
     try {
       await api(`/api/products/${p.id}`, {
         method: "PATCH",
-        body: { isActive: !p.isActive },
+        body: { isActive: !p.isActive, version: p.version },
       });
       showToast(p.isActive ? t("products.toastDisabled") : t("products.toastEnabled"), "success");
       await load();
     } catch (e) {
-      showToast(e.message || t("products.saveFailed"), "error");
+      showToast(isStaleEdit(e) ? editErrorMessage(e, t) : e.message || t("products.saveFailed"), "error");
+      if (isStaleEdit(e)) await load().catch(() => {});
     }
   };
 
@@ -442,9 +456,12 @@ export default function Products() {
     try {
       for (const id of ids) {
         try {
+          // The version shown on this page; a product picked on another page is read first.
+          const shown = list.find((row) => row.id === id);
+          const version = shown ? shown.version : (await api(`/api/products/${id}`)).version;
           await api(`/api/products/${id}`, {
             method: "PATCH",
-            body: { isActive },
+            body: { isActive, version },
           });
           ok += 1;
         } catch {

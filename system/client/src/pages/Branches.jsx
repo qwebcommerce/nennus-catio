@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useBranchContext } from "../context/BranchContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
@@ -82,6 +82,7 @@ export default function Branches() {
           address: editForm.address.trim() || null,
           kind: editForm.kind || "SHOP",
           isActive: editForm.isActive !== false,
+          version: editBranch.version,
         },
       });
       setEditBranch(null);
@@ -89,7 +90,19 @@ export default function Branches() {
       await reloadBranches();
       showToast(t("branches.toastUpdated"), "success");
     } catch (err) {
-      showToast(apiErrorMessage(err, t), "error");
+      if (isStaleEdit(err)) {
+        // NFR-13: someone else saved this location first — reload it into the form.
+        showToast(editErrorMessage(err, t), "error");
+        const data = await api("/api/branches").catch(() => null);
+        if (Array.isArray(data)) {
+          setList(data);
+          const fresh = data.find((x) => x.id === editBranch.id);
+          if (fresh) openEdit(fresh);
+          else setEditBranch(null);
+        }
+      } else {
+        showToast(apiErrorMessage(err, t), "error");
+      }
     } finally {
       setEditBusy(false);
     }

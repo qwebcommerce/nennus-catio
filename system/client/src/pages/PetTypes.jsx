@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 
 export default function PetTypes() {
@@ -12,23 +12,27 @@ export default function PetTypes() {
   const [windowForm, setWindowForm] = useState({ label: "", labelEn: "", startTime: "10:00", endTime: "13:00", seats: "4", weekday: "" });
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const [msg, setMsg] = useState("");
-  const fail = (e) => setMsg(e.message);
+  // NFR-13: every edit sends the version it was loaded at; a stale copy is reloaded.
+  const fail = (e) => {
+    setMsg(editErrorMessage(e, t));
+    if (isStaleEdit(e)) load().catch(() => {});
+  };
   const editArea = (row) => {
     const fee = window.prompt(`${t("shop.edit")}: ${row.name} (QAR)`, String(Number(row.fee).toFixed(2)));
     if (fee == null) return;
-    api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { fee: Number(fee) } }).then(load).catch(fail);
+    api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { fee: Number(fee), version: row.version } }).then(load).catch(fail);
   };
   const toggleArea = (row) =>
-    api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { isActive: !row.isActive } }).then(load).catch(fail);
+    api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { isActive: !row.isActive, version: row.version } }).then(load).catch(fail);
   const editWindow = (row) => {
     const text = window.prompt(`${t("shop.edit")}: ${row.label} (HH:MM-HH:MM seats)`, `${row.startTime}-${row.endTime} ${row.seats}`);
     if (!text) return;
     const m = /^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s+(\d+)\s*$/.exec(text);
     if (!m) return setMsg("HH:MM-HH:MM seats");
-    api(`/api/delivery-setup/windows/${row.id}`, { method: "PATCH", body: { startTime: m[1], endTime: m[2], seats: Number(m[3]) } }).then(load).catch(fail);
+    api(`/api/delivery-setup/windows/${row.id}`, { method: "PATCH", body: { startTime: m[1], endTime: m[2], seats: Number(m[3]), version: row.version } }).then(load).catch(fail);
   };
   const toggleWindow = (row) =>
-    api(`/api/delivery-setup/windows/${row.id}`, { method: "PATCH", body: { isActive: !row.isActive } }).then(load).catch(fail);
+    api(`/api/delivery-setup/windows/${row.id}`, { method: "PATCH", body: { isActive: !row.isActive, version: row.version } }).then(load).catch(fail);
   const load = async () => {
     const [petRows, areaRows, windowRows] = await Promise.all([
       api("/api/pet-types"),

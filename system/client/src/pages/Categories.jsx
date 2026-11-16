@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -63,9 +63,16 @@ export default function Categories() {
       await load();
       if (successMsg) showToast(successMsg, "success");
     } catch (e) {
-      const msg = e.message || "Request failed";
+      const msg = editErrorMessage(e, t) || "Request failed";
       setError(msg);
       showToast(msg, "error");
+      // NFR-13: someone else saved first — reload the latest rows and close the stale editor.
+      if (isStaleEdit(e)) {
+        setEditCat(null);
+        setEditSub(null);
+        setEditSku(null);
+        await load().catch(() => {});
+      }
     } finally {
       setBusy(false);
     }
@@ -109,7 +116,7 @@ export default function Categories() {
     run(async () => {
       await api(`/api/catalog/categories/${editCat.id}`, {
         method: "PATCH",
-        body: { name: checked.value },
+        body: { name: checked.value, version: editCat.version },
       });
       setEditCat(null);
     }, t("catalog.toastUpdated"));
@@ -162,7 +169,7 @@ export default function Categories() {
     run(async () => {
       await api(`/api/catalog/subcategories/${editSub.id}`, {
         method: "PATCH",
-        body: { categoryId: editSub.categoryId, name: checked.value },
+        body: { categoryId: editSub.categoryId, name: checked.value, version: editSub.version },
       });
       setEditSub(null);
     }, t("catalog.toastUpdated"));
@@ -227,6 +234,7 @@ export default function Categories() {
           code: checked.value,
           name: label.value,
           subcategoryId: editSku.subcategoryId || null,
+          version: editSku.version,
         },
       });
       setEditSku(null);
@@ -332,7 +340,7 @@ export default function Categories() {
                           disabled={busy}
                           onClick={() => {
                             setError("");
-                            setEditCat({ id: c.id, name: c.name || "" });
+                            setEditCat({ id: c.id, name: c.name || "", version: c.version });
                           }}
                         >
                           {t("common.edit")}
@@ -443,7 +451,7 @@ export default function Categories() {
                           disabled={busy}
                           onClick={() => {
                             setError("");
-                            setEditSub({ id: s.id, name: s.name || "", categoryId: s.categoryId });
+                            setEditSub({ id: s.id, name: s.name || "", categoryId: s.categoryId, version: s.version });
                           }}
                         >
                           {t("common.edit")}
@@ -570,6 +578,7 @@ export default function Categories() {
                               code: s.code || "",
                               name: s.name || "",
                               subcategoryId: s.subcategoryId || "",
+                              version: s.version,
                             });
                           }}
                         >
