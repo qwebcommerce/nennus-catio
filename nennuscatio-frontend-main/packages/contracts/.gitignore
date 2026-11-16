@@ -1,2 +1,0 @@
-.test-dist/
-# dist/ is ignored by the repository root .gitignore; it is rebuilt by `pnpm contracts:build`.
