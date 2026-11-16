@@ -1,7 +1,21 @@
 const BASE = import.meta.env.VITE_API_URL || "";
 
-export function getToken() {
-  return localStorage.getItem("token");
+/**
+ * Sessions are httpOnly cookies set by the server (NFR-11): page scripts never see the token.
+ * Every request sends credentials and the X-Requested-With header (CSRF guard on the server).
+ */
+function baseHeaders(extra) {
+  const headers = new Headers(extra || {});
+  if (!headers.has("X-Requested-With")) headers.set("X-Requested-With", "XMLHttpRequest");
+  return headers;
+}
+
+/** Remove the legacy localStorage tokens left by older builds. */
+try {
+  localStorage.removeItem("token");
+  localStorage.removeItem("nennus.shopToken");
+} catch {
+  /* ignore */
 }
 
 function readUiLocale() {
@@ -26,11 +40,7 @@ export function resolveApiErrorMessage(data, fallback = "Request failed") {
 }
 
 export async function api(path, options = {}) {
-  const headers = new Headers(options.headers || {});
-  const token = getToken();
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
+  const headers = baseHeaders(options.headers);
   let body = options.body;
   if (body && typeof body === "object" && !(body instanceof FormData)) {
     if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -40,7 +50,7 @@ export async function api(path, options = {}) {
     ...options,
     headers,
     body,
-    credentials: options.credentials ?? "same-origin",
+    credentials: "include",
   });
   const text = await res.text();
   let data = null;
@@ -59,12 +69,9 @@ export async function api(path, options = {}) {
   return data;
 }
 
-/** تنزيل ملف ثنائي (مثل Excel) مع نفس التوكن */
+/** تنزيل ملف ثنائي (مثل Excel) بجلسة الكوكي */
 export async function apiBlob(path) {
-  const headers = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${BASE}${path}`, { headers });
+  const res = await fetch(`${BASE}${path}`, { headers: baseHeaders(), credentials: "include" });
   if (!res.ok) {
     const text = await res.text();
     let data = null;
@@ -84,18 +91,16 @@ export async function apiBlob(path) {
 
 /** رفع ملف صورة منتج (يُخزَّن في قاعدة البيانات) */
 export async function apiUploadImage(path, file, extraFields = {}) {
-  const token = getToken();
   const fd = new FormData();
   fd.append("file", file);
   for (const [k, v] of Object.entries(extraFields || {})) {
     if (v != null && String(v).trim() !== "") fd.append(k, String(v));
   }
-  const headers = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers,
+    headers: baseHeaders(),
     body: fd,
+    credentials: "include",
   });
   const text = await res.text();
   let data = null;
@@ -116,16 +121,14 @@ export async function apiUploadImage(path, file, extraFields = {}) {
 
 /** رفع ملف Excel للاستيراد — branchId مطلوب في الاستعلام */
 export async function apiUploadExcel(path, file, branchId) {
-  const token = getToken();
   const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : "";
   const fd = new FormData();
   fd.append("file", file);
-  const headers = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}${qs}`, {
     method: "POST",
-    headers,
+    headers: baseHeaders(),
     body: fd,
+    credentials: "include",
   });
   const text = await res.text();
   let data = null;

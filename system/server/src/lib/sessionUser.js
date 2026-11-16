@@ -1,4 +1,5 @@
-import { orgPermissionMatrices, resolveRolePermissions } from "./permissions.js";
+import { orgPermissionMatrices, resolveModulePermissions, resolveRolePermissions } from "./permissions.js";
+import { findOrganizationOwnerId } from "./orgOwner.js";
 
 /**
  * Build the session user object returned by login / register / me.
@@ -7,9 +8,10 @@ export async function buildSessionUser(prisma, user, organization, branch) {
   const org = organization || user.organization;
   const br = branch !== undefined ? branch : user.branch;
   const branchCount = await prisma.branch.count({ where: { organizationId: org.id } });
-  const userCount = await prisma.user.count({ where: { organizationId: org.id } });
+  const userCount = await prisma.user.count({ where: { organizationId: org.id, active: true } });
+  const ownerId = await findOrganizationOwnerId(prisma, org.id);
   const rolePermissions = resolveRolePermissions(org, user.role);
-  const matrices = orgPermissionMatrices(org);
+  const isOrgOwner = ownerId === user.id;
 
   return {
     id: user.id,
@@ -26,8 +28,12 @@ export async function buildSessionUser(prisma, user, organization, branch) {
     branchCount,
     userCount,
     permissions: rolePermissions,
-    /** Super admin only — full matrices for Permissions editor */
-    rolePermissionMatrices: user.role === "ADMIN" ? matrices : undefined,
+    /** Module rights (view/create/edit/delete/export/refund) — what the server enforces. */
+    modules: resolveModulePermissions(org, user.role),
+    /** Owner only — full matrices for Permissions editor */
+    rolePermissionMatrices: isOrgOwner ? orgPermissionMatrices(org) : undefined,
     isSuperAdmin: user.role === "ADMIN",
+    /** FR-09: roles, business settings and payment settings are reserved for the owner. */
+    isOrgOwner,
   };
 }

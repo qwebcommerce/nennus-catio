@@ -39,7 +39,7 @@ export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
 
 export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   pos: true,
-  refunds: false,
+  refunds: true,
   purchases: false,
   stockCount: false,
   transfer: false,
@@ -78,23 +78,48 @@ export function normalizePermissionMap(input, fallback) {
   return base;
 }
 
+/**
+ * Legacy permission keys are resolved through the module matrix (single source of
+ * truth for FR-08/FR-10). key → [module, action].
+ */
+export const LEGACY_TO_MODULE = Object.freeze({
+  pos: ["pos", "create"],
+  refunds: ["pos", "refund"],
+  purchases: ["purchasing", "view"],
+  stockCount: ["warehouses", "edit"],
+  transfer: ["warehouses", "edit"],
+  productsView: ["products", "view"],
+  productsEdit: ["products", "edit"],
+  catalogEdit: ["products", "edit"],
+  cashSession: ["pos", "create"],
+  reports: ["finance", "view"],
+  customers: ["customers", "view"],
+  receivables: ["finance", "view"],
+  expenses: ["finance", "create"],
+  audit: ["settings", "view"],
+});
+
+export function legacyFromModules(modules) {
+  return Object.fromEntries(
+    PERMISSION_KEYS.map((k) => {
+      const [mod, action] = LEGACY_TO_MODULE[k];
+      return [k, Boolean(modules?.[mod]?.[action])];
+    })
+  );
+}
+
+/** Legacy key map for the session user / UI, derived from the module matrix. */
 export function resolveRolePermissions(organization, role) {
   if (role === "ADMIN") {
     return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
   }
-  if (role === "MANAGER") {
-    return parseStored(organization?.managerPermissions, DEFAULT_MANAGER_PERMISSIONS);
-  }
-  if (role === "CASHIER") {
-    return parseStored(organization?.cashierPermissions, DEFAULT_CASHIER_PERMISSIONS);
-  }
-  return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false]));
+  return legacyFromModules(resolveModulePermissions(organization, role));
 }
 
 export function orgPermissionMatrices(organization) {
   return {
-    MANAGER: parseStored(organization?.managerPermissions, DEFAULT_MANAGER_PERMISSIONS),
-    CASHIER: parseStored(organization?.cashierPermissions, DEFAULT_CASHIER_PERMISSIONS),
+    MANAGER: resolveRolePermissions(organization, "MANAGER"),
+    CASHIER: resolveRolePermissions(organization, "CASHIER"),
   };
 }
 

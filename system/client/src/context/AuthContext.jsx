@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from "react";
-import { api, getToken } from "../api/client.js";
-import { decodeJwtPayload, minimalUserFromTokenPayload } from "../lib/jwtDecode.js";
+import { api } from "../api/client.js";
 import {
   getCachedSessionUser,
   setCachedSessionUser,
@@ -9,27 +8,16 @@ import { resolveClientPermissions } from "../lib/permissions.js";
 
 const AuthContext = createContext(null);
 
-function applySessionFromTokenFallback() {
-  const token = getToken();
-  if (!token) return null;
-  const p = decodeJwtPayload(token);
-  return minimalUserFromTokenPayload(p);
-}
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!getToken()) {
-      setLoading(false);
-      return;
-    }
-
+    // The session is an httpOnly cookie: ask the server who we are.
     const offline = typeof navigator !== "undefined" && !navigator.onLine;
     if (offline) {
       const cached = getCachedSessionUser();
-      setUser(cached || applySessionFromTokenFallback());
+      setUser(cached || null);
       setLoading(false);
       return;
     }
@@ -41,7 +29,6 @@ export function AuthProvider({ children }) {
       })
       .catch((err) => {
         if (err?.status === 401) {
-          localStorage.removeItem("token");
           setCachedSessionUser(null);
           setUser(null);
           return;
@@ -51,7 +38,7 @@ export function AuthProvider({ children }) {
           setUser(cached);
           return;
         }
-        setUser(applySessionFromTokenFallback());
+        setUser(null);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -59,7 +46,6 @@ export function AuthProvider({ children }) {
   /** عند عودة الشبكة حدّث المستخدم من السيرفر */
   useEffect(() => {
     const onOnline = () => {
-      if (!getToken()) return;
       api("/api/auth/me")
         .then((u) => {
           setUser(u);
@@ -82,20 +68,18 @@ export function AuthProvider({ children }) {
           : {}),
       },
     });
-    localStorage.setItem("token", data.token);
     setUser(data.user);
     setCachedSessionUser(data.user);
     return data.user;
   };
 
   const logout = () => {
-    localStorage.removeItem("token");
+    api("/api/auth/logout", { method: "POST" }).catch(() => {});
     setCachedSessionUser(null);
     setUser(null);
   };
 
   const refreshUser = useCallback(async () => {
-    if (!getToken()) return null;
     const u = await api("/api/auth/me");
     setUser(u);
     setCachedSessionUser(u);
@@ -112,6 +96,10 @@ export function AuthProvider({ children }) {
         logout,
         refreshUser,
         isAdmin: user?.role === "ADMIN",
+        /** FR-09: roles, business settings and payment settings — owner only. */
+        isOrgOwner: user?.isOrgOwner === true,
+        /** Module rights enforced by the server. */
+        canModule: (mod, action = "view") => user?.role === "ADMIN" || Boolean(user?.modules?.[mod]?.[action]),
         isSuperAdmin: user?.role === "ADMIN",
         isManager: user?.role === "MANAGER" || user?.role === "ADMIN",
         permissions,

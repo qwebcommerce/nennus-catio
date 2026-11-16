@@ -32,7 +32,7 @@ import petTypeRoutes from "./routes/petTypes.js";
 import purchaseOrderRoutes from "./routes/purchaseOrders.js";
 import shopRoutes from "./routes/shop.js";
 import groomingShopRoutes from "./routes/groomingShop.js";
-import { relocationShop, relocationStaff } from "./routes/relocation.js";
+import { relocationFiles, relocationShop, relocationStaff } from "./routes/relocation.js";
 import onlineOrderRoutes from "./routes/onlineOrders.js";
 import deliverySetupRoutes from "./routes/deliverySetup.js";
 import promotionRoutes from "./routes/promotions.js";
@@ -44,6 +44,7 @@ import expensesRoutes from "./routes/expenses.js";
 import reportsRoutes from "./routes/reports.js";
 import appointmentsRoutes from "./routes/appointments.js";
 import { prisma } from "./lib/prisma.js";
+import { csrfGuard } from "./middleware/auth.js";
 import {
   dbUnavailableMessage,
   isDbUnavailableError,
@@ -71,9 +72,33 @@ if (process.env.VERCEL) {
 }
 
 app.use(helmetMiddleware);
-app.use(cors({ origin: true, credentials: true }));
+/**
+ * Sessions are httpOnly cookies, so cross-origin credentialed requests are limited to
+ * the app's own origins (same-origin requests send no CORS check at all).
+ */
+function allowedOrigins() {
+  return [process.env.APP_PUBLIC_URL, process.env.CLIENT_URL, ...(process.env.CORS_ORIGINS || "").split(",")]
+    .map((o) => String(o || "").trim().replace(/\/$/, ""))
+    .filter(Boolean);
+}
+app.use(
+  cors({
+    credentials: true,
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      const o = origin.replace(/\/$/, "");
+      if (allowedOrigins().includes(o)) return cb(null, true);
+      if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o)) {
+        return cb(null, true);
+      }
+      return cb(null, false);
+    },
+  })
+);
 app.use(express.json({ limit: "8mb" }));
+app.use("/api", csrfGuard);
 app.use("/api/auth/login", loginRateLimiter);
+app.use("/api/shop/login", loginRateLimiter);
 app.use("/api", apiRateLimiter);
 
 app.get("/api/health", (_req, res) => {
@@ -131,6 +156,7 @@ app.use("/api/purchase-orders", purchaseOrderRoutes);
 app.use("/api/shop/grooming", groomingShopRoutes);
 app.use("/api/shop/relocation", relocationShop);
 app.use("/api/relocation", relocationStaff);
+app.use("/api/relocation-files", relocationFiles);
 app.use("/api/shop", shopRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/finance", financeRoutes);

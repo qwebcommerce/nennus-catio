@@ -38,7 +38,7 @@ export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
 
 export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   pos: true,
-  refunds: false,
+  refunds: true,
   purchases: false,
   stockCount: false,
   transfer: false,

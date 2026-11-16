@@ -6,7 +6,14 @@ import {
   isDbUnavailableError,
 } from "../lib/dbErrors.js";
 import { databaseUrlFingerprint } from "../lib/databaseUrlFingerprint.js";
-import { signToken, authMiddleware } from "../middleware/auth.js";
+import {
+  signToken,
+  authMiddleware,
+  setSessionCookie,
+  clearSessionCookie,
+  STAFF_COOKIE,
+  STAFF_SESSION_MS,
+} from "../middleware/auth.js";
 import { buildSessionUser } from "../lib/sessionUser.js";
 
 const router = Router();
@@ -31,11 +38,13 @@ router.post("/login", async (req, res, next) => {
           organization: { slug },
         },
         include: { branch: true, organization: true },
+        omit: { passwordHash: false },
       });
     } else {
       const matches = await prisma.user.findMany({
         where: { email: emailNorm },
         include: { branch: true, organization: true },
+        omit: { passwordHash: false },
         take: 5,
       });
       if (matches.length > 1) {
@@ -51,17 +60,24 @@ router.post("/login", async (req, res, next) => {
     if (!user || !passwordOk) {
       return res.status(401).json({ error: "بيانات الدخول غير صحيحة" });
     }
+    if (!user.active) {
+      return res.status(403).json({
+        error: "هذا الحساب معطّل — تواصل مع مالك المؤسسة",
+        errorAr: "هذا الحساب معطّل — تواصل مع مالك المؤسسة",
+        errorEn: "This account is deactivated — contact the owner",
+        code: "USER_DEACTIVATED",
+      });
+    }
     const token = signToken({
       sub: user.id,
-      role: user.role,
-      branchId: user.branchId,
+      typ: "staff",
       organizationId: user.organizationId,
+      sv: user.sessionVersion,
     });
+    // NFR-11: the session lives in an httpOnly cookie; the token is not returned to page scripts.
+    setSessionCookie(res, STAFF_COOKIE, token, STAFF_SESSION_MS);
     const sessionUser = await buildSessionUser(prisma, user, user.organization, user.branch);
-    res.json({
-      token,
-      user: sessionUser,
-    });
+    res.json({ user: sessionUser });
   } catch (e) {
     if (isDbUnavailableError(e)) {
       console.error("[auth/login] database:", e.message);
@@ -69,6 +85,11 @@ router.post("/login", async (req, res, next) => {
     }
     next(e);
   }
+});
+
+router.post("/logout", (_req, res) => {
+  clearSessionCookie(res, STAFF_COOKIE);
+  res.json({ ok: true });
 });
 
 router.get("/me", authMiddleware, async (req, res, next) => {

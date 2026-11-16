@@ -1,15 +1,14 @@
 import crypto from "crypto";
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { minutesOf, qatarDateTime, qatarParts, slotTaken, weekdayOf } from "../lib/groomingSlots.js";
 import { sweepExpiredHolds } from "../lib/webOrder.js";
+import { customerSession } from "../lib/customerSession.js";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
 function publicBase() {
   return (process.env.APP_PUBLIC_URL || process.env.CLIENT_URL || "http://localhost:5173").replace(/\/$/, "");
@@ -24,19 +23,6 @@ async function shopOrg() {
   });
   if (chosen) return chosen;
   return prisma.organization.findFirst({ orderBy: { createdAt: "asc" } });
-}
-
-function customerFromHeader(req) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) return null;
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== "CUSTOMER" || !payload.sub) return null;
-    return payload;
-  } catch {
-    return null;
-  }
 }
 
 function publicPackage(row) {
@@ -123,7 +109,7 @@ router.get("/availability", async (req, res) => {
 });
 
 router.get("/bookings", async (req, res) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to see bookings" });
   const rows = await prisma.appointment.findMany({
@@ -136,7 +122,7 @@ router.get("/bookings", async (req, res) => {
 });
 
 router.get("/bookings/:id", async (req, res) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to see bookings" });
   const row = await prisma.appointment.findFirst({
@@ -148,7 +134,7 @@ router.get("/bookings/:id", async (req, res) => {
 });
 
 router.post("/bookings/:id/cancel", async (req, res) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to cancel a booking" });
   const row = await prisma.appointment.findFirst({
@@ -177,8 +163,9 @@ router.post("/book", async (req, res) => {
     if (!org) return res.status(400).json({ error: "The shop is not ready" });
     await sweepExpiredHolds();
     const body = req.body || {};
-    const session = customerFromHeader(req);
-    const email = String(body.email || session?.email || "").trim().toLowerCase();
+    const session = await customerSession(req, res);
+    // FR-05: a signed-in customer always books as themselves (body email is ignored).
+    const email = String(session?.email || body.email || "").trim().toLowerCase();
     const name = String(body.name || "").trim();
     const phone = String(body.phone || "").trim();
     const petName = String(body.petName || "").trim();

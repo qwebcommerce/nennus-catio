@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { getToken } from "../api/client.js";
 import {
   resolveImageUrlForDisplay,
   dataUrlToObjectUrl,
@@ -46,11 +45,8 @@ export function useSafeImageSrc(rawUrl) {
       return cleanup;
     }
 
-    const token = getToken();
-    const headers = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-
-    fetch(resolved, { headers })
+    // Staff session cookie (httpOnly) authenticates the image request.
+    fetch(resolved, { credentials: "include" })
       .then(async (res) => {
         if (!res.ok) throw new Error("image fetch failed");
         return res.blob();

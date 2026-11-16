@@ -28,7 +28,7 @@ export default function Finance() {
   const download = async (list, format) => {
     const lang = localStorage.getItem("petstore-lang") === "en" ? "en" : "ar";
     const res = await fetch(`${import.meta.env.VITE_API_URL || ""}/api/exports/${list}?format=${format}&lang=${lang}${qs ? `&${qs}` : ""}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
+      credentials: "include",
     });
     if (!res.ok) return setMsg(t("shop.documentFail"));
     const blob = await res.blob();
