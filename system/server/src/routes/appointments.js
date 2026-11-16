@@ -3,7 +3,10 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { qatarParts, slotTaken } from "../lib/groomingSlots.js";
+import { claimSlot, qatarDayBounds, qatarToday } from "../lib/groomingSlots.js";
+import { LOCK_TX, acceptReviewPayments, lockParent, paymentTotals, refundParent, rejectReviewPayments, statusError } from "../lib/payments.js";
+import { writeAudit } from "../lib/auditLog.js";
+import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -11,32 +14,36 @@ router.use(requireRole("ADMIN", "MANAGER"));
 
 const STATUSES = ["BOOKED", "PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "DONE", "NO_SHOW", "CANCELLED"];
 
+/**
+ * FR-53 / FR-54: allowed staff status changes. CONFIRMED is reached only through a payment
+ * (gateway or a resolved review), never set by hand; nothing goes back to PENDING_PAYMENT
+ * or BOOKED, and DONE / NO_SHOW / CANCELLED are final.
+ */
+const NEXT = {
+  PENDING_PAYMENT: ["CANCELLED"],
+  BOOKED: ["CHECKED_IN", "IN_PROGRESS", "NO_SHOW", "CANCELLED"],
+  CONFIRMED: ["CHECKED_IN", "IN_PROGRESS", "NO_SHOW", "CANCELLED"],
+  CHECKED_IN: ["IN_PROGRESS", "NO_SHOW", "CANCELLED"],
+  IN_PROGRESS: ["DONE", "CANCELLED"],
+  DONE: [],
+  NO_SHOW: [],
+  CANCELLED: [],
+};
+const MOVABLE = ["PENDING_PAYMENT", "BOOKED", "CONFIRMED"];
+
 function parseDateTime(value) {
   const d = new Date(String(value || ""));
   if (Number.isNaN(d.getTime())) return null;
   return d;
 }
 
+/** Calendar day in Qatar time (NFR-04), not the server's time zone. */
 function parseDayBounds(dayRaw) {
-  const raw = String(dayRaw || "").trim();
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  if (m) {
-    const y = Number(m[1]);
-    const mo = Number(m[2]) - 1;
-    const d = Number(m[3]);
-    const from = new Date(y, mo, d, 0, 0, 0, 0);
-    const to = new Date(y, mo, d, 23, 59, 59, 999);
-    if (!Number.isNaN(from.getTime()) && !Number.isNaN(to.getTime())) {
-      return { from, to };
-    }
-  }
-  const day = raw ? new Date(raw) : new Date();
+  const raw = String(dayRaw || "").trim() || qatarToday();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return qatarDayBounds(raw);
+  const day = new Date(raw);
   if (Number.isNaN(day.getTime())) return null;
-  const from = new Date(day);
-  from.setHours(0, 0, 0, 0);
-  const to = new Date(day);
-  to.setHours(23, 59, 59, 999);
-  return { from, to };
+  return qatarDayBounds(qatarToday(day));
 }
 
 async function assertBranchAllowed(req, branchId) {
@@ -101,7 +108,7 @@ router.post("/services", async (req, res) => {
 router.get("/", async (req, res) => {
   try {
     const branchId = req.query.branchId ? String(req.query.branchId) : req.user.branchId || null;
-    const bounds = parseDayBounds(req.query.day || new Date().toISOString().slice(0, 10));
+    const bounds = parseDayBounds(req.query.day || qatarToday());
     if (!bounds) return res.status(400).json({ error: "تاريخ غير صالح" });
     const { from, to } = bounds;
 
@@ -110,10 +117,11 @@ router.get("/", async (req, res) => {
     const rows = await prisma.appointment.findMany({
       where: {
         organizationId: req.user.organizationId,
-        ...(branchId ? { branchId } : {}),
+        ...(branchId ? { OR: [{ branchId }, { branchId: null }] } : {}),
         startAt: { gte: from, lte: to },
       },
       include: {
+        payments: { select: { id: true, kind: true, method: true, status: true, amount: true, reviewReason: true, createdAt: true } },
         customer: { select: { id: true, name: true, phone: true } },
         service: { select: { id: true, name: true, durationMin: true, price: true } },
         branch: { select: { id: true, name: true } },
@@ -153,9 +161,12 @@ router.post("/", async (req, res) => {
   try {
     const b = req.body || {};
     const startAt = parseDateTime(b.startAt);
-    const endAt = parseDateTime(b.endAt);
-    if (!startAt || !endAt || endAt <= startAt) {
-      return res.status(400).json({ error: "وقت الموعد غير صالح" });
+    let endAt = parseDateTime(b.endAt);
+    if (!startAt) {
+      return res.status(400).json({ error: "وقت الموعد غير صالح", errorEn: "Invalid booking time" });
+    }
+    if (startAt.getTime() < Date.now() - 60 * 60 * 1000) {
+      return res.status(400).json({ error: "لا يمكن الحجز في وقت مضى", errorEn: "That time has already passed" });
     }
     const branchId = await assertBranchAllowed(req, b.branchId ? String(b.branchId) : null);
     if (!branchId) {
@@ -169,6 +180,11 @@ router.post("/", async (req, res) => {
         where: { id: serviceId, organizationId: req.user.organizationId, active: true },
       });
       if (!service) return res.status(400).json({ error: "الخدمة غير صالحة" });
+      // The package sets the length of the booking.
+      endAt = new Date(startAt.getTime() + Math.max(10, service.durationMin || 60) * 60 * 1000);
+    }
+    if (!endAt || endAt <= startAt) {
+      return res.status(400).json({ error: "وقت الموعد غير صالح", errorEn: "Invalid booking time" });
     }
     if (customerId) {
       const c = await prisma.customer.findFirst({
@@ -187,7 +203,10 @@ router.post("/", async (req, res) => {
       reminders.push({ channel: "SMS", scheduledAt: reminder2hAt });
     }
 
-    const row = await prisma.appointment.create({
+    const row = await prisma.$transaction(async (tx) => {
+      // Staff bookings respect grooming hours and capacity too (FR-48, NFR-06).
+      await claimSlot(tx, { organizationId: req.user.organizationId, startAt, endAt, grid: null });
+      return tx.appointment.create({
       data: {
         organizationId: req.user.organizationId,
         branchId,
@@ -210,10 +229,14 @@ router.post("/", async (req, res) => {
         customer: { select: { id: true, name: true, phone: true } },
         service: { select: { id: true, name: true, durationMin: true, price: true } },
       },
-    });
+      });
+    }, LOCK_TX);
     res.status(201).json(row);
   } catch (e) {
-    res.status(400).json({ error: e instanceof Error ? e.message : "فشل إنشاء الموعد" });
+    res.status(e.status || 400).json({
+      error: e.errorAr || (e instanceof Error ? e.message : "فشل إنشاء الموعد"),
+      ...(e.errorEn ? { errorEn: e.errorEn, errorAr: e.errorAr } : {}),
+    });
   }
 });
 
@@ -227,38 +250,168 @@ router.patch("/:id", async (req, res) => {
 
     const b = req.body || {};
     const data = {};
+    let next = null;
     if (b.status != null) {
-      const st = String(b.status).toUpperCase();
-      if (!STATUSES.includes(st)) {
-        return res.status(400).json({ error: "حالة غير صالحة" });
+      next = String(b.status).toUpperCase();
+      if (!STATUSES.includes(next)) {
+        return res.status(400).json({ error: "حالة غير صالحة", errorEn: "Invalid status" });
       }
-      data.status = st;
+      if (next === existing.status) next = null;
+      else if (!(NEXT[existing.status] || []).includes(next)) {
+        const why =
+          next === "CONFIRMED"
+            ? "A booking is confirmed only by its payment"
+            : `A ${existing.status} booking cannot become ${next}`;
+        return res.status(400).json({ error: "تغيير الحالة غير مسموح", errorEn: why, errorAr: "تغيير الحالة غير مسموح" });
+      }
+      if (next) data.status = next;
+      // A paid booking cancelled by staff is flagged so the refund is decided (FR-55).
+      if (next === "CANCELLED" && Number(existing.amountPaid) > 0) {
+        data.paymentReview = true;
+        data.paymentReviewReason = "REFUND_DUE";
+      }
     }
+    let move = null;
     if (b.startAt != null || b.endAt != null) {
+      if (!MOVABLE.includes(existing.status) || next) {
+        return res.status(400).json({ error: "لا يمكن نقل هذا الموعد", errorEn: "Only an upcoming booking can be moved, without a status change" });
+      }
       const startAt = parseDateTime(b.startAt || existing.startAt);
-      const endAt = parseDateTime(b.endAt || existing.endAt);
-      if (!startAt || !endAt || endAt <= startAt) return res.status(400).json({ error: "وقت الموعد غير صالح" });
-      const taken = await slotTaken(prisma, req.user.organizationId, startAt, endAt, existing.id);
-      const local = qatarParts(startAt);
-      const schedules = await prisma.groomingSchedule.findMany({
-        where: { organizationId: req.user.organizationId, weekday: local.weekday, isActive: true },
-      });
-      const room = schedules.reduce((max, row) => Math.max(max, row.capacity), 0);
-      if (schedules.length && taken >= room) return res.status(409).json({ error: "That time is already full" });
+      const length = new Date(existing.endAt).getTime() - new Date(existing.startAt).getTime();
+      const endAt = b.endAt && !b.startAt ? parseDateTime(b.endAt) : startAt ? new Date(startAt.getTime() + length) : null;
+      if (!startAt || !endAt || endAt <= startAt) return res.status(400).json({ error: "وقت الموعد غير صالح", errorEn: "Invalid booking time" });
+      if (startAt.getTime() < Date.now()) return res.status(400).json({ error: "لا يمكن النقل إلى وقت مضى", errorEn: "Cannot move a booking into the past" });
+      move = { startAt, endAt };
       data.startAt = startAt;
       data.endAt = endAt;
     }
     if (b.notes !== undefined) data.notes = b.notes ? String(b.notes).trim() : null;
     const row = await prisma.$transaction(async (tx) => {
-      const updated = await tx.appointment.update({
-        where: { id: existing.id },
+      // Moves respect hours and capacity, checked under the schedule lock (FR-53, NFR-06).
+      if (move) await claimSlot(tx, { organizationId: req.user.organizationId, ...move, excludeId: existing.id, grid: null });
+      // Guarded: the change applies only if nobody changed the status in between.
+      const updated = await tx.appointment.updateMany({
+        where: { id: existing.id, status: existing.status },
         data,
       });
-      return updated;
-    });
+      if (!updated.count) throw statusError("The booking changed. Refresh and try again.", 409);
+      return tx.appointment.findUnique({ where: { id: existing.id } });
+    }, LOCK_TX);
+    if (next || move) {
+      await writeAudit({
+        userId: req.user.sub,
+        action: "BOOKING_UPDATE",
+        entityType: "Appointment",
+        entityId: row.id,
+        branchId: row.branchId,
+        summary: `${row.reference || row.id}: ${existing.status}${next ? ` -> ${next}` : ""}${move ? ` moved to ${move.startAt.toISOString()}` : ""}`,
+      });
+    }
     res.json(row);
   } catch (e) {
-    res.status(400).json({ error: e instanceof Error ? e.message : "تعذر تعديل الموعد" });
+    res.status(e.status || 400).json({
+      error: e.errorAr || (e instanceof Error ? e.message : "تعذر تعديل الموعد"),
+      ...(e.errorEn ? { errorEn: e.errorEn } : { errorEn: e.message }),
+    });
+  }
+});
+
+/**
+ * FR-79: staff resolve a booking payment that could not confirm automatically
+ * (late, wrong amount, duplicate) or a refund that is due after a cancel.
+ * accept=true keeps the money (and confirms the booking if the slot is still free);
+ * accept=false refunds it.
+ */
+router.post("/:id/resolve-payment", async (req, res) => {
+  const existing = await prisma.appointment.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId, paymentReview: true },
+  });
+  if (!existing) return res.status(404).json({ error: "لا يوجد دفع بانتظار المراجعة", errorEn: "No payment is waiting for review" });
+  const accept = Boolean(req.body?.accept);
+  try {
+    if (existing.paymentReviewReason === "REFUND_DUE") {
+      if (!accept) await refundRemaining(existing, req.user.sub);
+      await prisma.appointment.update({ where: { id: existing.id }, data: { paymentReview: false, paymentReviewReason: null } });
+    } else if (accept) {
+      await prisma.$transaction(async (tx) => {
+        await lockParent(tx, "appointment", existing.id);
+        const current = await tx.appointment.findUnique({ where: { id: existing.id } });
+        if (!["PENDING_PAYMENT", "CANCELLED"].includes(current.status)) {
+          throw statusError("This booking is already paid. Refund the extra payment instead.", 400);
+        }
+        // The slot may have been taken since the hold lapsed; staff refund instead if it is full.
+        await claimSlot(tx, { organizationId: current.organizationId, startAt: current.startAt, endAt: current.endAt, excludeId: current.id, grid: null });
+        const accepted = await acceptReviewPayments(tx, "appointment", current.id);
+        if (accepted <= 0) throw statusError("No payment is waiting for review", 404);
+        await tx.appointment.update({
+          where: { id: current.id },
+          data: { status: "CONFIRMED", amountPaid: accepted, paidAt: new Date(), paymentReview: false, paymentReviewReason: null },
+        });
+      }, LOCK_TX);
+    } else {
+      await rejectReviewPayments({ parentKind: "appointment", parentId: existing.id, userId: req.user.sub });
+      await prisma.appointment.updateMany({ where: { id: existing.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
+      await prisma.appointment.update({ where: { id: existing.id }, data: { paymentReview: false, paymentReviewReason: null } });
+    }
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.errorAr || e.message, errorEn: e.errorEn || e.message });
+  }
+  await writeAudit({
+    userId: req.user.sub,
+    action: "PAYMENT_REVIEW",
+    entityType: "Appointment",
+    entityId: existing.id,
+    summary: `${existing.reference || existing.id} ${existing.paymentReviewReason}: ${accept ? "kept" : "refunded"}`,
+  });
+  res.json({ id: existing.id, reference: existing.reference, accepted: accept });
+});
+
+async function refundRemaining(existing, userId) {
+  const totals = await paymentTotals(prisma, "appointment", existing.id);
+  if (totals.remaining <= 0) return 0;
+  await refundParent({
+    parentKind: "appointment",
+    parentId: existing.id,
+    organizationId: existing.organizationId,
+    amount: totals.remaining,
+    userId,
+    note: "Refund after cancel",
+  });
+  return totals.remaining;
+}
+
+/**
+ * FR-55 / FR-77: refund a booking payment in full or in part. Online payments go back
+ * through the gateway; cash or bank refunds are recorded by staff. No stock is touched.
+ */
+router.post("/:id/refund", async (req, res) => {
+  const existing = await prisma.appointment.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId },
+    include: { customer: true },
+  });
+  if (!existing) return res.status(404).json({ error: "الموعد غير موجود", errorEn: "Booking not found" });
+  try {
+    const refund = await refundParent({
+      parentKind: "appointment",
+      parentId: existing.id,
+      organizationId: existing.organizationId,
+      amount: req.body?.amount,
+      userId: req.user.sub,
+      method: req.body?.method,
+      note: req.body?.note,
+    });
+    await writeAudit({
+      userId: req.user.sub,
+      action: "BOOKING_REFUND",
+      entityType: "Payment",
+      entityId: refund.id,
+      branchId: existing.branchId,
+      summary: `${existing.reference || existing.id} ${Number(refund.amount).toFixed(2)} ${refund.method}`,
+    });
+    await mailCustomer(existing.customer, "refund", `A refund of ${Number(refund.amount).toFixed(2)} QAR was sent for booking ${existing.reference || existing.id}.`);
+    res.status(201).json(refund);
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message, errorEn: e.message });
   }
 });
 

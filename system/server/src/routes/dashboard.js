@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { qatarDayBounds, qatarToday } from "../lib/groomingSlots.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -94,7 +95,8 @@ router.get("/summary", async (req, res) => {
     where: {
       organizationId: req.user.organizationId,
       ...(branchId ? { branchId: String(branchId) } : {}),
-      startAt: { gte: todayStart },
+      // Today in Qatar (NFR-04), not the server's day.
+      startAt: { gte: qatarDayBounds(qatarToday()).from, lte: qatarDayBounds(qatarToday()).to },
       status: { notIn: ["CANCELLED", "PENDING_PAYMENT"] },
     },
   });

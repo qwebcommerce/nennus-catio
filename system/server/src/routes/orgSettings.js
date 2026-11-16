@@ -15,6 +15,7 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view
         id: true,
         websiteBranchId: true,
         holdMinutes: true,
+        bookingCancelHours: true,
         whatsappNumber: true,
         homeVisitFee: true,
         phone: true,
@@ -33,6 +34,7 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view
     res.json({
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
+      bookingCancelHours: org.bookingCancelHours,
       whatsappNumber: org.whatsappNumber || "",
       homeVisitFee: Number(org.homeVisitFee || 0),
       phone: org.phone || "",
@@ -75,6 +77,13 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
       if (minutes < 5 || minutes > 120) return res.status(400).json({ error: "Hold time must be between 5 and 120 minutes" });
       data.holdMinutes = minutes;
     }
+    if (b.bookingCancelHours !== undefined) {
+      const hours = Number(b.bookingCancelHours);
+      if (!Number.isInteger(hours) || hours < 0 || hours > 336) {
+        return res.status(400).json({ error: "Cancellation cut-off must be 0 to 336 hours" });
+      }
+      data.bookingCancelHours = hours;
+    }
     if (b.websiteBranchId !== undefined) {
       if (!b.websiteBranchId) {
         data.websiteBranchId = null;
@@ -97,6 +106,7 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
         id: true,
         websiteBranchId: true,
         holdMinutes: true,
+        bookingCancelHours: true,
         whatsappNumber: true,
         homeVisitFee: true,
         phone: true,
@@ -121,6 +131,7 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
     res.json({
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
+      bookingCancelHours: org.bookingCancelHours,
       whatsappNumber: org.whatsappNumber || "",
       homeVisitFee: Number(org.homeVisitFee || 0),
       phone: org.phone || "",
