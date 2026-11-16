@@ -1,9 +1,10 @@
 import crypto from "crypto";
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requireModule } from "../middleware/auth.js";
+import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
+import { customerSession } from "../lib/customerSession.js";
+import { DOCUMENT_MIMES, contentDisposition, sniffFileType } from "../lib/fileCheck.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
 
@@ -34,17 +35,44 @@ async function shopOrg() {
   return prisma.organization.findFirst({ orderBy: { createdAt: "asc" } });
 }
 
-function customerFromHeader(req) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) return null;
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== "CUSTOMER" || !payload.sub) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+/** Signed, short-lived document links (FR-66, NFR-18). */
+const LINK_TTL_MS = 5 * 60 * 1000;
+const LINK_KEY = crypto
+  .createHash("sha256")
+  .update(`relocation-doc-link:${JWT_SECRET}`)
+  .digest();
+
+function linkSignature(docId, principal, exp) {
+  return crypto.createHmac("sha256", LINK_KEY).update(`${docId}.${principal}.${exp}`).digest("base64url");
+}
+
+function signedDocumentLink(docId, principal) {
+  const exp = Date.now() + LINK_TTL_MS;
+  const sig = linkSignature(docId, principal, exp);
+  return {
+    url: `/api/relocation-files/${encodeURIComponent(docId)}?p=${encodeURIComponent(principal)}&exp=${exp}&sig=${sig}`,
+    expiresAt: new Date(exp).toISOString(),
+  };
+}
+
+function linkValid(docId, principal, exp, sig) {
+  const n = Number(exp);
+  if (!principal || !Number.isFinite(n) || n < Date.now() || n > Date.now() + LINK_TTL_MS + 5000) return false;
+  const want = Buffer.from(linkSignature(docId, principal, n));
+  const got = Buffer.from(String(sig || ""));
+  return want.length === got.length && crypto.timingSafeEqual(want, got);
+}
+
+function sendDocument(res, doc) {
+  const kind = sniffFileType(Buffer.from(doc.content));
+  const mime = kind && DOCUMENT_MIMES.includes(kind.mime) ? kind.mime : "application/octet-stream";
+  res.setHeader("Content-Type", mime);
+  res.setHeader("Content-Disposition", contentDisposition(doc.fileName, kind?.ext));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.send(Buffer.from(doc.content));
 }
 
 function publicRequest(row) {
@@ -59,7 +87,14 @@ function publicRequest(row) {
     paymentMethod: row.paymentMethod,
     paidAt: row.paidAt,
     createdAt: row.createdAt,
-    pets: (row.pets || []).map((link) => link.pet),
+    // Customer-facing: never the staff pet notes, staff notes or tags (FR-03, FR-65, FR-69).
+    pets: (row.pets || []).map((link) => ({
+      id: link.pet?.id,
+      name: link.pet?.name,
+      breed: link.pet?.breed,
+      ageText: link.pet?.ageText,
+      petTypeId: link.pet?.petTypeId,
+    })),
     documents: (row.documents || []).map((doc) => ({ id: doc.id, fileName: doc.fileName, mime: doc.mime, createdAt: doc.createdAt })),
   };
 }
@@ -77,22 +112,29 @@ async function readDocuments(raw) {
     throw err;
   }
   return raw.map((doc) => {
-    const fileName = String(doc?.fileName || "document").slice(0, 120);
-    const mime = String(doc?.mime || "application/octet-stream").slice(0, 80);
     const bytes = Buffer.from(String(doc?.dataBase64 || ""), "base64");
     if (!bytes.length || bytes.length > 1_200_000) {
       const err = new Error("Each document must be under 1.2 MB");
       err.status = 400;
       throw err;
     }
-    return { fileName, mime, content: bytes };
+    // NFR-18: only PDF, JPEG or PNG, decided from the file's bytes (not the declared type).
+    const kind = sniffFileType(bytes);
+    if (!kind || !DOCUMENT_MIMES.includes(kind.mime)) {
+      const err = new Error("Documents must be PDF, JPEG or PNG files");
+      err.status = 400;
+      throw err;
+    }
+    let fileName = String(doc?.fileName || "document").replace(/[\r\n"\\/]/g, "_").slice(0, 120) || "document";
+    if (!fileName.toLowerCase().endsWith(`.${kind.ext}`)) fileName = `${fileName.replace(/\.[^.]*$/, "")}.${kind.ext}`;
+    return { fileName, mime: kind.mime, content: bytes };
   });
 }
 
 export const relocationShop = Router();
 
 relocationShop.use(async (req, res, next) => {
-  const session = customerFromHeader(req);
+  const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org || session.organizationId !== org.id) {
     return res.status(401).json({ error: "Sign in with a customer account" });
@@ -100,7 +142,8 @@ relocationShop.use(async (req, res, next) => {
   const customer = await prisma.customer.findFirst({
     where: { id: session.sub, organizationId: org.id },
   });
-  if (!customer?.passwordHash) {
+  // customerSession() only accepts registered (password) accounts.
+  if (!customer) {
     return res.status(403).json({ error: "Only a registered customer can request relocation" });
   }
   req.customer = customer;
@@ -180,13 +223,23 @@ relocationShop.post("/:id/documents", async (req, res) => {
   res.json(publicRequest(updated));
 });
 
+/** Issue a 5-minute signed download link for one of the customer's own documents. */
+relocationShop.post("/:id/documents/:docId/link", async (req, res) => {
+  const doc = await prisma.relocationDocument.findFirst({
+    where: { id: req.params.docId, request: { id: req.params.id, customerId: req.customer.id } },
+    select: { id: true },
+  });
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  res.json(signedDocumentLink(doc.id, `c:${req.customer.id}`));
+});
+
 relocationShop.get("/:id/documents/:docId", async (req, res) => {
   const doc = await prisma.relocationDocument.findFirst({
     where: { id: req.params.docId, request: { id: req.params.id, customerId: req.customer.id } },
+    select: { id: true },
   });
   if (!doc) return res.status(404).json({ error: "Document not found" });
-  res.setHeader("Content-Type", doc.mime);
-  res.send(Buffer.from(doc.content));
+  res.redirect(303, signedDocumentLink(doc.id, `c:${req.customer.id}`).url);
 });
 
 relocationShop.post("/:id/pay", async (req, res) => {
@@ -224,8 +277,8 @@ relocationShop.post("/:id/pay", async (req, res) => {
 
 export const relocationStaff = Router();
 relocationStaff.use(authMiddleware);
-relocationStaff.use(requireRole("ADMIN", "MANAGER"));
-relocationStaff.use((req, res, next) => requireModule("relocation", req.method === "GET" ? "view" : "edit")(req, res, next));
+relocationStaff.use(requireModule("relocation", "view"));
+relocationStaff.use((req, res, next) => (req.method === "GET" ? next() : requireModule("relocation", "edit")(req, res, next)));
 
 relocationStaff.get("/", async (req, res) => {
   const rows = await prisma.relocationRequest.findMany({
@@ -320,11 +373,64 @@ relocationStaff.post("/:id/notes", async (req, res) => {
   res.json({ id: updated.id, staffNotes: updated.staffNotes });
 });
 
+/** Staff with Relocation → view get a 5-minute signed download link. */
+relocationStaff.get("/:id/documents/:docId/link", async (req, res) => {
+  const doc = await prisma.relocationDocument.findFirst({
+    where: { id: req.params.docId, request: { id: req.params.id, organizationId: req.user.organizationId } },
+    select: { id: true },
+  });
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  res.json(signedDocumentLink(doc.id, `s:${req.user.sub}`));
+});
+
 relocationStaff.get("/:id/documents/:docId", async (req, res) => {
   const doc = await prisma.relocationDocument.findFirst({
     where: { id: req.params.docId, request: { id: req.params.id, organizationId: req.user.organizationId } },
+    select: { id: true },
   });
   if (!doc) return res.status(404).json({ error: "Document not found" });
-  res.setHeader("Content-Type", doc.mime);
-  res.send(Buffer.from(doc.content));
+  res.redirect(303, signedDocumentLink(doc.id, `s:${req.user.sub}`).url);
+});
+
+/**
+ * GET /api/relocation-files/:docId?p&exp&sig — the signed link is bound to the person it was
+ * issued to; their session must still be valid (and staff must still hold Relocation → view).
+ * Served as an attachment with nosniff and a locked-down CSP, never inline.
+ */
+export const relocationFiles = Router();
+
+relocationFiles.get("/:docId", async (req, res, next) => {
+  const { p: principal, exp, sig } = req.query;
+  if (!linkValid(req.params.docId, String(principal || ""), exp, sig)) {
+    return res.status(403).json({ error: "This download link is not valid or has expired", code: "LINK_INVALID" });
+  }
+  const p = String(principal);
+  const doc = await prisma.relocationDocument.findFirst({
+    where: { id: req.params.docId },
+    include: { request: { select: { customerId: true, organizationId: true } } },
+  });
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+  if (p.startsWith("c:")) {
+    const session = await customerSession(req, res);
+    if (!session || `c:${session.sub}` !== p || doc.request.customerId !== session.sub) {
+      return res.status(403).json({ error: "Sign in with the account that owns this document" });
+    }
+    return sendDocument(res, doc);
+  }
+  if (p.startsWith("s:")) {
+    return authMiddleware(req, res, async () => {
+      try {
+        if (`s:${req.user.sub}` !== p || doc.request.organizationId !== req.user.organizationId) {
+          return res.status(403).json({ error: "Not allowed" });
+        }
+        if (!(await hasModule(req, "relocation", "view"))) {
+          return res.status(403).json({ error: "Insufficient permission for this action", code: "FORBIDDEN" });
+        }
+        return sendDocument(res, doc);
+      } catch (e) {
+        next(e);
+      }
+    });
+  }
+  return res.status(403).json({ error: "Not allowed" });
 });

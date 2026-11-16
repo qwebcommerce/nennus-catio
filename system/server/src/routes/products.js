@@ -19,7 +19,8 @@ import {
 } from "../lib/productBarcode.js";
 import { syncProductExtras } from "../lib/catalogExtras.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { IMAGE_MIMES, sniffFileType, stripImageMetadata } from "../lib/fileCheck.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
   extractProductImageId,
@@ -28,6 +29,7 @@ import {
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("products", "view"));
 
 const uploadExcel = multer({
   storage: multer.memoryStorage(),
@@ -42,8 +44,8 @@ const uploadImage = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: PRODUCT_IMAGE_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
-    if (/^image\/(jpeg|png|webp|gif)$/i.test(file.mimetype)) cb(null, true);
-    else cb(new Error("Only JPEG, PNG, WebP, or GIF images are allowed"));
+    if (/^image\/(jpeg|png|webp)$/i.test(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG or WebP images are allowed"));
   },
 });
 
@@ -423,10 +425,7 @@ router.get("/", async (req, res) => {
 });
 
 /** Upload product image into the database (max 2 MB) → returns path for imageUrl */
-router.post(
-  "/upload-image",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
-  requirePermission("productsEdit"),
+router.post("/upload-image", requireModule("products", ["create", "edit"]),
   (req, res, next) => {
     uploadImage.single("file")(req, res, (err) => {
       if (err) {
@@ -454,6 +453,16 @@ router.post(
           errorEn: "Image must be 2 MB or smaller",
         });
       }
+      // NFR-18: the bytes must really be a JPEG, PNG or WebP image (declared type is not trusted).
+      const kind = sniffFileType(req.file.buffer);
+      if (!kind || !IMAGE_MIMES.includes(kind.mime)) {
+        return res.status(400).json({
+          error: "الملف ليس صورة JPEG أو PNG أو WebP صالحة",
+          errorAr: "الملف ليس صورة JPEG أو PNG أو WebP صالحة",
+          errorEn: "The file is not a valid JPEG, PNG or WebP image",
+        });
+      }
+      const imageBytes = stripImageMetadata(req.file.buffer, kind.mime);
       const productIdRaw =
         req.body?.productId != null && String(req.body.productId).trim()
           ? String(req.body.productId).trim()
@@ -472,9 +481,9 @@ router.post(
           organizationId: req.user.organizationId,
           productId,
           fileName: String(req.file.originalname || "image").slice(0, 180),
-          mimeType: String(req.file.mimetype || "image/jpeg").slice(0, 80),
-          size: req.file.buffer.length,
-          data: req.file.buffer,
+          mimeType: kind.mime,
+          size: imageBytes.length,
+          data: imageBytes,
         },
         select: { id: true, size: true, mimeType: true },
       });
@@ -493,7 +502,7 @@ router.post(
 );
 
 /** توليد باركود رقمي غير مكرر ضمن المؤسسة (للمنتج الجديد أو عند تعبئة باركود لأول مرة) */
-router.get("/generate-barcode", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
+router.get("/generate-barcode", requireModule("products", ["create", "edit"]), async (req, res, next) => {
   try {
     const exclude =
       req.query.excludeProductId != null && String(req.query.excludeProductId).trim()
@@ -508,7 +517,7 @@ router.get("/generate-barcode", requireRole("ADMIN", "MANAGER"), async (req, res
   }
 });
 
-router.get("/import/excel/sample", requireRole("ADMIN", "MANAGER"), async (_req, res, next) => {
+router.get("/import/excel/sample", requireModule("products", "create"), async (_req, res, next) => {
   try {
     const buffer = buildProductSampleExcelBuffer();
     res.setHeader(
@@ -522,7 +531,7 @@ router.get("/import/excel/sample", requireRole("ADMIN", "MANAGER"), async (_req,
   }
 });
 
-router.get("/export/excel", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
+router.get("/export/excel", requireModule("products", "export"), async (req, res, next) => {
   try {
     const orgId = req.user.organizationId;
     const branchId = req.query.branchId != null && String(req.query.branchId).trim()
@@ -571,9 +580,7 @@ router.get("/export/excel", requireRole("ADMIN", "MANAGER"), async (req, res, ne
   }
 });
 
-router.post(
-  "/import/excel/preview",
-  requireRole("ADMIN", "MANAGER"),
+router.post("/import/excel/preview", requireModule("products", "create"),
   (req, res, next) => {
     uploadExcel.single("file")(req, res, (err) => {
       if (err) return res.status(400).json({ error: err.message || "رفع الملف فشل" });
@@ -602,7 +609,7 @@ router.post(
   }
 );
 
-router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req, res, next) => {
+router.post("/import/excel/confirm", requireModule("products", "create"), async (req, res, next) => {
   try {
     const orgId = req.user.organizationId;
     const branchId =
@@ -653,9 +660,7 @@ router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req
   }
 });
 
-router.post(
-  "/import/excel",
-  requireRole("ADMIN", "MANAGER"),
+router.post("/import/excel", requireModule("products", "create"),
   (req, res, next) => {
     uploadExcel.single("file")(req, res, (err) => {
       if (err) return res.status(400).json({ error: err.message || "رفع الملف فشل" });
@@ -765,7 +770,7 @@ function catalogFieldsFromBody(body) {
   return { fields };
 }
 
-router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("productsEdit"), async (req, res) => {
+router.post("/", requireModule("products", "create"), async (req, res) => {
   const {
     name,
     nameEn,
@@ -906,7 +911,7 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
   res.status(201).json(withResolvedImageUrl(product));
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("productsEdit"), async (req, res) => {
+router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
   const data = req.body || {};
   const update = {};
   if (data.nameEn !== undefined) {
@@ -1074,7 +1079,7 @@ async function deleteStoredProductImages(tx, orgId, product) {
   });
 }
 
-router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+router.delete("/:id", requireModule("products", "delete"), async (req, res) => {
   try {
     const existing = await prisma.product.findFirst({
       where: { id: req.params.id, organizationId: req.user.organizationId },

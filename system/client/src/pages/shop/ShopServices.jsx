@@ -3,13 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
 
-const TOKEN_KEY = "nennus.shopToken";
-
+/** The customer session is an httpOnly cookie (nc_customer); api() sends credentials. */
 function shopApi(path, options = {}) {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const headers = { ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return api(path, { ...options, headers });
+  return api(path, options);
 }
 
 export function ShopGrooming() {
@@ -184,9 +180,29 @@ export function ShopRelocation() {
   const [form, setForm] = useState({ destination: "", petSummary: "" });
   const [files, setFiles] = useState([]);
   const [msg, setMsg] = useState("");
+  const [signedIn, setSignedIn] = useState(true);
+  const onErr = (e) => {
+    if (e?.status === 401) setSignedIn(false);
+    else setMsg(e.message);
+  };
   const load = () => {
-    if (id) shopApi(`/api/shop/relocation/${id}`).then(setOne).catch((e) => setMsg(e.message));
-    else shopApi("/api/shop/relocation").then(setRows).catch((e) => setMsg(e.message));
+    if (id) shopApi(`/api/shop/relocation/${id}`).then(setOne).catch(onErr);
+    else shopApi("/api/shop/relocation").then(setRows).catch(onErr);
+  };
+  /** Documents open through a 5-minute signed link, downloaded as an attachment. */
+  const downloadDoc = async (docId) => {
+    try {
+      const link = await shopApi(`/api/shop/relocation/${one.id}/documents/${docId}/link`, { method: "POST" });
+      const a = document.createElement("a");
+      a.href = `${import.meta.env.VITE_API_URL || ""}${link.url}`;
+      a.rel = "noopener";
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (e) {
+      setMsg(e.message);
+    }
   };
   useEffect(() => { load(); }, [id]);
   const readFiles = async (list) => {
@@ -217,7 +233,7 @@ export function ShopRelocation() {
     <div className="site-flow site-flow--narrow">
       <p className="eyebrow">{t("shop.relocation")}</p>
       <h1>{t("shop.relocation")}</h1>
-      {!localStorage.getItem(TOKEN_KEY) ? (
+      {!signedIn ? (
         <div className="site-flow__card">
           <p className="site-flow__lead">{t("shop.signInToContinue")}</p>
           <Link className="button button--primary" to="/shop/account">{t("shop.signIn")}</Link>
@@ -231,6 +247,9 @@ export function ShopRelocation() {
           <div className="site-flow__list">
             {(one.history || []).map((entry, index) => <div className="site-flow__item" key={index}><span>{entry.status}</span><span>{entry.note}</span></div>)}
           </div>
+          <div className="site-flow__list">
+            {(one.documents || []).map((doc) => <button type="button" className="site-flow__item" key={doc.id} onClick={() => downloadDoc(doc.id)}><span>{doc.fileName}</span></button>)}
+          </div>
           {one.status === "QUOTE_SENT" ? <button className="button button--primary" type="button" onClick={() => shopApi(`/api/shop/relocation/${one.id}/pay`, { method: "POST", body: {} }).then((r) => { if (r.payUrl) window.location.href = r.payUrl; }).catch((e) => setMsg(e.message))}>{t("shop.pay")}</button> : null}
         </article>
       ) : (
@@ -238,7 +257,7 @@ export function ShopRelocation() {
           <form className="site-flow__card" onSubmit={submit}>
             <label className="site-flow__field"><span>{t("shop.destination")}</span><input required value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} /></label>
             <label className="site-flow__field"><span>{t("shop.pets")}</span><textarea required value={form.petSummary} onChange={(e) => setForm({ ...form, petSummary: e.target.value })} /></label>
-            <label className="site-flow__field"><span>{t("shop.documents")}</span><input required type="file" multiple onChange={(e) => setFiles([...e.target.files])} /></label>
+            <label className="site-flow__field"><span>{t("shop.documents")}</span><input required type="file" multiple accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={(e) => setFiles([...e.target.files])} /><small>{t("shop.docTypes")}</small></label>
             <button className="button button--primary" type="submit">{t("common.add")}</button>
           </form>
           <div className="site-flow__list">

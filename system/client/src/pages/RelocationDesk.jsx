@@ -18,13 +18,23 @@ export default function RelocationDesk() {
   const [msg, setMsg] = useState("");
   const load = () => api("/api/relocation").then(setRows).catch((e) => setMsg(e.message));
   useEffect(() => { load(); }, []);
+  /**
+   * Documents are downloaded through a 5-minute signed link and served as an attachment
+   * (never rendered as a same-origin page).
+   */
   const openDoc = async (id, docId) => {
-    const res = await fetch(`${import.meta.env.VITE_API_URL || ""}/api/relocation/${id}/documents/${docId}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("token") || ""}` },
-    });
-    if (!res.ok) return setMsg(t("shop.documentFail"));
-    const blob = await res.blob();
-    window.open(URL.createObjectURL(blob));
+    try {
+      const link = await api(`/api/relocation/${id}/documents/${docId}/link`);
+      const a = document.createElement("a");
+      a.href = `${import.meta.env.VITE_API_URL || ""}${link.url}`;
+      a.rel = "noopener";
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      setMsg(t("shop.documentFail"));
+    }
   };
   return (
     <div style={{ display: "grid", gap: 12 }}>
