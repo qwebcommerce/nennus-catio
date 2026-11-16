@@ -3,6 +3,7 @@ import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { formatDateTime } from "../utils/qatarDate.js";
+import { money2, toDirhams } from "../utils/money.js";
 
 const NEXT = {
   SUBMITTED: ["DOCUMENTS_REQUESTED", "UNDER_REVIEW", "CANCELLED"],
@@ -51,8 +52,8 @@ export default function RelocationDesk() {
     }
   };
   const fail = (e) => setMsg(e.message);
-  const captured = (row) => (row.payments || []).filter((p) => p.kind === "PAYMENT" && ["CAPTURED", "REJECTED"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
-  const refunded = (row) => (row.payments || []).filter((p) => p.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
+  const captured = (row) => (row.payments || []).filter((p) => p.kind === "PAYMENT" && ["CAPTURED", "REJECTED"].includes(p.status)).reduce((s, p) => s + toDirhams(p.amount), 0) / 100;
+  const refunded = (row) => (row.payments || []).filter((p) => p.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(p.status)).reduce((s, p) => s + toDirhams(p.amount), 0) / 100;
   const setStatus = (row, status) => {
     const body = { status };
     if (status === "CANCELLED" && captured(row) - refunded(row) > 0) {
@@ -117,7 +118,7 @@ export default function RelocationDesk() {
           ) : null}
           {captured(row) - refunded(row) > 0 ? (
             <button type="button" onClick={() => {
-              const amount = window.prompt(t("shop.refundAmount"), String((captured(row) - refunded(row)).toFixed(2)));
+              const amount = window.prompt(t("shop.refundAmount"), money2(toDirhams(captured(row)) - toDirhams(refunded(row))));
               if (!amount) return;
               api(`/api/relocation/${row.id}/refund`, { method: "POST", body: { amount: Number(amount) } }).then(load).catch(fail);
             }}>{t("shop.refund")}</button>

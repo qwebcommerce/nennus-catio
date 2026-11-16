@@ -3,6 +3,7 @@ import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { formatDateTime } from "../utils/qatarDate.js";
+import { money2, riyals, toDirhams } from "../utils/money.js";
 
 const NEXT = {
   CONFIRMED: ["PREPARING", "CANCELLED"],
@@ -26,7 +27,7 @@ export default function OnlineOrders() {
     return api(`/api/online-orders${q.toString() ? `?${q}` : ""}`).then(setRows).catch((e) => setMsg(e.message));
   };
   useEffect(() => { load(); }, [day, reviewOnly]);
-  const refunded = (row) => (row.refunds || []).reduce((sum, r) => sum + Number(r.total), 0);
+  const refunded = (row) => riyals((row.refunds || []).reduce((sum, r) => sum + toDirhams(r.total), 0));
   const resolve = (row, accept) =>
     api(`/api/online-orders/${row.id}/resolve-payment`, { method: "POST", body: { accept } }).then(load).catch((e) => setMsg(e.message));
   /** FR-76: the server asks the gateway; a paid result confirms through the webhook's checks. */
@@ -75,7 +76,7 @@ export default function OnlineOrders() {
           ) : null}
           {row.gatewayPaymentId && Number(row.amountPaid) > refunded(row) ? (
             <button type="button" onClick={() => {
-              const amount = window.prompt(t("shop.refundAmount"), String((Number(row.amountPaid) - refunded(row)).toFixed(2)));
+              const amount = window.prompt(t("shop.refundAmount"), money2(toDirhams(row.amountPaid) - toDirhams(refunded(row))));
               if (!amount) return;
               const restock = row.webStatus !== "CANCELLED" && window.confirm(t("shop.restock"));
               api(`/api/online-orders/${row.id}/refund`, { method: "POST", body: { amount: Number(amount), restock } }).then(load).catch((e) => setMsg(e.message));

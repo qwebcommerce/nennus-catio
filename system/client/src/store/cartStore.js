@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { lineDirhams, riyals } from "../utils/money.js";
 
 /**
  * حالة سلة POS — كميات وأسعار لكل فرع
@@ -17,11 +18,9 @@ export function cartLineKey(productId, variantId) {
   return variantId ? `${productId}:${variantId}` : String(productId);
 }
 
+/** Line amount in riyals, worked out in whole dirhams (weight lines round like the server). */
 export function lineAmount(line) {
-  const price = Number(line.unitPrice) || 0;
-  const qty = Number(line.quantity) || 0;
-  if (line.sellBy === "WEIGHT") return Math.round(price * (qty / 1000) * 100) / 100;
-  return Math.round(price * qty * 100) / 100;
+  return riyals(lineDirhams(line.unitPrice, line.quantity, line.sellBy));
 }
 
 function mapCartLine(i) {
@@ -154,6 +153,7 @@ export const useCartStore = create((set, get) => ({
 
   total: () => {
     const items = get().items;
-    return items.reduce((s, i) => s + lineAmount(i), 0);
+    // Summed in dirhams so the total is exact (0.10 + 0.20 = 0.30).
+    return riyals(items.reduce((s, i) => s + lineDirhams(i.unitPrice, i.quantity, i.sellBy), 0));
   },
 }));

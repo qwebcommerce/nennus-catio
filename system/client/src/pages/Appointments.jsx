@@ -14,6 +14,7 @@ const NEXT = {
 };
 const MOVABLE = ["PENDING_PAYMENT", "BOOKED", "CONFIRMED"];
 import { statusLabel } from "../utils/statusLabels.js";
+import { riyals, toDirhams } from "../utils/money.js";
 
 const inp = {
   padding: 12,
@@ -154,9 +155,10 @@ export default function Appointments() {
       .catch(fail);
   const paidLeft = (a) => {
     const rows = a.payments || [];
-    const inn = rows.filter((p) => p.kind === "PAYMENT" && ["CAPTURED", "REJECTED"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
-    const out = rows.filter((p) => p.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
-    return Math.round((inn - out) * 100) / 100;
+    // Whole dirhams (NFR-03), shown in riyals.
+    const inn = rows.filter((p) => p.kind === "PAYMENT" && ["CAPTURED", "REJECTED"].includes(p.status)).reduce((s, p) => s + toDirhams(p.amount), 0);
+    const out = rows.filter((p) => p.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(p.status)).reduce((s, p) => s + toDirhams(p.amount), 0);
+    return riyals(inn - out);
   };
   const refund = (a) => {
     const amount = window.prompt(t("shop.refundAmount"), String(paidLeft(a).toFixed(2)));

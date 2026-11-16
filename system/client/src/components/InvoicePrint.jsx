@@ -1,6 +1,7 @@
 import React from "react";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { productDisplayName } from "../utils/productName.js";
+import { riyals, toDirhams } from "../utils/money.js";
 
 const PAY_KEYS = {
   CASH: "payment.cash",
@@ -25,7 +26,7 @@ export function InvoicePrint({ sale, branchName }) {
       ? sale.paymentSplits
       : null;
   const linesSubtotal =
-    sale.items?.reduce((s, it) => s + Number(it.subtotal), 0) ?? Number(sale.total);
+    sale.items ? riyals(sale.items.reduce((s, it) => s + toDirhams(it.subtotal), 0)) : Number(sale.total);
   const disc = Number(sale.discountAmount ?? 0);
   const cur = t("common.currency");
 

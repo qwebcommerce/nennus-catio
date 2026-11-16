@@ -6,6 +6,7 @@ import { readCart, writeCart } from "../../site/cartStore.js";
 import { CartLines } from "./CartLines.jsx";
 import { statusLabel } from "../../utils/statusLabels.js";
 import { formatDateTime } from "../../utils/qatarDate.js";
+import { lineDirhams, riyals, toDirhams } from "../../utils/money.js";
 
 
 /** The customer session is an httpOnly cookie (nc_customer); api() sends credentials. */
@@ -17,9 +18,9 @@ function money(n) {
   return Number(n || 0).toFixed(2);
 }
 
+/** Line amount in riyals, worked out in whole dirhams like the server (NFR-03). */
 function lineTotal(line) {
-  if (line.sellBy === "WEIGHT") return (Number(line.price) * Number(line.quantity)) / 1000;
-  return Number(line.price) * Number(line.quantity);
+  return riyals(lineDirhams(line.price, line.quantity, line.sellBy));
 }
 
 export function ShopCatalog() {
@@ -178,12 +179,13 @@ export function ShopCheckout() {
     }
     shopApi(`/api/shop/windows?date=${form.deliveryDate}`).then(setWindows).catch(() => setWindows([]));
   }, [fulfillment, form.deliveryDate]);
-  const goods = useMemo(() => cart.reduce((sum, line) => sum + lineTotal(line), 0), [cart]);
-  const areaFee = meta?.areas?.find((a) => a.id === form.areaId)?.fee || 0;
+  // Summed in whole dirhams, shown in riyals.
+  const goods = useMemo(() => riyals(cart.reduce((sum, line) => sum + lineDirhams(line.price, line.quantity, line.sellBy), 0)), [cart]);
+  const areaFee = toDirhams(meta?.areas?.find((a) => a.id === form.areaId)?.fee || 0);
   const houseFee = fulfillment === "DELIVERY"
-    ? cart.reduce((sum, line) => sum + Number(line.houseDeliveryFee || 0) * (line.sellBy === "WEIGHT" ? 1 : Number(line.quantity) || 1), 0)
+    ? cart.reduce((sum, line) => sum + toDirhams(line.houseDeliveryFee || 0) * (line.sellBy === "WEIGHT" ? 1 : Number(line.quantity) || 1), 0)
     : 0;
-  const fee = areaFee + houseFee;
+  const fee = riyals(areaFee + houseFee);
   const pay = async (e) => {
     e.preventDefault();
     setBusy(true);

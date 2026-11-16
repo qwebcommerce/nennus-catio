@@ -21,6 +21,7 @@ import { productDisplayName } from "../utils/productName.js";
 import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { useAuth } from "../context/AuthContext.jsx";
+import { riyals, toDirhams } from "../utils/money.js";
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -118,8 +119,9 @@ export default function POS() {
     Math.max(0, Number.parseFloat(String(discountInput).replace(",", ".")) || 0),
     cartSubtotal
   );
-  const afterDisc = Math.max(0, cartSubtotal - discountNum);
-  const amountDue = round2(afterDisc);
+  // NFR-03: what is due is worked out in whole dirhams.
+  const afterDisc = riyals(Math.max(0, toDirhams(cartSubtotal) - toDirhams(discountNum)));
+  const amountDue = afterDisc;
   const clearCart = useCartStore((s) => s.clear);
   const setBranchCart = useCartStore((s) => s.setBranchId);
   const replaceAll = useCartStore((s) => s.replaceAll);
@@ -374,23 +376,23 @@ export default function POS() {
     const due = amountDue;
     const others = splitRows.reduce((s, r, j) => {
       if (j === idx) return s;
-      return s + round2(Number.parseFloat(String(r.amount).replace(",", ".")) || 0);
+      return s + toDirhams(Number.parseFloat(String(r.amount).replace(",", ".")) || 0);
     }, 0);
-    const rem = Math.max(0, round2(due - others));
+    const rem = riyals(Math.max(0, toDirhams(due) - others));
     setSplitRows((rows) => rows.map((r, j) => (j === idx ? { ...r, amount: rem > 0 ? String(rem) : "" } : r)));
   };
 
   const splitSum = useMemo(
     () =>
-      round2(
+      riyals(
         splitRows.reduce(
-          (s, r) => s + (round2(Number.parseFloat(String(r.amount).replace(",", ".")) || 0)),
+          (s, r) => s + toDirhams(Number.parseFloat(String(r.amount).replace(",", ".")) || 0),
           0,
         ),
       ),
     [splitRows],
   );
-  const splitRemaining = round2(amountDue - splitSum);
+  const splitRemaining = riyals(toDirhams(amountDue) - toDirhams(splitSum));
 
   const addSplitRow = () => {
     setSplitRows((rows) => [...rows, { method: "ONLINE", amount: "" }]);
@@ -569,8 +571,9 @@ export default function POS() {
         setMsg(t("pos.splitMismatch"));
         return;
       }
-      const sum = round2(parsed.reduce((s, x) => s + x.amount, 0));
-      if (Math.abs(sum - amountDue) > 0.02) {
+      // The server needs the split rows to add up to the bill exactly (whole dirhams).
+      const sum = parsed.reduce((s, x) => s + toDirhams(x.amount), 0);
+      if (sum !== toDirhams(amountDue)) {
         setMsg(t("pos.splitMismatch"));
         return;
       }

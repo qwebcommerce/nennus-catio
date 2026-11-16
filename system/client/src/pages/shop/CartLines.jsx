@@ -1,9 +1,10 @@
 import React from "react";
 import { useI18n } from "../../context/LanguageContext.jsx";
+import { lineDirhams, riyals } from "../../utils/money.js";
 
+/** Line amount in riyals, worked out in whole dirhams like the server (NFR-03). */
 function lineTotal(line) {
-  if (line.sellBy === "WEIGHT") return (Number(line.price) * Number(line.quantity)) / 1000;
-  return Number(line.price) * Number(line.quantity);
+  return riyals(lineDirhams(line.price, line.quantity, line.sellBy));
 }
 
 /**
