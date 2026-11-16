@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
+import { formatDateTime } from "../utils/qatarDate.js";
 
 const NEXT = {
   SUBMITTED: ["DOCUMENTS_REQUESTED", "UNDER_REVIEW", "CANCELLED"],
@@ -12,7 +14,7 @@ const NEXT = {
 };
 
 export default function RelocationDesk() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState([]);
   const [quote, setQuote] = useState({});
   const [bankRef, setBankRef] = useState({});
@@ -58,7 +60,8 @@ export default function RelocationDesk() {
       <h1>{t("shop.relocation")}</h1>
       {rows.map((row) => (
         <article key={row.id} className="card" style={{ display: "grid", gap: 6 }}>
-          <strong>{row.reference || row.id} · {row.customer?.name} · {row.destination} · {row.status}</strong>
+          <strong>{row.reference || row.id} · {row.customer?.name} · {row.destination} · {statusLabel("relocation", row.status, locale)}</strong>
+          {row.createdAt ? <div>{formatDateTime(row.createdAt, locale)}</div> : null}
           {(row.payments || []).map((p) => (
             <div key={p.id} style={{ fontSize: 13, color: "var(--muted)" }}>
               {p.kind} · {p.method} · {Number(p.amount).toFixed(2)} QAR · {p.status}{p.reference ? ` · ${p.reference}` : ""}
@@ -103,7 +106,7 @@ export default function RelocationDesk() {
           ) : null}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {(NEXT[row.status] || []).map((status) => (
-              <button key={status} type="button" onClick={() => setStatus(row, status)}>{status}</button>
+              <button key={status} type="button" onClick={() => setStatus(row, status)}>{statusLabel("relocation", status, locale)}</button>
             ))}
           </div>
         </article>

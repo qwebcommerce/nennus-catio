@@ -2,26 +2,25 @@ import React, { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { SupplierBills } from "./SupplierBills.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
 
 export default function PurchaseOrders() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
   const [orders, setOrders] = useState([]);
-  const [bills, setBills] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState({ supplierId: "", productId: "", variantId: "", quantity: "1", unitCost: "" });
   const [msg, setMsg] = useState("");
 
   const load = async () => {
-    const [orderRows, billRows, supplierRows, productRows] = await Promise.all([
+    const [orderRows, supplierRows, productRows] = await Promise.all([
       api("/api/purchase-orders"),
-      api("/api/purchase-orders/bills"),
       api("/api/suppliers"),
       api(`/api/products?includeInactive=1&branchId=${branchId || ""}`),
     ]);
     setOrders(orderRows);
-    setBills(billRows);
     setSuppliers(supplierRows);
     setProducts(Array.isArray(productRows) ? productRows : productRows.items || []);
   };
@@ -69,7 +68,7 @@ export default function PurchaseOrders() {
       </form>
       {orders.map((order) => (
         <article key={order.id} className="card">
-          <strong>{order.supplier?.name} · {order.status}</strong>
+          <strong>{order.supplier?.name} · {statusLabel("purchaseOrder", order.status, locale)}</strong>
           <div>{order.branch?.name}</div>
           {order.lines.map((line) => (
             <div key={line.id}>{line.quantityReceived}/{line.quantity} · {Number(line.unitCost).toFixed(2)}</div>
@@ -82,18 +81,7 @@ export default function PurchaseOrders() {
           </div>
         </article>
       ))}
-      <h2>{t("po.bills")}</h2>
-      {bills.map((bill) => {
-        const balance = Number(bill.amount) - Number(bill.amountPaid);
-        return (
-          <article key={bill.id} className="card">
-            <div>{bill.supplier?.name} · {bill.status} · {t("po.balance")} {balance.toFixed(2)}</div>
-            {bill.status !== "PAID" ? (
-              <button type="button" onClick={() => api(`/api/purchase-orders/bills/${bill.id}/payments`, { method: "POST", body: { amount: balance, method: "BANK" } }).then(load)}>{t("po.payBill")}</button>
-            ) : null}
-          </article>
-        );
-      })}
+      <SupplierBills suppliers={suppliers} refreshKey={orders} />
       {msg ? <div>{msg}</div> : null}
     </div>
   );

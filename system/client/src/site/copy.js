@@ -87,24 +87,10 @@ export function useCatalog(query = "") {
   return { products, status };
 }
 
-const PET_WORDS = {
-  cats: ["cat", "kitten", "قط"],
-  dogs: ["dog", "puppy", "كلب"],
-  birds: ["bird", "parrot", "طير", "طيور", "ببغ"],
-  "small-pets": ["rabbit", "hamster", "guinea", "rodent", "small", "أرنب", "هامستر"],
-  "other-pets": ["horse", "goat", "deer", "حصان", "ماعز", "غزال"],
-  reptiles: ["reptile", "lizard", "tortoise", "turtle", "snake", "زاحف", "سلح"],
-  fish: ["fish", "aquarium", "سمك"],
-  "exotic-pets": ["exotic", "lizard", "سحلية"],
-};
-
+/** Filters by a staff-defined pet type id (FR-11, FR-31). */
 export function matchesPet(product, petId) {
   if (!petId) return true;
-  const words = PET_WORDS[petId] || [];
-  const types = product?.petTypes || [];
-  if (!types.length) return false;
-  const blob = types.map((row) => `${row.name || ""} ${row.nameEn || ""}`).join(" ").toLowerCase();
-  return words.some((word) => blob.includes(word));
+  return (product?.petTypes || []).some((row) => row.id === petId);
 }
 
 export function matchesCategory(product, categoryParam, categories) {

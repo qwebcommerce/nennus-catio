@@ -102,7 +102,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
         role="region"
         aria-labelledby={`${panelId}-btn`}
         aria-hidden={!expanded}
-        inert={!expanded || undefined}
+        inert={!expanded ? "" : undefined}
       >
         <div className="app-sidebar-nav-panel-inner">{children}</div>
       </div>
@@ -140,9 +140,47 @@ export function AppLayout() {
     setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  /** Phones: the sidebar is a drawer behind a menu button so the page (e.g. the van till) comes first. */
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname]);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
+
   return (
-    <div className="app-layout-shell">
-      <aside className="app-sidebar" aria-label={t("nav.brand")}>
+    <div className={`app-layout-shell${menuOpen ? " is-menu-open" : ""}`}>
+      <div className="app-mobile-bar">
+        <button
+          type="button"
+          className="app-mobile-menu-btn"
+          aria-label={t("nav.menu")}
+          aria-expanded={menuOpen}
+          aria-controls="app-sidebar"
+          onClick={() => setMenuOpen((v) => !v)}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <span className="app-mobile-brand">
+          <img src="/brand/logo.png" alt="" />
+          <strong>Nennus Catio</strong>
+        </span>
+        {activeBranchId && branches.length ? (
+          <span className="app-mobile-branch">
+            {branchDisplayName(branches.find((b) => b.id === activeBranchId) || branches[0], locale)}
+          </span>
+        ) : null}
+      </div>
+      {menuOpen ? <div className="app-sidebar-backdrop" onClick={() => setMenuOpen(false)} aria-hidden="true" /> : null}
+      <aside id="app-sidebar" className={`app-sidebar${menuOpen ? " is-open" : ""}`} aria-label={t("nav.brand")}>
         <div className="app-sidebar-header">
           <div className="app-sidebar-brand">
             <span className="app-sidebar-avatar" aria-hidden="true">
@@ -289,13 +327,13 @@ export function AppLayout() {
               </NavLink>
             ) : null}
             {(isAdmin || isManager) ? (
-              <NavLink to="/grooming" className={sidebarLinkClass}>
+              <NavLink to="/admin/grooming" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
                 <span>{t("shop.grooming")}</span>
               </NavLink>
             ) : null}
             {(isAdmin || isManager) ? (
-              <NavLink to="/relocation" className={sidebarLinkClass}>
+              <NavLink to="/admin/relocation" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
                 <span>{t("shop.relocation")}</span>
               </NavLink>

@@ -275,8 +275,9 @@ export default function App() {
               </Protected>
             }
           />
+          {/* Staff desks live under /admin so the public /grooming and /relocation pages never shadow them. */}
           <Route
-            path="/grooming"
+            path="/admin/grooming"
             element={
               <Protected roles={["ADMIN", "MANAGER"]}>
                 <GroomingDesk />
@@ -284,7 +285,7 @@ export default function App() {
             }
           />
           <Route
-            path="/relocation"
+            path="/admin/relocation"
             element={
               <Protected roles={["ADMIN", "MANAGER"]}>
                 <RelocationDesk />

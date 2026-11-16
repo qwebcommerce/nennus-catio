@@ -43,6 +43,7 @@ import customerAccountsRoutes from "./routes/customerAccounts.js";
 import expensesRoutes from "./routes/expenses.js";
 import reportsRoutes from "./routes/reports.js";
 import appointmentsRoutes from "./routes/appointments.js";
+import cronRoutes from "./routes/cron.js";
 import { prisma } from "./lib/prisma.js";
 import { csrfGuard } from "./middleware/auth.js";
 import {
@@ -164,6 +165,7 @@ app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/exports", exportRoutes);
 app.use("/api/online-orders", onlineOrderRoutes);
 app.use("/api/delivery-setup", deliverySetupRoutes);
+app.use("/api/cron", cronRoutes);
 
 /**
  * Local single-process mode: serve the Vite build from the same Express port.

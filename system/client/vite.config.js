@@ -15,7 +15,8 @@ export default defineConfig({
         theme_color: "#1e3e2f",
         background_color: "#1e3e2f",
         display: "standalone",
-        orientation: "portrait",
+        // No orientation lock: the van uses a phone, the shop till a landscape tablet (NFR-20).
+        orientation: "any",
         scope: "/",
         start_url: "/",
         lang: "ar",

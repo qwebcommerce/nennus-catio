@@ -8,7 +8,7 @@ import { claimSlot, minutesOf, qatarDateTime, slotTaken, weekdayOf } from "../li
 import { sweepExpiredHolds } from "../lib/webOrder.js";
 import { customerSession } from "../lib/customerSession.js";
 import { LOCK_TX } from "../lib/payments.js";
-import { mailStaff } from "../lib/mailer.js";
+import { mailCustomer, mailStaff } from "../lib/mailer.js";
 
 const router = Router();
 
@@ -176,6 +176,8 @@ router.post("/bookings/:id/cancel", async (req, res) => {
   if (paid) {
     await mailStaff(org.id, "alertBooking", `Grooming booking ${row.reference || row.id} was cancelled by the customer. A refund of ${Number(row.amountPaid).toFixed(2)} QAR is due.`);
   }
+  const customer = await prisma.customer.findUnique({ where: { id: session.sub } });
+  await mailCustomer(customer, "booking", { reference: row.reference || row.id.slice(-8).toUpperCase(), status: "CANCELLED", startAt: row.startAt });
   res.json({ id: row.id, reference: row.reference, status: "CANCELLED", refundDue: paid });
 });
 

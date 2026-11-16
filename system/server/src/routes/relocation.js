@@ -198,7 +198,7 @@ relocationShop.post("/", async (req, res) => {
       },
       include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
     });
-    await mailStaff(req.shopOrg.id, "alertRelocation", `Relocation request ${row.reference || row.id} was submitted.`);
+    await mailStaff(req.shopOrg.id, "alertRelocation", { reference: row.reference || row.id.slice(-8).toUpperCase() });
     res.status(201).json(publicRequest(row));
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not submit the request" });
@@ -373,7 +373,7 @@ relocationStaff.post("/:id/status", async (req, res) => {
     summary: `${row.reference || row.id}: ${row.status} -> ${next}${decision ? ` (${decision}${note ? `: ${note}` : ""})` : ""}`,
   });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `Relocation ${updated.reference || updated.id} is now ${updated.status}.`);
+  await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: updated.status });
   res.json(updated);
 });
 
@@ -398,7 +398,7 @@ relocationStaff.post("/:id/quote", async (req, res) => {
   });
   await writeAudit({ userId: req.user.sub, action: "RELOCATION_QUOTE", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${amount.toFixed(2)}` });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `A quote of ${amount.toFixed(2)} QAR is ready for relocation ${updated.reference || updated.id}.`);
+  await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: "QUOTE_SENT", amount });
   res.json(updated);
 });
 
@@ -456,7 +456,7 @@ relocationStaff.post("/:id/pay", async (req, res) => {
     summary: `${row.reference || row.id} ${amount.toFixed(2)} ${method}${reference ? ` ref ${reference}` : ""}`,
   });
   const buyer = await prisma.customer.findUnique({ where: { id: result.updated.customerId } });
-  await mailCustomer(buyer, "relocation", `Relocation ${result.updated.reference || result.updated.id} is marked paid.`);
+  await mailCustomer(buyer, "relocation", { reference: result.updated.reference || result.updated.id.slice(-8).toUpperCase(), status: "PAID" });
   res.json({ ...result.updated, payment: result.payment });
 });
 
@@ -478,7 +478,7 @@ relocationStaff.post("/:id/refund", requireModule("relocation", "refund"), async
       note: req.body?.note,
     });
     await writeAudit({ userId: req.user.sub, action: "RELOCATION_REFUND", entityType: "Payment", entityId: refund.id, summary: `${row.reference || row.id} ${Number(refund.amount).toFixed(2)} ${refund.method}` });
-    await mailCustomer(row.customer, "refund", `A refund of ${Number(refund.amount).toFixed(2)} QAR was sent for relocation ${row.reference || row.id}.`);
+    await mailCustomer(row.customer, "refund", { reference: row.reference || row.id.slice(-8).toUpperCase(), amount: refund.amount });
     res.status(201).json(refund);
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message });

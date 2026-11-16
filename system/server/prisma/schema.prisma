@@ -250,6 +250,8 @@ model Expense {
   description      String?
   /// تاريخ انتماء المصروف للتقارير (يوم/شهر/سنة)
   expenseDate      DateTime
+  /// Paid from the cash drawer or from the bank.
+  paidFrom         SupplierPayMethod @default(CASH)
   createdByUserId  String
   createdBy        User            @relation("ExpenseCreatedBy", fields: [createdByUserId], references: [id])
   createdAt        DateTime        @default(now())
@@ -2089,4 +2091,27 @@ model Payment {
   @@index([appointmentId])
   @@index([relocationRequestId])
   @@index([organizationId, status])
+}
+
+/// Transactional email waiting to be sent. Rows are written in the caller's flow and sent by
+/// the outbox worker with retry and backoff, so a mail failure never fails the business action.
+model EmailOutbox {
+  id             String    @id @default(cuid())
+  organizationId String?
+  kind           String
+  toEmail        String
+  subject        String
+  text           String
+  html           String?
+  /// PENDING | SENDING | SENT | FAILED
+  status         String    @default("PENDING")
+  attempts       Int       @default(0)
+  nextAttemptAt  DateTime  @default(now())
+  lockedUntil    DateTime?
+  lastError      String?
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, nextAttemptAt])
 }

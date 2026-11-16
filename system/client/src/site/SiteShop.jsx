@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronUp, House, Search, ShoppingBag } from "lucide-react";
 import { matchesCategory, matchesPet, money, pickName, productImage, productPrice, useCatalog, useCopy, useShopMeta } from "./copy.js";
-import { PETS } from "./pets.js";
+import { petGroups } from "./pets.js";
 
 export function SiteShop() {
   const { locale, text } = useCopy();
@@ -11,6 +11,7 @@ export function SiteShop() {
   const [params, setParams] = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const categories = meta?.categories || [];
+  const pets = petGroups(meta?.petTypes);
   const pet = params.get("pet") || "";
   const category = params.get("category") || "";
   const search = params.get("search") || "";
@@ -43,13 +44,14 @@ export function SiteShop() {
   const pageCount = Math.max(1, Math.ceil(filtered.length / 12));
   const current = Math.min(page, pageCount);
   const visible = filtered.slice((current - 1) * 12, current * 12);
-  const selectedPet = PETS.find((row) => row.id === pet);
+  const selectedPet = pets.find((row) => row.id === pet);
   const selectedCategory = categories.find((row) => row.id === category);
 
   return (
     <div className="ref-shop customer-page">
+      <h1 className="sr-only">{text("Shop", "المتجر")}</h1>
       <section className="ref-pet-row ref-pet-row--shop" aria-label={text("Shop by pet", "تسوق حسب الحيوان")}>
-        {PETS.map((group) => (
+        {pets.map((group) => (
           <button
             type="button"
             className={`ref-pet-circle ${pet === group.id ? "is-selected" : ""}`}

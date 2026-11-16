@@ -563,7 +563,8 @@ router.post("/checkout", async (req, res) => {
       if (row && row.quantity <= row.minStockLevel) lowNames.push(line.productId);
     }
     if (lowNames.length) {
-      await mailStaff(orgId, "alertLowStock", `Stock is at or below its threshold for ${lowNames.length} item(s) after a sale.`);
+      // Queued only; an email problem never fails the saved sale.
+      await mailStaff(orgId, "alertLowStock", { count: lowNames.length });
     }
 
     return res.status(201).json(sale);
@@ -624,6 +625,8 @@ router.get("/", async (req, res) => {
     if (from) where.createdAt.gte = new Date(String(from));
     if (to) where.createdAt.lte = new Date(String(to));
   }
+  const channel = String(req.query.channel || req.query.orderChannel || "").trim().toUpperCase();
+  if (["IN_STORE", "VAN", "WEBSITE"].includes(channel)) where.orderChannel = channel;
   const pm = paymentMethod != null ? String(paymentMethod).trim().toUpperCase() : "";
   if (pm && SALE_FILTER_PAY.has(pm)) {
     where.paymentMethod = pm;

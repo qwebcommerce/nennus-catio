@@ -6,6 +6,7 @@ import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { moveStock } from "../lib/stockLedger.js";
 import { cashPortionFromSale } from "../lib/saleCash.js";
+import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -345,6 +346,12 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
       summary: `Refund total ${refund.total} ${refund.method}${restock ? " restocked" : ""}`,
       meta: { lines: refund.items?.length, saleId: refund.saleId, method: refund.method, restock },
     });
+
+    // Refund email to the customer (FR-85). Queued; never fails the saved refund.
+    if (refund.saleId) {
+      const sale = await prisma.sale.findUnique({ where: { id: refund.saleId }, select: { id: true, invoiceNumber: true, customer: true } });
+      if (sale?.customer) await mailCustomer(sale.customer, "refund", { reference: sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount: refund.total });
+    }
 
     res.status(201).json(refund);
   } catch (e) {

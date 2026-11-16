@@ -13,6 +13,7 @@ router.get("/", requireModule("settings", "view"), async (req, res, next) => {
       where: { id: req.user.organizationId },
       select: {
         id: true,
+        name: true,
         websiteBranchId: true,
         holdMinutes: true,
         bookingCancelHours: true,
@@ -32,6 +33,7 @@ router.get("/", requireModule("settings", "view"), async (req, res, next) => {
     });
     if (!org) return res.status(404).json({ error: "Organization not found" });
     res.json({
+      name: org.name || "",
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
       bookingCancelHours: org.bookingCancelHours,
@@ -58,6 +60,13 @@ router.patch("/", requireOwner, async (req, res, next) => {
   try {
     const b = req.body || {};
     const data = {};
+    if (b.name !== undefined) {
+      const name = String(b.name || "").trim();
+      if (!name || name.length > 120) {
+        return res.status(400).json({ error: "Enter the business name (up to 120 characters)", errorAr: "أدخل اسم النشاط (حتى 120 حرفاً)", errorEn: "Enter the business name (up to 120 characters)" });
+      }
+      data.name = name;
+    }
     if (b.whatsappNumber !== undefined) {
       const digits = String(b.whatsappNumber || "").replace(/[^\d]/g, "");
       data.whatsappNumber = digits || null;
@@ -111,6 +120,7 @@ router.patch("/", requireOwner, async (req, res, next) => {
         data,
         select: {
           id: true,
+          name: true,
           websiteBranchId: true,
           holdMinutes: true,
           bookingCancelHours: true,
@@ -142,6 +152,7 @@ router.patch("/", requireOwner, async (req, res, next) => {
       return row;
     });
     res.json({
+      name: org.name || "",
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
       bookingCancelHours: org.bookingCancelHours,

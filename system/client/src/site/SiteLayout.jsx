@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useCopy, useShopMeta, waLink } from "./copy.js";
 import "./site.css";
+import { CART_EVENT, CART_KEY, cartCount } from "./cartStore.js";
 
 const LINKS = [
   { href: "/", en: "Home", ar: "الرئيسية" },
@@ -26,15 +27,6 @@ const LINKS = [
   { href: "/about", en: "About", ar: "عنّا" },
   { href: "/contact", en: "Contact", ar: "تواصل" },
 ];
-
-function cartCount() {
-  try {
-    const rows = JSON.parse(localStorage.getItem("nennus.shopCart") || "[]");
-    return rows.reduce((sum, line) => sum + (Number(line.quantity) || 1), 0);
-  } catch {
-    return 0;
-  }
-}
 
 function Brand({ compact = false, light = false }) {
   const tone = light ? "-light" : "";
@@ -58,6 +50,20 @@ export function SiteLayout() {
     setOpen(false);
     setCount(cartCount());
   }, [location.pathname, location.search]);
+
+  // The header count follows every cart change right away, also from other tabs.
+  useEffect(() => {
+    const refresh = () => setCount(cartCount());
+    const onStorage = (event) => {
+      if (event.key === CART_KEY) refresh();
+    };
+    window.addEventListener(CART_EVENT, refresh);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(CART_EVENT, refresh);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, []);
 
   const current = (href) => {
     if (href === "/") return location.pathname === "/";

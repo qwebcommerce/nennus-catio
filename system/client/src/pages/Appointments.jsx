@@ -13,6 +13,7 @@ const NEXT = {
   IN_PROGRESS: ["DONE", "CANCELLED"],
 };
 const MOVABLE = ["PENDING_PAYMENT", "BOOKED", "CONFIRMED"];
+import { statusLabel } from "../utils/statusLabels.js";
 
 const inp = {
   padding: 12,
@@ -291,7 +292,7 @@ export default function Appointments() {
                   </td>
                   <td style={td}>{a.service?.name || "—"}</td>
                   <td style={td}>
-                    {a.status}
+                    {statusLabel("booking", a.status, locale)}
                     {Number(a.amountPaid) > 0 ? <div style={{ color: "var(--muted)" }}>{t("shop.paid")} {Number(a.amountPaid).toFixed(2)}</div> : null}
                     {a.paymentReview ? (
                       <div style={{ color: "var(--danger, #b42318)" }}>

@@ -223,7 +223,7 @@ router.post("/:id/refund", requireModule("orders", "refund"), async (req, res) =
     await prisma.sale.updateMany({ where: { id: sale.id, paymentReviewReason: "REFUND_DUE" }, data: { paymentReview: false, paymentReviewReason: null } });
   }
   await writeAudit({ userId: req.user.sub, action: "ONLINE_REFUND", entityType: "Refund", entityId: refund.id, summary: `${sale.reference || sale.id} ${amount.toFixed(2)}` });
-  await mailCustomer(sale.customer, "refund", `A refund of ${amount.toFixed(2)} QAR was sent for order ${sale.reference || sale.id}.`);
+  await mailCustomer(sale.customer, "refund", { reference: sale.reference || sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount });
   res.status(201).json(refund);
 });
 
@@ -281,7 +281,7 @@ router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => 
     });
     if (sale.customerId) {
       const buyer = await prisma.customer.findUnique({ where: { id: sale.customerId } });
-      await mailCustomer(buyer, "order", `Order ${sale.reference || sale.id} is now ${sale.webStatus}.`);
+      await mailCustomer(buyer, "order", { reference: sale.reference || sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), status: sale.webStatus });
     }
     res.json({ id: sale.id, status: sale.webStatus });
   } catch (e) {

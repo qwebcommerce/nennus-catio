@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
+import { formatDateTime } from "../utils/qatarDate.js";
 
 const NEXT = {
   CONFIRMED: ["PREPARING", "CANCELLED"],
@@ -10,7 +12,7 @@ const NEXT = {
 };
 
 export default function OnlineOrders() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState("");
   const [day, setDay] = useState("");
@@ -44,7 +46,8 @@ export default function OnlineOrders() {
       </div>
       {rows.map((row) => (
         <article key={row.id} className="card">
-          <strong>{row.reference || row.id} · {row.customer?.name || "—"} · {row.webStatus} · {row.fulfillment}</strong>
+          <strong>{row.reference || row.id} · {row.customer?.name || "—"} · {statusLabel("order", row.webStatus, locale)} · {statusLabel("fulfillment", row.fulfillment, locale)}</strong>
+          {row.createdAt ? <div>{formatDateTime(row.createdAt, locale)}</div> : null}
           <div>
             {Number(row.total).toFixed(2)} QAR
             {Number(row.amountPaid) > 0 ? ` · ${t("shop.paid")} ${Number(row.amountPaid).toFixed(2)}` : ""}
@@ -76,7 +79,7 @@ export default function OnlineOrders() {
             ) : null}
             {(NEXT[row.webStatus] || []).map((status) => (
               <button key={status} type="button" onClick={() => api(`/api/online-orders/${row.id}/status`, { method: "POST", body: { status } }).then(load).catch((e) => setMsg(e.message))}>
-                {status}
+                {statusLabel("order", status, locale)}
               </button>
             ))}
           </div>

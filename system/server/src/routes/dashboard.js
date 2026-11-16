@@ -2,30 +2,27 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { listLowStock } from "../lib/lowStock.js";
-import { qatarDayBounds, qatarToday } from "../lib/groomingSlots.js";
+import { dec, money, sumDec } from "../lib/money.js";
+import { qatarDayStart, qatarDayKey, qatarMonthStart, qatarRange, qatarToday } from "../lib/qatarTime.js";
+import { COUNTED_SALE } from "../lib/financeData.js";
 
 const router = Router();
 router.use(authMiddleware);
 /** Sales dashboard: anyone who can see the till; profit figures need Finance → view. */
 router.use(requireModule("pos", "view"));
 
+/** Today and this month are Qatar calendar days. */
 function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return qatarToday().start;
 }
 
 function startOfMonth() {
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return qatarMonthStart();
 }
 
+/** ?from=&to= as inclusive Qatar days; `to` is returned exclusive. */
 function monthRangeFromQuery(req) {
-  const from = req.query.from ? new Date(String(req.query.from)) : startOfMonth();
-  const to = req.query.to ? new Date(String(req.query.to)) : new Date();
-  return { from, to };
+  return qatarRange(req.query) || { from: startOfMonth(), to: qatarToday().end };
 }
 
 /** فلتر فرع ضمن المؤسسة */
@@ -44,26 +41,26 @@ router.get("/summary", async (req, res) => {
   const branchId = req.query.branchId || (req.user.role === "ADMIN" ? null : req.user.branchId);
   const branchFilter = branchScope(req, branchId);
 
+  const today = qatarToday();
   const todaySales = await prisma.sale.aggregate({
-    where: { ...branchFilter, createdAt: { gte: startOfToday() } },
+    where: { ...branchFilter, ...COUNTED_SALE, createdAt: { gte: today.start, lt: today.end } },
     _count: true,
     _sum: { total: true },
   });
 
   const monthSales = await prisma.sale.aggregate({
-    where: { ...branchFilter, createdAt: { gte: startOfMonth() } },
+    where: { ...branchFilter, ...COUNTED_SALE, createdAt: { gte: startOfMonth() } },
     _sum: { total: true },
   });
 
   // FR-92: the balances at or below their low-stock level, not only a count.
   const lowStockItems = await listLowStock(prisma, req.user.organizationId, branchId);
-  const todayStart = startOfToday();
   const channelSales = await prisma.sale.groupBy({
     by: ["orderChannel"],
     where: {
       ...branchFilter,
-      createdAt: { gte: todayStart },
-      OR: [{ webStatus: null }, { webStatus: { notIn: ["PENDING_PAYMENT", "CANCELLED"] } }],
+      ...COUNTED_SALE,
+      createdAt: { gte: today.start, lt: today.end },
     },
     _sum: { total: true },
     _count: true,
@@ -79,40 +76,38 @@ router.get("/summary", async (req, res) => {
     where: {
       organizationId: req.user.organizationId,
       ...(branchId ? { branchId: String(branchId) } : {}),
-      // Today in Qatar (NFR-04), not the server's day.
-      startAt: { gte: qatarDayBounds(qatarToday()).from, lte: qatarDayBounds(qatarToday()).to },
+      // Only today's (Qatar) bookings, not every future one.
+      startAt: { gte: today.start, lt: today.end },
       status: { notIn: ["CANCELLED", "PENDING_PAYMENT"] },
     },
   });
 
   const monthSalesRows = await prisma.sale.findMany({
-    where: { ...branchFilter, createdAt: { gte: startOfMonth() } },
+    where: { ...branchFilter, ...COUNTED_SALE, createdAt: { gte: startOfMonth() } },
     select: { total: true, taxAmount: true },
   });
-  const revenueMonth = monthSalesRows.reduce(
-    (s, r) => s + Number(r.total) - Number(r.taxAmount ?? 0),
-    0
-  );
+  const revenueMonth = sumDec(monthSalesRows, (r) => r.total).minus(sumDec(monthSalesRows, (r) => r.taxAmount));
 
   const itemsMonth = await prisma.saleItem.findMany({
     where: {
-      sale: { ...branchFilter, createdAt: { gte: startOfMonth() } },
+      sale: { ...branchFilter, ...COUNTED_SALE, createdAt: { gte: startOfMonth() } },
     },
-    include: { product: { select: { id: true, name: true, cost: true } } },
+    select: { quantity: true, costAmount: true, product: { select: { cost: true } } },
   });
-  const costMonth = itemsMonth.reduce((acc, it) => {
-    const unitCost = it.product?.cost != null ? Number(it.product.cost) : 0;
-    return acc + unitCost * Number(it.quantity || 0);
-  }, 0);
+  // Cost recorded at sale time (location unit cost); product cost only when none was recorded.
+  const costMonth = itemsMonth.reduce(
+    (acc, it) => acc.plus(it.costAmount != null ? dec(it.costAmount) : dec(it.product?.cost).mul(it.quantity || 0)),
+    dec(0),
+  );
 
   res.json({
     salesTodayCount: todaySales._count,
-    salesTodayTotal: todaySales._sum.total?.toString() ?? "0",
-    salesMonthTotal: monthSales._sum.total?.toString() ?? "0",
-    estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? (revenueMonth - costMonth).toFixed(2) : null,
+    salesTodayTotal: money(todaySales._sum.total).toFixed(2),
+    salesMonthTotal: money(monthSales._sum.total).toFixed(2),
+    estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? money(revenueMonth.minus(costMonth)).toFixed(2) : null,
     lowStockAlerts: lowStockItems.length,
     lowStockItems,
-    channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: Number(row._sum.total || 0), count: row._count }])),
+    channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: money(row._sum.total), count: row._count }])),
     waitingOrders,
     todayGrooming,
   });
@@ -120,15 +115,15 @@ router.get("/summary", async (req, res) => {
 
 router.get("/sales-by-product", async (req, res) => {
   const branchId = req.query.branchId || (req.user.role === "ADMIN" ? null : req.user.branchId);
-  const from = req.query.from ? new Date(String(req.query.from)) : startOfMonth();
-  const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+  const { from, to } = monthRangeFromQuery(req);
   const bf = branchScope(req, branchId);
 
   const items = await prisma.saleItem.findMany({
     where: {
       sale: {
         ...bf,
-        createdAt: { gte: from, lte: to },
+        ...COUNTED_SALE,
+        createdAt: { gte: from, lt: to },
       },
     },
     include: { product: { select: { name: true } } },
@@ -137,9 +132,9 @@ router.get("/sales-by-product", async (req, res) => {
   const map = new Map();
   for (const it of items) {
     const name = it.product?.name || "—";
-    map.set(name, (map.get(name) || 0) + Number(it.subtotal));
+    map.set(name, (map.get(name) || dec(0)).plus(dec(it.subtotal)));
   }
-  const chart = [...map.entries()].map(([name, value]) => ({ name, value }));
+  const chart = [...map.entries()].map(([name, value]) => ({ name, value: money(value) }));
   chart.sort((a, b) => b.value - a.value);
   res.json(chart.slice(0, 20));
 });
@@ -148,13 +143,13 @@ router.get("/sales-by-branch", async (req, res) => {
   if (req.user.role !== "ADMIN") {
     return res.status(403).json({ error: "للمدراء فقط" });
   }
-  const from = req.query.from ? new Date(String(req.query.from)) : startOfMonth();
-  const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+  const { from, to } = monthRangeFromQuery(req);
 
   const sales = await prisma.sale.groupBy({
     by: ["branchId"],
     where: {
-      createdAt: { gte: from, lte: to },
+      ...COUNTED_SALE,
+      createdAt: { gte: from, lt: to },
       branch: { organizationId: req.user.organizationId },
     },
     _sum: { total: true },
@@ -169,7 +164,7 @@ router.get("/sales-by-branch", async (req, res) => {
   res.json(
     sales.map((s) => ({
       name: nameById[s.branchId] || s.branchId,
-      value: Number(s._sum.total || 0),
+      value: money(s._sum.total),
     }))
   );
 });
@@ -178,37 +173,31 @@ router.get("/monthly-profit", requireModule("finance", "view"), async (req, res)
   const branchId = req.query.branchId || (req.user.role === "ADMIN" ? null : req.user.branchId);
   const months = 6;
   const out = [];
-  const now = new Date();
   const bf = branchScope(req, branchId);
+  const [year, month] = qatarDayKey().split("-").map(Number);
   for (let i = months - 1; i >= 0; i--) {
-    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59);
+    const startDate = new Date(Date.UTC(year, month - 1 - i, 1));
+    const endDate = new Date(Date.UTC(year, month - i, 1));
+    const start = qatarDayStart(startDate.toISOString().slice(0, 10));
+    const end = qatarDayStart(endDate.toISOString().slice(0, 10));
     const salesInMonth = await prisma.sale.findMany({
       where: {
         ...bf,
-        createdAt: { gte: start, lte: end },
+        ...COUNTED_SALE,
+        createdAt: { gte: start, lt: end },
       },
-      select: { id: true, total: true, taxAmount: true },
+      select: { id: true, total: true, taxAmount: true, items: { select: { quantity: true, costAmount: true, product: { select: { cost: true } } } } },
     });
-    let revenue = salesInMonth.reduce(
-      (s, x) => s + Number(x.total) - Number(x.taxAmount ?? 0),
-      0
-    );
-    const saleIds = salesInMonth.map((s) => s.id);
-    const items = saleIds.length
-      ? await prisma.saleItem.findMany({
-          where: { saleId: { in: saleIds } },
-          include: { product: true },
-        })
-      : [];
-    let cost = 0;
-    for (const it of items) {
-      const c = it.product?.cost != null ? Number(it.product.cost) : 0;
-      cost += c * it.quantity;
+    const revenue = sumDec(salesInMonth, (x) => x.total).minus(sumDec(salesInMonth, (x) => x.taxAmount));
+    let cost = dec(0);
+    for (const sale of salesInMonth) {
+      for (const it of sale.items) {
+        cost = cost.plus(it.costAmount != null ? dec(it.costAmount) : dec(it.product?.cost).mul(it.quantity || 0));
+      }
     }
     out.push({
-      label: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`,
-      profit: revenue - cost,
+      label: startDate.toISOString().slice(0, 7),
+      profit: money(revenue.minus(cost)),
     });
   }
   res.json(out);
@@ -224,7 +213,8 @@ router.get("/top-products-month", async (req, res) => {
     where: {
       sale: {
         ...bf,
-        createdAt: { gte: from, lte: to },
+        ...COUNTED_SALE,
+        createdAt: { gte: from, lt: to },
       },
     },
     include: { product: { select: { name: true, sku: true } } },
@@ -233,18 +223,18 @@ router.get("/top-products-month", async (req, res) => {
   const map = new Map();
   for (const it of items) {
     const name = it.product?.name || "—";
-    const prev = map.get(name) || { name, value: 0, quantity: 0 };
-    prev.value += Number(it.subtotal);
+    const prev = map.get(name) || { name, value: dec(0), quantity: 0 };
+    prev.value = prev.value.plus(dec(it.subtotal));
     prev.quantity += it.quantity;
     map.set(name, prev);
   }
   const rows = [...map.values()]
-    .sort((a, b) => b.value - a.value)
+    .sort((a, b) => b.value.comparedTo(a.value))
     .slice(0, 10)
     .map((r, i) => ({
       rank: i + 1,
       name: r.name,
-      value: Number(r.value.toFixed(2)),
+      value: money(r.value),
       quantity: r.quantity,
     }));
   res.json(rows);
@@ -260,7 +250,8 @@ router.get("/top-customers-month", async (req, res) => {
     where: {
       ...bf,
       customerId: { not: null },
-      createdAt: { gte: from, lte: to },
+      ...COUNTED_SALE,
+      createdAt: { gte: from, lt: to },
     },
     include: { customer: { select: { name: true, phone: true } } },
   });
@@ -272,21 +263,21 @@ router.get("/top-customers-month", async (req, res) => {
     const prev = map.get(cid) || {
       name: label,
       phone: s.customer?.phone || null,
-      value: 0,
+      value: dec(0),
       orders: 0,
     };
-    prev.value += Number(s.total);
+    prev.value = prev.value.plus(dec(s.total));
     prev.orders += 1;
     map.set(cid, prev);
   }
   const rows = [...map.values()]
-    .sort((a, b) => b.value - a.value)
+    .sort((a, b) => b.value.comparedTo(a.value))
     .slice(0, 10)
     .map((r, i) => ({
       rank: i + 1,
       name: r.name,
       phone: r.phone,
-      value: Number(r.value.toFixed(2)),
+      value: money(r.value),
       orders: r.orders,
     }));
   res.json(rows);
@@ -308,7 +299,7 @@ router.get("/top-services-month", async (req, res) => {
   const appointments = await prisma.appointment.findMany({
     where: {
       ...apptFilter,
-      startAt: { gte: from, lte: to },
+      startAt: { gte: from, lt: to },
       status: { in: ["DONE", "CHECKED_IN", "CONFIRMED", "BOOKED"] },
       serviceId: { not: null },
     },
@@ -321,19 +312,19 @@ router.get("/top-services-month", async (req, res) => {
   for (const a of appointments) {
     const sid = a.serviceId;
     const name = a.service?.name || "—";
-    const prev = map.get(sid) || { name, count: 0, revenue: 0 };
+    const prev = map.get(sid) || { name, count: 0, revenue: dec(0) };
     prev.count += 1;
-    prev.revenue += Number(a.service?.price || 0);
+    prev.revenue = prev.revenue.plus(dec(a.amount ?? a.service?.price));
     map.set(sid, prev);
   }
   const rows = [...map.values()]
-    .sort((a, b) => b.count - a.count || b.revenue - a.revenue)
+    .sort((a, b) => b.count - a.count || b.revenue.comparedTo(a.revenue))
     .slice(0, 10)
     .map((r, i) => ({
       rank: i + 1,
       name: r.name,
       count: r.count,
-      value: Number(r.revenue.toFixed(2)),
+      value: money(r.revenue),
     }));
   res.json(rows);
 });
@@ -348,7 +339,8 @@ router.get("/sales-by-employees-month", async (req, res) => {
   const sales = await prisma.sale.findMany({
     where: {
       ...bf,
-      createdAt: { gte: from, lte: to },
+      ...COUNTED_SALE,
+      createdAt: { gte: from, lt: to },
     },
     select: { userId: true, total: true },
   });
@@ -356,8 +348,8 @@ router.get("/sales-by-employees-month", async (req, res) => {
   const byUser = new Map();
   for (const s of sales) {
     const uid = s.userId;
-    const prev = byUser.get(uid) || { value: 0, orders: 0 };
-    prev.value += Number(s.total);
+    const prev = byUser.get(uid) || { value: dec(0), orders: 0 };
+    prev.value = prev.value.plus(dec(s.total));
     prev.orders += 1;
     byUser.set(uid, prev);
   }
@@ -374,7 +366,7 @@ router.get("/sales-by-employees-month", async (req, res) => {
       rows.push({
         name: u.name,
         nameEn: u.nameEn,
-        value: Number(stats.value.toFixed(2)),
+        value: money(stats.value),
         orders: stats.orders,
       });
     }

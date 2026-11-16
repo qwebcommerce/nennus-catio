@@ -2,21 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
+import { readCart, writeCart } from "../../site/cartStore.js";
+import { CartLines } from "./CartLines.jsx";
+import { statusLabel } from "../../utils/statusLabels.js";
+import { formatDateTime } from "../../utils/qatarDate.js";
 
-const CART_KEY = "nennus.shopCart";
-
-function readCart() {
-  try {
-    const rows = JSON.parse(localStorage.getItem(CART_KEY) || "[]");
-    return Array.isArray(rows) ? rows : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCart(rows) {
-  localStorage.setItem(CART_KEY, JSON.stringify(rows));
-}
 
 /** The customer session is an httpOnly cookie (nc_customer); api() sends credentials. */
 function shopApi(path, options = {}) {
@@ -267,12 +257,9 @@ export function ShopCheckout() {
           ) : null}
         </div>
         <aside className="site-flow__card">
-          {cart.length === 0 ? <p className="site-flow__lead">{t("shop.emptyCart")}</p> : cart.map((line, index) => (
-            <div className="site-flow__line" key={`${line.productId}-${line.variantId}-${index}`}>
-              <span>{locale === "en" ? line.nameEn || line.name : line.name} {line.variantLabel}</span>
-              <strong>{money(lineTotal(line))} QAR</strong>
-            </div>
-          ))}
+          {cart.length === 0 ? <p className="site-flow__lead">{t("shop.emptyCart")}</p> : (
+            <CartLines cart={cart} onChange={(rows) => { writeCart(rows); setCart(rows); }} />
+          )}
           <div className="site-flow__line"><span>{t("shop.goods")}</span><span>{money(goods)} QAR</span></div>
           <div className="site-flow__total"><span>{t("shop.fee")}</span><span>{money(fulfillment === "DELIVERY" ? fee : 0)} QAR</span></div>
           <button className="button button--primary" type="submit" disabled={busy || !cart.length}>{busy ? t("common.loading") : t("shop.pay")}</button>
@@ -303,13 +290,13 @@ export function ShopAccount() {
     setMsg("");
     try {
       if (mode === "register") {
-        const result = await api("/api/shop/register", { method: "POST", body: form });
+        const result = await api("/api/shop/register", { method: "POST", body: { ...form, locale: locale === "en" ? "en" : "ar" } });
         setMsgOk(true);
         setMsg(result.verifyLink ? result.verifyLink : t("shop.checkEmail"));
         return;
       }
       if (mode === "forgot") {
-        const result = await api("/api/shop/forgot", { method: "POST", body: { email: form.email } });
+        const result = await api("/api/shop/forgot", { method: "POST", body: { email: form.email, locale: locale === "en" ? "en" : "ar" } });
         setMsgOk(true);
         setMsg(result.resetLink || t("shop.resetSent"));
         return;
@@ -481,9 +468,10 @@ export function ShopOrders() {
       <div className="nc-shell" style={{ padding: 28 }}>
         {one ? (
           <>
-            <h1>{one.status}</h1>
+            <h1>{statusLabel("order", one.status, locale)}</h1>
             <div>{t("shop.reference")}: {one.reference}</div>
-            <div>{money(one.total)} QAR · {one.fulfillment}</div>
+            {one.createdAt ? <div>{formatDateTime(one.createdAt, locale)}</div> : null}
+            <div>{money(one.total)} QAR · {statusLabel("fulfillment", one.fulfillment, locale)}</div>
             {(one.items || []).map((item, index) => (
               <div key={index}>{locale === "en" ? item.nameEn || item.name : item.name} · {item.sellBy === "WEIGHT" ? `${item.quantity / 1000} kg` : item.quantity}</div>
             ))}
@@ -497,7 +485,7 @@ export function ShopOrders() {
   return (
     <div className="nc-shell" style={{ padding: 28 }}>
       <h1>{t("shop.orders")}</h1>
-      {rows.map((row) => <div key={row.id}><Link to={`/shop/orders/${row.id}`}>{row.reference} · {row.status} · {money(row.total)} QAR</Link></div>)}
+      {rows.map((row) => <div key={row.id}><Link to={`/shop/orders/${row.id}`}>{row.reference} · {statusLabel("order", row.status, locale)} · {money(row.total)} QAR{row.createdAt ? ` · ${formatDateTime(row.createdAt, locale)}` : ""}</Link></div>)}
       {msg ? <div>{msg}</div> : null}
     </div>
   );

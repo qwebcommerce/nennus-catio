@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { receivePurchaseOrderTx } from "../lib/purchaseReceive.js";
+import { dec, money, parseMoney } from "../lib/money.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -161,48 +162,120 @@ router.post("/:id/receive", requireModule("purchasing", "edit"), async (req, res
   }
 });
 
+const AGE_BUCKETS = [
+  { key: "0-30", min: 0, max: 30 },
+  { key: "31-60", min: 31, max: 60 },
+  { key: "61-90", min: 61, max: 90 },
+  { key: "90+", min: 91, max: Infinity },
+];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function billView(bill, now = new Date()) {
+  const owed = dec(bill.amount).minus(dec(bill.amountPaid));
+  const ageDays = Math.max(0, Math.floor((now.getTime() - new Date(bill.createdAt).getTime()) / DAY_MS));
+  const bucket = AGE_BUCKETS.find((b) => ageDays >= b.min && ageDays <= b.max)?.key || "90+";
+  return { ...bill, owed: money(owed), ageDays, ageBucket: bucket };
+}
+
+/** FR-104: bills with amount, paid and owed. Filters: supplierId, open=1, age=0-30|31-60|61-90|90+. */
 router.get("/bills", async (req, res) => {
+  const open = ["1", "true", "yes"].includes(String(req.query.open || "").toLowerCase());
+  const age = AGE_BUCKETS.some((b) => b.key === String(req.query.age || "")) ? String(req.query.age) : "";
   const rows = await prisma.supplierBill.findMany({
-    where: { organizationId: req.user.organizationId },
+    where: {
+      organizationId: req.user.organizationId,
+      ...(req.query.supplierId ? { supplierId: String(req.query.supplierId) } : {}),
+      ...(open ? { status: { in: ["OPEN", "PARTIAL"] } } : {}),
+    },
     orderBy: { createdAt: "desc" },
-    include: { supplier: { select: { id: true, name: true } }, payments: true, purchaseOrder: { select: { id: true, status: true } } },
+    include: { supplier: { select: { id: true, name: true } }, payments: { orderBy: { paidAt: "desc" } }, purchaseOrder: { select: { id: true, status: true } } },
   });
-  res.json(rows);
+  const now = new Date();
+  res.json(rows.map((bill) => billView(bill, now)).filter((bill) => !age || bill.ageBucket === age));
+});
+
+/** FR-104: what is still owed, per supplier and by age. */
+router.get("/bills/aging", async (req, res) => {
+  const rows = await prisma.supplierBill.findMany({
+    where: { organizationId: req.user.organizationId, status: { in: ["OPEN", "PARTIAL"] } },
+    include: { supplier: { select: { id: true, name: true } } },
+  });
+  const now = new Date();
+  const bySupplier = new Map();
+  const totals = Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, dec(0)]));
+  let grand = dec(0);
+  for (const bill of rows) {
+    const view = billView(bill, now);
+    const owed = dec(bill.amount).minus(dec(bill.amountPaid));
+    const entry = bySupplier.get(bill.supplierId) || {
+      supplierId: bill.supplierId,
+      supplier: bill.supplier?.name || "",
+      bills: 0,
+      buckets: Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, dec(0)])),
+      owed: dec(0),
+    };
+    entry.bills += 1;
+    entry.buckets[view.ageBucket] = entry.buckets[view.ageBucket].plus(owed);
+    entry.owed = entry.owed.plus(owed);
+    bySupplier.set(bill.supplierId, entry);
+    totals[view.ageBucket] = totals[view.ageBucket].plus(owed);
+    grand = grand.plus(owed);
+  }
+  const suppliers = [...bySupplier.values()]
+    .map((entry) => ({
+      ...entry,
+      owed: money(entry.owed),
+      buckets: Object.fromEntries(Object.entries(entry.buckets).map(([k, v]) => [k, money(v)])),
+    }))
+    .sort((a, b) => b.owed - a.owed);
+  res.json({
+    buckets: AGE_BUCKETS.map((b) => b.key),
+    suppliers,
+    totals: Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, money(v)])),
+    owed: money(grand),
+  });
 });
 
 router.post("/bills/:id/payments", requireModule("purchasing", "create"), async (req, res) => {
-  const amount = Math.round(Number(req.body?.amount) * 100) / 100;
-  const method = String(req.body?.method || "").toUpperCase() === "BANK" ? "BANK" : "CASH";
-  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "Enter a payment amount" });
+  const amount = parseMoney(req.body?.amount, { allowZero: false });
+  const method = String(req.body?.method || "").toUpperCase();
+  if (!amount) {
+    return res.status(400).json({ error: "Enter a payment amount (at most 2 decimals)", errorAr: "أدخل مبلغ الدفعة (منزلتان عشريتان كحد أقصى)", errorEn: "Enter a payment amount (at most 2 decimals)" });
+  }
+  if (!["CASH", "BANK"].includes(method)) {
+    return res.status(400).json({ error: "Choose cash or bank", errorAr: "اختر الدفع نقداً أو من البنك", errorEn: "Choose cash or bank" });
+  }
   try {
     const bill = await prisma.$transaction(async (tx) => {
-      // Lock the bill so parallel payments cannot pay more than the balance.
-      await tx.$queryRaw`SELECT id FROM "SupplierBill" WHERE id = ${String(req.params.id)} FOR UPDATE`;
+      // Lock the bill row so parallel payments cannot both pass the balance check.
+      await tx.$queryRaw`SELECT "id" FROM "SupplierBill" WHERE "id" = ${req.params.id} FOR UPDATE`;
       const row = await tx.supplierBill.findFirst({
         where: { id: req.params.id, organizationId: req.user.organizationId },
       });
       if (!row) {
         const err = new Error("Bill not found");
         err.status = 404;
+        err.errorAr = "الفاتورة غير موجودة";
         throw err;
       }
-      const balance = Number(row.amount) - Number(row.amountPaid);
-      if (amount - balance > 0.001) {
+      const balance = dec(row.amount).minus(dec(row.amountPaid));
+      if (amount.greaterThan(balance)) {
         const err = new Error("A payment cannot be larger than the balance");
         err.status = 400;
+        err.errorAr = "لا يمكن أن تزيد الدفعة عن الرصيد المتبقي";
         throw err;
       }
       await tx.supplierPayment.create({
         data: {
           billId: row.id,
-          amount: new Prisma.Decimal(amount.toFixed(2)),
+          amount,
           method,
           userId: req.user.sub,
-          note: req.body?.note ? String(req.body.note).trim() : null,
+          note: req.body?.note ? String(req.body.note).trim().slice(0, 500) : null,
         },
       });
-      const amountPaid = new Prisma.Decimal((Number(row.amountPaid) + amount).toFixed(2));
-      const status = Number(amountPaid) + 0.001 >= Number(row.amount) ? "PAID" : "PARTIAL";
+      const amountPaid = dec(row.amountPaid).plus(amount);
+      const status = amountPaid.greaterThanOrEqualTo(dec(row.amount)) ? "PAID" : "PARTIAL";
       return tx.supplierBill.update({
         where: { id: row.id },
         data: { amountPaid, status },
@@ -214,11 +287,11 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
       action: "SUPPLIER_PAYMENT",
       entityType: "SupplierBill",
       entityId: bill.id,
-      summary: String(bill.amountPaid),
+      summary: `${amount.toFixed(2)} ${method} → ${String(bill.amountPaid)}`,
     });
-    res.json(bill);
+    res.json(billView(bill));
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message || "Could not record the payment" });
+    res.status(e.status || 400).json({ error: e.message || "Could not record the payment", errorEn: e.message, errorAr: e.errorAr });
   }
 });
 
