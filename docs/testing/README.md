@@ -67,3 +67,25 @@ See each area report for the full table, file and line references, and exact ste
 - `prisma/schema.prisma` declares `OfflineInventoryReceipt`, which no migration creates (schema drift).
 - Verify and reset links are returned in API responses when `NODE_ENV` is not `production`; confirm production sets it.
 - The default plan caps an organisation at 3 locations, which blocks a warehouse + shop + several vans.
+
+## Fix status — 17 November 2026
+
+All 20 defects listed above were fixed in four groups (security, stock/till/purchasing, web
+shop/payments/grooming, finance/email/screens) and merged. Each fix was first reproduced, then
+re-tested; race conditions were tested with 20 parallel requests across two server instances.
+After merging, every group's suite passed on one fresh database with all migrations applied
+(about 700 checks, 0 failures).
+
+New database migrations (additive only, nothing dropped):
+`20261117101000_staff_active_sessions_audit_lock`, `20261117102000_stock_till_rules`,
+`20261117103000_fc_payments_references`, `20261117104000_finance_paid_from_email_outbox`.
+
+Still open:
+- NFR-03: money is still stored as decimal riyals (sums are now exact Decimal maths).
+- NFR-13: no version check against saving over a newer edit.
+- No server-side payment lookup to SkipCash; only the signed notification confirms.
+- Images are checked and stripped of metadata but not resized.
+- Grooming payments are not yet included in finance money-in and P&L.
+
+Production settings needed: `CRON_SECRET`, `RESEND_API_KEY`, `SHOP_FROM_EMAIL`, `APP_PUBLIC_URL`,
+`NODE_ENV=production`. The email retry cron runs every 10 minutes, which needs a Vercel Pro plan.
