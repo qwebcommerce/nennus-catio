@@ -4,6 +4,7 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
+import { receivePurchaseOrderTx } from "../lib/purchaseReceive.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -33,9 +34,19 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
   const supplier = await prisma.supplier.findFirst({
     where: { id: supplierId, organizationId: req.user.organizationId, isActive: true },
   });
-  const branch = await findBranchInOrg(prisma, req.user.organizationId, branchId);
+  const branch = await prisma.branch.findFirst({
+    where: { id: branchId, organizationId: req.user.organizationId },
+    select: { id: true, isActive: true },
+  });
   if (!supplier) return res.status(400).json({ error: "Choose an active supplier" });
   if (!branch) return res.status(400).json({ error: "Choose the location that will receive the goods" });
+  if (branch.isActive === false) {
+    return res.status(400).json({
+      error: "An inactive location cannot receive goods",
+      errorAr: "لا يمكن طلب بضاعة إلى موقع غير نشط",
+      errorEn: "An inactive location cannot receive goods",
+    });
+  }
   if (!lines.length) return res.status(400).json({ error: "Add at least one line" });
   const prepared = [];
   for (const line of lines) {
@@ -43,9 +54,9 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
       where: { id: String(line.productId || ""), organizationId: req.user.organizationId },
     });
     if (!product) return res.status(400).json({ error: "A line product was not found" });
-    const qty = Math.floor(Number(line.quantity) || 0);
+    const qty = Number(line.quantity);
     const cost = Number(line.unitCost);
-    if (qty < 1 || !Number.isFinite(cost) || cost < 0) {
+    if (!Number.isInteger(qty) || qty < 1 || !Number.isFinite(cost) || cost < 0) {
       return res.status(400).json({ error: "Each line needs a quantity and a unit cost" });
     }
     let variantId = null;
@@ -83,12 +94,12 @@ router.post("/:id/send", requireModule("purchasing", "edit"), async (req, res) =
   });
   if (!order) return res.status(404).json({ error: "Order not found" });
   if (order.status !== "DRAFT") return res.status(400).json({ error: "Only a draft can be sent" });
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: order.id },
+  const moved = await prisma.purchaseOrder.updateMany({
+    where: { id: order.id, status: "DRAFT" },
     data: { status: "SENT" },
-    include,
   });
-  res.json(updated);
+  if (moved.count !== 1) return res.status(400).json({ error: "Only a draft can be sent" });
+  res.json(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include }));
 });
 
 router.post("/:id/cancel", requireModule("purchasing", "edit"), async (req, res) => {
@@ -96,124 +107,57 @@ router.post("/:id/cancel", requireModule("purchasing", "edit"), async (req, res)
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!order) return res.status(404).json({ error: "Order not found" });
-  if (order.status === "RECEIVED" || order.status === "PARTIALLY_RECEIVED") {
-    return res.status(400).json({ error: "A received order cannot be cancelled" });
-  }
-  const updated = await prisma.purchaseOrder.update({
-    where: { id: order.id },
+  // Only a draft or a sent order with nothing received can be cancelled (checked again in the update).
+  const moved = await prisma.purchaseOrder.updateMany({
+    where: { id: order.id, status: { in: ["DRAFT", "SENT"] } },
     data: { status: "CANCELLED" },
-    include,
   });
-  res.json(updated);
+  if (moved.count !== 1) {
+    return res.status(400).json({
+      error: order.status === "CANCELLED" ? "The order is already cancelled" : "A received order cannot be cancelled",
+    });
+  }
+  res.json(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include }));
 });
 
 router.post("/:id/receive", requireModule("purchasing", "edit"), async (req, res) => {
   const orgId = req.user.organizationId;
-  const order = await prisma.purchaseOrder.findFirst({
-    where: { id: req.params.id, organizationId: orgId },
-    include: { lines: true },
-  });
-  if (!order) return res.status(404).json({ error: "Order not found" });
-  if (!["SENT", "PARTIALLY_RECEIVED"].includes(order.status)) {
-    return res.status(400).json({ error: "Send the order before receiving goods" });
+  const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+  const requested = new Map();
+  for (const line of lines) {
+    const qty = Number(line?.quantity);
+    if (!Number.isInteger(qty) || qty < 0) {
+      return res.status(400).json({ error: "Each received quantity must be a whole number" });
+    }
+    requested.set(String(line?.id), qty);
   }
-  const requested = new Map(
-    (Array.isArray(req.body?.lines) ? req.body.lines : []).map((line) => [String(line.id), Math.floor(Number(line.quantity) || 0)])
-  );
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      let receivedCost = new Prisma.Decimal(0);
-      let anyLeft = false;
-      for (const line of order.lines) {
-        const remaining = line.quantity - line.quantityReceived;
-        const qty = requested.has(line.id) ? requested.get(line.id) : remaining;
-        if (qty < 0 || qty > remaining) {
-          const err = new Error("A receipt cannot take more than the quantity still on order");
-          err.status = 400;
-          throw err;
-        }
-        if (qty === 0) {
-          if (remaining > 0) anyLeft = true;
-          continue;
-        }
-        const cost = line.unitCost;
-        receivedCost = receivedCost.add(cost.mul(qty));
-        if (line.variantId) {
-          const stock = await tx.variantStock.findUnique({
-            where: { variantId_branchId: { variantId: line.variantId, branchId: order.branchId } },
-          });
-          const oldQty = stock?.quantity ?? 0;
-          const oldCost = stock?.unitCost != null ? Number(stock.unitCost) : Number(cost);
-          const nextQty = oldQty + qty;
-          const unitCost = new Prisma.Decimal(((oldQty * oldCost + qty * Number(cost)) / nextQty).toFixed(2));
-          await tx.variantStock.upsert({
-            where: { variantId_branchId: { variantId: line.variantId, branchId: order.branchId } },
-            create: { variantId: line.variantId, branchId: order.branchId, quantity: qty, unitCost: cost, minStockLevel: 5 },
-            update: { quantity: { increment: qty }, unitCost },
-          });
-        } else {
-          const stock = await tx.inventory.findUnique({
-            where: { productId_branchId: { productId: line.productId, branchId: order.branchId } },
-          });
-          const oldQty = stock?.quantity ?? 0;
-          const oldCost = stock?.unitCost != null ? Number(stock.unitCost) : Number(cost);
-          const nextQty = oldQty + qty;
-          const unitCost = new Prisma.Decimal(((oldQty * oldCost + qty * Number(cost)) / nextQty).toFixed(2));
-          await tx.inventory.upsert({
-            where: { productId_branchId: { productId: line.productId, branchId: order.branchId } },
-            create: { productId: line.productId, branchId: order.branchId, quantity: qty, unitCost: cost, minStockLevel: 5 },
-            update: { quantity: { increment: qty }, unitCost },
-          });
-        }
-        await tx.stockMovement.create({
-          data: {
-            organizationId: orgId,
-            productId: line.productId,
-            variantId: line.variantId,
-            branchId: order.branchId,
-            quantityDelta: qty,
-            reason: "RECEIPT",
-            note: order.id,
-            userId: req.user.sub,
-          },
-        });
-        const nextReceived = line.quantityReceived + qty;
-        if (nextReceived < line.quantity) anyLeft = true;
-        await tx.purchaseOrderLine.update({
-          where: { id: line.id },
-          data: { quantityReceived: nextReceived },
-        });
-      }
-      if (receivedCost.lte(0)) {
-        const err = new Error("Enter a quantity to receive");
-        err.status = 400;
-        throw err;
-      }
-      const bill = await tx.supplierBill.create({
-        data: {
-          organizationId: orgId,
-          supplierId: order.supplierId,
-          purchaseOrderId: order.id,
-          amount: receivedCost,
-        },
-      });
-      const updated = await tx.purchaseOrder.update({
-        where: { id: order.id },
-        data: { status: anyLeft ? "PARTIALLY_RECEIVED" : "RECEIVED" },
-        include,
-      });
-      return { order: updated, bill };
-    });
+    const result = await prisma.$transaction(
+      (tx) =>
+        receivePurchaseOrderTx(tx, {
+          orgId,
+          userId: req.user.sub,
+          orderId: String(req.params.id),
+          requested: requested.size ? requested : null,
+        }),
+      { maxWait: 15000, timeout: 60000 },
+    );
+    const order = await prisma.purchaseOrder.findUnique({ where: { id: result.orderId }, include });
     await writeAudit({
       userId: req.user.sub,
       action: "PURCHASE_RECEIPT",
       entityType: "PurchaseOrder",
-      entityId: result.order.id,
-      summary: result.order.status,
+      entityId: order.id,
+      branchId: order.branchId,
+      summary: `${order.status}: bill ${result.bill.amount}`,
+      meta: { billId: result.bill.id, received: result.received },
     });
-    res.json(result);
+    res.json({ order, bill: result.bill });
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message || "Could not receive" });
+    res.status(e.status || 400).json({
+      error: e.message || "Could not receive",
+      ...(e?.errorEn ? { errorAr: e.errorAr, errorEn: e.errorEn } : {}),
+    });
   }
 });
 
@@ -227,11 +171,13 @@ router.get("/bills", async (req, res) => {
 });
 
 router.post("/bills/:id/payments", requireModule("purchasing", "create"), async (req, res) => {
-  const amount = Number(req.body?.amount);
+  const amount = Math.round(Number(req.body?.amount) * 100) / 100;
   const method = String(req.body?.method || "").toUpperCase() === "BANK" ? "BANK" : "CASH";
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "Enter a payment amount" });
   try {
     const bill = await prisma.$transaction(async (tx) => {
+      // Lock the bill so parallel payments cannot pay more than the balance.
+      await tx.$queryRaw`SELECT id FROM "SupplierBill" WHERE id = ${String(req.params.id)} FOR UPDATE`;
       const row = await tx.supplierBill.findFirst({
         where: { id: req.params.id, organizationId: req.user.organizationId },
       });

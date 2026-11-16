@@ -1,12 +1,55 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { authMiddleware, requireModule, requirePermission } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { qatarParts, slotTaken } from "../lib/groomingSlots.js";
+import { qatarDateTime, qatarParts, slotTaken } from "../lib/groomingSlots.js";
 
 const router = Router();
 router.use(authMiddleware);
+
+/**
+ * FR-29: the till's "today's grooming" panel. Read-only, for anyone with till access,
+ * limited to the till's location and today's date in Qatar.
+ */
+router.get("/today", requirePermission("pos"), async (req, res) => {
+  try {
+    const branchId = String(req.query.branchId || req.user.branchId || "");
+    if (!branchId) return res.status(400).json({ error: "يجب اختيار الفرع", errorEn: "Choose the till location" });
+    if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== branchId) {
+      return res.status(403).json({ error: "لا يمكن الوصول لفرع آخر", errorEn: "This is another location" });
+    }
+    const br = await findBranchInOrg(prisma, req.user.organizationId, branchId);
+    if (!br) return res.status(400).json({ error: "فرع غير صالح" });
+    const today = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const from = qatarDateTime(today, 0);
+    const to = new Date(qatarDateTime(today, 24 * 60).getTime() - 1);
+    const rows = await prisma.appointment.findMany({
+      where: {
+        organizationId: req.user.organizationId,
+        branchId,
+        startAt: { gte: from, lte: to },
+        status: { notIn: ["CANCELLED", "PENDING_PAYMENT"] },
+      },
+      select: {
+        id: true,
+        startAt: true,
+        endAt: true,
+        status: true,
+        petName: true,
+        visitKind: true,
+        customer: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } },
+      },
+      orderBy: [{ startAt: "asc" }],
+      take: 200,
+    });
+    res.json(rows);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : "تعذر جلب المواعيد" });
+  }
+});
+
 router.use(requireModule("grooming", "view"));
 
 const STATUSES = ["BOOKED", "PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "DONE", "NO_SHOW", "CANCELLED"];

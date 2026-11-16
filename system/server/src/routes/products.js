@@ -20,6 +20,7 @@ import {
 import { syncProductExtras } from "../lib/catalogExtras.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { IMAGE_MIMES, sniffFileType, stripImageMetadata } from "../lib/fileCheck.js";
+import { setStockCount } from "../lib/stockLedger.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
   PRODUCT_IMAGE_MAX_BYTES,
@@ -203,7 +204,7 @@ async function resolveCatalogFromExcel(orgId, { categoryName, subcategoryName, s
 }
 
 /** Shared Excel / confirmed-row product upsert + inventory sync. */
-async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false }) {
+async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft = false }) {
   const errors = [];
   let created = 0;
   let updated = 0;
@@ -320,21 +321,25 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
         created += 1;
       }
 
-      await prisma.inventory.upsert({
-        where: {
-          productId_branchId: { productId, branchId },
-        },
-        create: {
-          productId,
-          branchId,
-          quantity: stockQty,
-          minStockLevel: minStock,
-        },
-        update: {
-          quantity: stockQty,
-          minStockLevel: minStock,
-        },
-      });
+      // Stock from the sheet is a counted quantity: the difference is written as an ADJUSTMENT movement (FR-17).
+      const hasVariants = await prisma.productVariant.count({ where: { productId } });
+      if (!hasVariants) {
+        await prisma.$transaction(async (tx) => {
+          await setStockCount(tx, {
+            orgId,
+            userId,
+            productId,
+            branchId,
+            quantity: stockQty,
+            note: "Product import",
+            unitCost: costRaw != null && costRaw >= 0 ? costRaw : null,
+          });
+          await tx.inventory.update({
+            where: { productId_branchId: { productId, branchId } },
+            data: { minStockLevel: minStock },
+          });
+        });
+      }
       touchedProductIds.add(productId);
     } catch (e) {
       if (e?.code === "P2002") {
@@ -634,6 +639,7 @@ router.post("/import/excel/confirm", requireModule("products", "create"), async 
 
     const { created, updated, errors, touchedProductIds } = await runProductImportFromRows({
       orgId,
+      userId: req.user.sub,
       branchId,
       rows,
       asDraft: req.body?.asDraft === true,
@@ -693,6 +699,7 @@ router.post("/import/excel", requireModule("products", "create"),
       const rows = normalizeImportPreviewRows(rawRows);
       const { created, updated, errors, touchedProductIds } = await runProductImportFromRows({
         orgId,
+        userId: req.user.sub,
         branchId,
         rows,
       });
@@ -829,7 +836,24 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
     throw e;
   }
 
-  const stockQty = Math.max(0, Math.floor(Number(initialStock) || 0));
+  const stockRaw = initialStock == null || initialStock === "" ? 0 : Number(initialStock);
+  if (!Number.isInteger(stockRaw) || stockRaw < 0) {
+    return res.status(400).json({
+      error: "المخزون الأولي يجب أن يكون عدداً صحيحاً",
+      errorAr: "المخزون الأولي يجب أن يكون عدداً صحيحاً",
+      errorEn: "Opening stock must be a whole number of zero or more",
+    });
+  }
+  const stockQty = stockRaw;
+  const hasVariantsInBody = Array.isArray(req.body?.variants) && req.body.variants.some((v) => String(v?.label || v?.labelEn || "").trim());
+  if (stockQty > 0 && hasVariantsInBody) {
+    return res.status(400).json({
+      error: "المخزون لكل حجم — استلمه بأمر شراء أو عدّله لكل حجم بعد الحفظ",
+      errorAr: "المخزون لكل حجم — استلمه بأمر شراء أو عدّله لكل حجم بعد الحفظ",
+      errorEn: "This product keeps stock per variant. Receive or adjust each variant after saving.",
+    });
+  }
+  const openingCost = cost != null && cost !== "" && Number.isFinite(Number(cost)) && Number(cost) >= 0 ? Number(cost) : null;
   let product;
   try {
     product = await prisma.$transaction(async (tx) => {
@@ -865,14 +889,25 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
           inventories: {
             create: {
               branchId: bid,
-              quantity: stockQty,
+              quantity: 0,
               minStockLevel: Math.max(0, Number(minStockLevel) || 5),
             },
           },
         },
-        include: { inventories: true },
       });
-      return created;
+      // FR-17: opening stock is a staff adjustment with a movement, at the product's cost.
+      if (stockQty > 0) {
+        await setStockCount(tx, {
+          orgId: req.user.organizationId,
+          userId: req.user.sub,
+          productId: created.id,
+          branchId: bid,
+          quantity: stockQty,
+          note: "Opening stock",
+          unitCost: openingCost,
+        });
+      }
+      return tx.product.findUnique({ where: { id: created.id }, include: { inventories: true } });
     });
     await syncProductExtras(prisma, {
       orgId: req.user.organizationId,
@@ -903,7 +938,7 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
       price: Number(product.price),
       categoryId: product.categoryId,
       subcategoryId: product.subcategoryId,
-      initialStock: Math.max(0, Number(initialStock) || 0),
+      initialStock: stockQty,
       minStockLevel: Math.max(0, Number(minStockLevel) || 5),
     },
   });

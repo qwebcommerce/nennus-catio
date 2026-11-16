@@ -34,12 +34,32 @@ export async function executeInventoryTransfer({
     const productId = String(line.productId || "");
     const variantId = line.variantId ? String(line.variantId) : "";
     if (!productId) continue;
-    const qty = Math.max(1, Math.floor(Number(line.quantity) || 1));
+    const qty = Number(line.quantity);
+    if (!Number.isInteger(qty) || qty < 1) {
+      const err = new Error("Invalid quantity");
+      err.status = 400;
+      err.errorAr = "الكمية يجب أن تكون عدداً صحيحاً أكبر من صفر";
+      err.errorEn = "Each line needs a whole quantity above zero";
+      throw err;
+    }
     const key = `${productId}:${variantId}`;
     const prev = grouped.get(key) || { productId, variantId, qty: 0 };
     prev.qty += qty;
     grouped.set(key, prev);
   }
+  // FR-89: an inactive location cannot send or receive stock.
+  const ends = await prisma.branch.findMany({
+    where: { id: { in: [from, to] }, organizationId: orgId },
+    select: { id: true, isActive: true },
+  });
+  if (ends.length !== 2 || ends.some((b) => b.isActive === false)) {
+    const err = new Error("Inactive location");
+    err.status = 400;
+    err.errorAr = "لا يمكن التحويل من موقع غير نشط أو إليه";
+    err.errorEn = "Stock cannot move into or out of an inactive location";
+    throw err;
+  }
+
   const prep = [...grouped.values()];
   if (!prep.length) {
     const err = new Error("No lines");
@@ -98,6 +118,7 @@ export async function executeInventoryTransfer({
         err.errorEn = `Insufficient quantity: ${pr.name}`;
         throw err;
       }
+      line.unitCost = src.unitCost;
     }
   }
 
@@ -127,22 +148,19 @@ export async function executeInventoryTransfer({
             update: { quantity: { increment: qty } },
           });
         } else {
-          const src = await tx.inventory.findUnique({
-            where: { productId_branchId: { productId, branchId: from } },
+          const moved = await tx.inventory.updateMany({
+            where: { productId, branchId: from, quantity: { gte: qty } },
+            data: { quantity: { decrement: qty } },
           });
-          if (!src || src.quantity < qty) {
+          if (moved.count !== 1) {
             const p = await tx.product.findFirst({ where: { id: productId } });
             const err = new Error(`كمية غير كافية: ${p?.name || productId}`);
             err.status = 400;
             throw err;
           }
-          await tx.inventory.update({
-            where: { productId_branchId: { productId, branchId: from } },
-            data: { quantity: { decrement: qty } },
-          });
           await tx.inventory.upsert({
             where: { productId_branchId: { productId, branchId: to } },
-            create: { productId, branchId: to, quantity: qty, minStockLevel: 5 },
+            create: { productId, branchId: to, quantity: qty, minStockLevel: 5, unitCost: line.unitCost ?? null },
             update: { quantity: { increment: qty } },
           });
         }

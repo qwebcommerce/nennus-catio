@@ -28,12 +28,22 @@ export default function Count() {
     q.set("branchId", bid);
     api(`/api/products?${q.toString()}`)
       .then((list) => {
-        setProducts(list);
-        const m = {};
-        for (const p of list) {
-          const inv = p.inventories?.[0];
-          m[p.id] = String(inv?.quantity ?? 0);
+        // One row per variant (stock is kept per variant), or per product when it has none.
+        const rows = [];
+        for (const p of Array.isArray(list) ? list : []) {
+          const vs = Array.isArray(p.variants) ? p.variants : [];
+          if (vs.length) {
+            for (const v of vs) {
+              const st = (v.stocks || []).find((row) => row.branchId === bid);
+              rows.push({ key: `${p.id}::${v.id}`, productId: p.id, variantId: v.id, product: p, label: v.label, qty: st?.quantity ?? 0 });
+            }
+          } else {
+            rows.push({ key: p.id, productId: p.id, variantId: null, product: p, label: "", qty: p.inventories?.[0]?.quantity ?? 0 });
+          }
         }
+        setProducts(rows);
+        const m = {};
+        for (const r of rows) m[r.key] = String(r.qty);
         setCounts(m);
       })
       .catch(() => setProducts([]));
@@ -44,15 +54,24 @@ export default function Count() {
     setMsg("");
     const bid = branchId;
     if (!bid) return;
-    const lines = products.map((p) => ({
-      productId: p.id,
-      quantity: Math.max(0, parseInt(String(counts[p.id] ?? "0"), 10) || 0),
-    }));
+    // Only counted rows that differ are sent; each becomes an ADJUSTMENT movement on the server.
+    const lines = products
+      .filter((r) => String(counts[r.key] ?? "") !== String(r.qty))
+      .map((r) => ({
+        productId: r.productId,
+        ...(r.variantId ? { variantId: r.variantId } : {}),
+        quantity: Math.max(0, parseInt(String(counts[r.key] ?? "0"), 10) || 0),
+      }));
+    if (!lines.length) {
+      setMsg(t("count.done"));
+      return;
+    }
     try {
       await api("/api/inventory/reconcile", {
         method: "POST",
-        body: { branchId: bid, lines },
+        body: { branchId: bid, lines, reason: "Stock count" },
       });
+      setProducts((rows) => rows.map((r) => ({ ...r, qty: Number(counts[r.key] ?? r.qty) })));
       setMsg(t("count.done"));
     } catch (x) {
       setMsg(x.message || t("count.failed"));
@@ -75,14 +94,18 @@ export default function Count() {
             </thead>
             <tbody>
               {products.map((p) => (
-                <tr key={p.id}>
-                  <td style={td}>{productDisplayName(p, locale)}</td>
+                <tr key={p.key}>
+                  <td style={td}>
+                    {productDisplayName(p.product, locale)}
+                    {p.label ? ` — ${p.label}` : ""}
+                  </td>
                   <td style={td}>
                     <input
                       type="number"
                       min={0}
-                      value={counts[p.id] ?? "0"}
-                      onChange={(e) => setCounts({ ...counts, [p.id]: e.target.value })}
+                      step={1}
+                      value={counts[p.key] ?? "0"}
+                      onChange={(e) => setCounts({ ...counts, [p.key]: e.target.value })}
                       style={{ ...inp, width: 100 }}
                     />
                   </td>

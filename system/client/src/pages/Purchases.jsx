@@ -110,8 +110,10 @@ export default function Purchases() {
         setMsg(t("purchases.invalidCost"));
         return;
       }
+      const [productId, variantId] = String(l.productId).split("::");
       items.push({
-        productId: l.productId,
+        productId,
+        ...(variantId ? { variantId } : {}),
         quantity: Math.max(1, parseInt(String(l.quantity), 10) || 1),
         unitCost,
       });
@@ -120,12 +122,16 @@ export default function Purchases() {
       setMsg(t("purchases.needLines"));
       return;
     }
+    if (!supplierId) {
+      setMsg(t("purchases.needSupplier"));
+      return;
+    }
     try {
       await api("/api/purchases/receive", {
         method: "POST",
         body: {
           branchId: bid,
-          supplierId: supplierId || undefined,
+          supplierId,
           note: note.trim() || undefined,
           updateProductCost,
           items,
@@ -225,8 +231,8 @@ export default function Purchases() {
       <form className="card" onSubmit={submit} style={{ display: "grid", gap: 12 }}>
         <div className="page-form-grid">
           <label className="page-form-field">
-            <span>{t("purchases.supplierOptional")}</span>
-            <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...inp, minHeight: 44 }}>
+            <span>{t("purchases.supplier")}</span>
+            <select required value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...inp, minHeight: 44 }}>
               <option value="">{t("common.none")}</option>
               {suppliers.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -257,11 +263,21 @@ export default function Purchases() {
               style={{ ...inp, flex: 1, minWidth: 180, minHeight: 44 }}
             >
               <option value="">{t("returns.pickProduct")}</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+              {products.flatMap((p) =>
+                Array.isArray(p.variants) && p.variants.length
+                  ? p.variants
+                      .filter((v) => v.isActive !== false)
+                      .map((v) => (
+                        <option key={`${p.id}::${v.id}`} value={`${p.id}::${v.id}`}>
+                          {p.name} — {v.label}
+                        </option>
+                      ))
+                  : [
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>,
+                    ],
+              )}
             </select>
             <input
               type="number"

@@ -74,7 +74,8 @@ export function BranchProvider({ children }) {
 
   const setActiveBranchId = useCallback(
     (id) => {
-      if (!isAdmin) return;
+      // Staff bound to one location stay there; others may pick (e.g. the till location).
+      if (!isAdmin && lockedBranchId) return;
       const next = String(id || "");
       setActiveBranchIdState(next);
       if (orgId && next) {
@@ -85,7 +86,7 @@ export function BranchProvider({ children }) {
         }
       }
     },
-    [isAdmin, orgId]
+    [isAdmin, orgId, lockedBranchId]
   );
 
   const activeBranch = useMemo(
@@ -100,6 +101,7 @@ export function BranchProvider({ children }) {
       activeBranch,
       setActiveBranchId,
       canSwitchBranch: Boolean(isAdmin),
+      canChooseBranch: Boolean(isAdmin) || !lockedBranchId,
       loading,
       reloadBranches: loadBranches,
       branchCount: user?.branchCount ?? branches.length,
@@ -110,6 +112,7 @@ export function BranchProvider({ children }) {
       activeBranch,
       setActiveBranchId,
       isAdmin,
+      lockedBranchId,
       loading,
       loadBranches,
       user?.branchCount,

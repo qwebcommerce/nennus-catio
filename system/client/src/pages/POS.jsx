@@ -20,6 +20,7 @@ import { isUnitPriceAtOrBelowCost } from "../utils/saleCostWarning.js";
 import { productDisplayName } from "../utils/productName.js";
 import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
+import { useAuth } from "../context/AuthContext.jsx";
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -31,9 +32,40 @@ export default function POS() {
   const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
   const branchName = useActiveBranchLabel(locale);
-  const { activeBranch } = useBranchContext();
+  const { activeBranch, branches, setActiveBranchId, canChooseBranch } = useBranchContext();
+  const { user } = useAuth();
   const tillKind = activeBranch?.kind || "SHOP";
-  const tillOpen = Boolean(activeBranch) && activeBranch.isActive !== false && tillKind !== "WAREHOUSE";
+  // FR-30: opening the till asks which location (shop or van) it sells from.
+  const tillKey = `till:location:${user?.id || ""}`;
+  const [tillConfirmedId, setTillConfirmedId] = useState(() => {
+    try {
+      return sessionStorage.getItem(tillKey) || "";
+    } catch {
+      return "";
+    }
+  });
+  const tillChoices = useMemo(
+    () =>
+      (branches || []).filter(
+        (b) =>
+          b.isActive !== false &&
+          b.kind !== "WAREHOUSE" &&
+          (canChooseBranch || b.id === activeBranch?.id),
+      ),
+    [branches, canChooseBranch, activeBranch?.id],
+  );
+  const tillConfirmed = Boolean(activeBranch) && tillConfirmedId === activeBranch.id;
+  const chooseTill = (id) => {
+    if (canChooseBranch) setActiveBranchId(id);
+    setTillConfirmedId(id);
+    try {
+      sessionStorage.setItem(tillKey, id);
+    } catch {
+      /* ignore */
+    }
+  };
+  const tillOpen =
+    Boolean(activeBranch) && activeBranch.isActive !== false && tillKind !== "WAREHOUSE" && tillConfirmed;
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [search, setSearch] = useState("");
@@ -70,6 +102,7 @@ export default function POS() {
   const [promptVariantId, setPromptVariantId] = useState("");
   const [promptKg, setPromptKg] = useState("1");
   const [todayAppointments, setTodayAppointments] = useState([]);
+  const [groomingError, setGroomingError] = useState("");
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
 
@@ -317,14 +350,15 @@ export default function POS() {
       return;
     }
     let cancelled = false;
-    const now = new Date();
-    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    api(`/api/appointments?branchId=${encodeURIComponent(branchId)}&day=${day}`)
+    setGroomingError("");
+    api(`/api/appointments/today?branchId=${encodeURIComponent(branchId)}`)
       .then((rows) => {
         if (!cancelled) setTodayAppointments(Array.isArray(rows) ? rows : []);
       })
-      .catch(() => {
-        if (!cancelled) setTodayAppointments([]);
+      .catch((err) => {
+        if (cancelled) return;
+        setTodayAppointments([]);
+        setGroomingError(err?.message || t("pos.todayGroomingFailed"));
       });
     return () => {
       cancelled = true;
@@ -810,16 +844,62 @@ export default function POS() {
         </div>
       ) : null}
 
-      {!tillOpen ? (
+      {!tillConfirmed ? (
+        <div className="card" role="dialog" aria-modal="true" style={{ margin: "0 0 8px", padding: 14, display: "grid", gap: 10 }}>
+          <strong>{t("pos.chooseTillLocation")}</strong>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>{t("pos.chooseTillLocationHint")}</span>
+          {tillChoices.length ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {tillChoices.map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  className="btn-touch"
+                  style={{ background: b.id === activeBranch?.id ? "var(--accent)" : "var(--surface2)", color: b.id === activeBranch?.id ? "#fff" : undefined }}
+                  onClick={() => chooseTill(b.id)}
+                >
+                  {(locale === "en" ? b.nameEn || b.name : b.name) || b.id} · {t(`branches.kind.${b.kind || "SHOP"}`)}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span role="alert">{t("pos.tillLocationRequired")}</span>
+          )}
+        </div>
+      ) : !tillOpen ? (
         <div className="card" role="alert" style={{ margin: "0 0 8px", padding: "10px 14px", fontSize: 13 }}>
           {t("pos.tillLocationRequired")}
         </div>
       ) : (
-        <div className="card" style={{ margin: "0 0 8px", padding: "10px 14px", fontSize: 13 }}>
+        <div className="card" style={{ margin: "0 0 8px", padding: "10px 14px", fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <strong>{branchName || "—"}</strong>
-          <span style={{ color: "var(--muted)", marginInlineStart: 8 }}>{t(`branches.kind.${tillKind}`)}</span>
+          <span style={{ color: "var(--muted)" }}>{t(`branches.kind.${tillKind}`)}</span>
+          {tillChoices.length > 1 ? (
+            <button
+              type="button"
+              className="btn-touch"
+              style={{ marginInlineStart: "auto", background: "var(--surface2)" }}
+              onClick={() => {
+                if (items.length && !window.confirm(t("pos.changeTillConfirm"))) return;
+                setTillConfirmedId("");
+                try {
+                  sessionStorage.removeItem(tillKey);
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+              {t("pos.changeTillLocation")}
+            </button>
+          ) : null}
         </div>
       )}
+
+      {groomingError ? (
+        <div className="card" role="alert" style={{ margin: "0 0 8px", padding: "10px 14px", fontSize: 13 }}>
+          {t("pos.todayGrooming")}: {groomingError}
+        </div>
+      ) : null}
 
       {todayAppointments.length > 0 ? (
         <div className="card" style={{ margin: "0 0 8px", padding: "10px 14px" }}>
@@ -830,6 +910,7 @@ export default function POS() {
                 {new Date(row.startAt).toLocaleTimeString(locale === "en" ? "en-GB" : "ar-QA", { hour: "2-digit", minute: "2-digit" })}
                 {" · "}
                 {row.customer?.name || "—"}
+                {row.petName ? ` · ${row.petName}` : ""}
                 {row.service?.name ? ` · ${row.service.name}` : ""}
               </li>
             ))}

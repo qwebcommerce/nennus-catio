@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
+import { listLowStock } from "../lib/lowStock.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -53,27 +54,8 @@ router.get("/summary", async (req, res) => {
     _sum: { total: true },
   });
 
-  const lowStock = await prisma.inventory.findMany({
-    where: branchId
-      ? {
-          branchId: String(branchId),
-          branch: { organizationId: req.user.organizationId },
-          product: { organizationId: req.user.organizationId },
-        }
-      : {
-          branch: { organizationId: req.user.organizationId },
-          product: { organizationId: req.user.organizationId },
-        },
-    include: { product: true, branch: true },
-  });
-  const lowStockCount = lowStock.filter((r) => r.quantity <= r.minStockLevel).length;
-  const variantRows = await prisma.variantStock.findMany({
-    where: branchId
-      ? { branchId: String(branchId), branch: { organizationId: req.user.organizationId } }
-      : { branch: { organizationId: req.user.organizationId } },
-    select: { quantity: true, minStockLevel: true },
-  });
-  const variantLow = variantRows.filter((row) => row.quantity <= row.minStockLevel).length;
+  // FR-92: the balances at or below their low-stock level, not only a count.
+  const lowStockItems = await listLowStock(prisma, req.user.organizationId, branchId);
   const todayStart = startOfToday();
   const channelSales = await prisma.sale.groupBy({
     by: ["orderChannel"],
@@ -126,7 +108,8 @@ router.get("/summary", async (req, res) => {
     salesTodayTotal: todaySales._sum.total?.toString() ?? "0",
     salesMonthTotal: monthSales._sum.total?.toString() ?? "0",
     estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? (revenueMonth - costMonth).toFixed(2) : null,
-    lowStockAlerts: lowStockCount + variantLow,
+    lowStockAlerts: lowStockItems.length,
+    lowStockItems,
     channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: Number(row._sum.total || 0), count: row._count }])),
     waitingOrders,
     todayGrooming,

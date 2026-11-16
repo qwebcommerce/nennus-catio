@@ -95,22 +95,47 @@ export function cashPortionFromRefund(refundTotal, sale) {
   return round2(rt * share);
 }
 
+/** Card part of a sale (card tender or the card rows of a split). */
+export function cardPortionFromSale(sale) {
+  const method = String(sale.paymentMethod || "");
+  let splits = sale.paymentSplits;
+  if (splits != null && typeof splits === "string") {
+    try {
+      splits = JSON.parse(splits);
+    } catch {
+      splits = null;
+    }
+  }
+  if (method === "SPLIT" && Array.isArray(splits)) {
+    let sum = 0;
+    for (const row of splits) {
+      if (String(row?.method || "").toUpperCase() === "CARD") sum += Number(row.amount);
+    }
+    return Number.isFinite(sum) ? sum : 0;
+  }
+  if (method === "CARD") {
+    const p = Number(sale.amountPaid != null ? sale.amountPaid.toString() : sale.total?.toString());
+    return Number.isFinite(p) && p >= 0 ? p : 0;
+  }
+  return 0;
+}
+
+const num = (v) => {
+  const n = Number(v != null && typeof v === "object" && "toString" in v ? v.toString() : v);
+  return Number.isFinite(n) ? n : 0;
+};
+
 /**
- * Expected drawer cash at close:
- * openingFloat + cash sales (+ cash AR collections in window) − cash refunds on session sales.
+ * Cash-up figures for a till session (FR-102, FR-109):
+ * expected cash = opening float + cash sales + cash account collections − cash refunds paid from this session,
+ * whichever session the refunded sale was in. Card total = card taken − card refunds in this session.
  *
  * @param {import("@prisma/client").PrismaClient | import("@prisma/client").Prisma.TransactionClient} db
  * @param {{ id: string; branchId: string; openingFloat: unknown; openedAt: Date }} session
  * @param {Date} [closedAt]
  */
-export async function computeSessionExpectedCash(db, session, closedAt = new Date()) {
-  const opening = Number(
-    session.openingFloat != null &&
-      typeof session.openingFloat === "object" &&
-      "toString" in session.openingFloat
-      ? session.openingFloat.toString()
-      : session.openingFloat,
-  );
+export async function computeSessionCashUp(db, session, closedAt = new Date()) {
+  const opening = num(session.openingFloat);
 
   const sessionSales = await db.sale.findMany({
     where: { cashSessionId: session.id },
@@ -124,29 +149,41 @@ export async function computeSessionExpectedCash(db, session, closedAt = new Dat
   });
 
   let cashSalesNum = 0;
+  let cardSalesNum = 0;
   for (const s of sessionSales) {
     cashSalesNum += cashPortionFromSale(s);
+    cardSalesNum += cardPortionFromSale(s);
   }
 
-  const saleIds = sessionSales.map((s) => s.id);
+  // Refunds recorded against this session (any sale, any earlier session).
   let cashRefundsNum = 0;
+  let cardRefundsNum = 0;
+  const sessionRefunds = await db.refund.findMany({
+    where: { cashSessionId: session.id },
+    select: { total: true, method: true },
+  });
+  for (const r of sessionRefunds) {
+    if (r.method === "CASH") cashRefundsNum += num(r.total);
+    else if (r.method === "CARD") cardRefundsNum += num(r.total);
+  }
+
+  // Older refunds written before refunds carried a method and session.
+  const saleIds = sessionSales.map((s) => s.id);
   if (saleIds.length) {
-    const refunds = await db.refund.findMany({
+    const legacy = await db.refund.findMany({
       where: {
         saleId: { in: saleIds },
+        cashSessionId: null,
+        method: null,
         branchId: session.branchId,
         createdAt: { gte: session.openedAt, lte: closedAt },
       },
-      select: {
-        total: true,
-        saleId: true,
-      },
+      select: { total: true, saleId: true },
     });
     const saleById = new Map(sessionSales.map((s) => [s.id, s]));
-    for (const r of refunds) {
+    for (const r of legacy) {
       const sale = r.saleId ? saleById.get(r.saleId) : null;
-      if (!sale) continue;
-      cashRefundsNum += cashPortionFromRefund(r.total, sale);
+      if (sale) cashRefundsNum += cashPortionFromRefund(r.total, sale);
     }
   }
 
@@ -163,22 +200,27 @@ export async function computeSessionExpectedCash(db, session, closedAt = new Dat
       select: { amount: true },
     });
     for (const row of collections) {
-      const a = Number(
-        row.amount != null && typeof row.amount === "object" && "toString" in row.amount
-          ? row.amount.toString()
-          : row.amount,
-      );
+      const a = num(row.amount);
       // Payments are stored as negative ledger amounts.
-      if (Number.isFinite(a) && a < 0) cashCollectionsNum += Math.abs(a);
+      if (a < 0) cashCollectionsNum += Math.abs(a);
     }
   } catch {
     cashCollectionsNum = 0;
   }
 
-  return round2(
-    (Number.isFinite(opening) ? opening : 0) +
-      cashSalesNum +
-      cashCollectionsNum -
-      cashRefundsNum,
-  );
+  return {
+    openingFloat: round2(opening),
+    cashSales: round2(cashSalesNum),
+    cashCollections: round2(cashCollectionsNum),
+    cashRefunds: round2(cashRefundsNum),
+    expectedCash: round2(opening + cashSalesNum + cashCollectionsNum - cashRefundsNum),
+    cardSales: round2(cardSalesNum),
+    cardRefunds: round2(cardRefundsNum),
+    cardTotal: round2(cardSalesNum - cardRefundsNum),
+  };
+}
+
+/** Expected drawer cash at close. */
+export async function computeSessionExpectedCash(db, session, closedAt = new Date()) {
+  return (await computeSessionCashUp(db, session, closedAt)).expectedCash;
 }

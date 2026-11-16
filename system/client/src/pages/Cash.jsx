@@ -23,6 +23,8 @@ export default function Cash() {
   const [closingCounted, setClosingCounted] = useState("");
   const [closeNote, setCloseNote] = useState("");
   const [msg, setMsg] = useState("");
+  const [cashUp, setCashUp] = useState(null);
+  const [lastClose, setLastClose] = useState(null);
 
   const loadOpen = useCallback(() => {
     const bid = branchId;
@@ -36,6 +38,16 @@ export default function Cash() {
     if (bid) p.set("branchId", bid);
     return api(`/api/cash-sessions?${p.toString()}`).then(setSessions);
   }, [branchId]);
+
+  useEffect(() => {
+    if (!openSession?.id) {
+      setCashUp(null);
+      return;
+    }
+    api(`/api/cash-sessions/${openSession.id}/cash-up`)
+      .then(setCashUp)
+      .catch(() => setCashUp(null));
+  }, [openSession?.id]);
 
   useEffect(() => {
     loadOpen().catch(() => setOpenSession(null));
@@ -67,13 +79,14 @@ export default function Cash() {
     if (!openSession) return;
     setMsg("");
     try {
-      await api(`/api/cash-sessions/${openSession.id}/close`, {
+      const closedRow = await api(`/api/cash-sessions/${openSession.id}/close`, {
         method: "POST",
         body: {
           closingCountedCash: Number.parseFloat(String(closingCounted).replace(",", ".")),
           note: closeNote.trim() || undefined,
         },
       });
+      setLastClose(closedRow);
       setClosingCounted("");
       setCloseNote("");
       await loadOpen();
@@ -103,6 +116,18 @@ export default function Cash() {
             <div>
               {t("cash.openedBy")} {openSession.openedBy?.name || "—"}
             </div>
+            {cashUp ? (
+              <div style={{ marginTop: 8, display: "grid", gap: 2, fontSize: 14 }}>
+                <div>{t("cash.cashSales")} {cashUp.cashSales.toFixed(2)}</div>
+                <div>{t("cash.cashRefunds")} {cashUp.cashRefunds.toFixed(2)}</div>
+                <div>
+                  <strong>{t("cash.expected")}: {cashUp.expectedCash.toFixed(2)} {t("common.currency")}</strong>
+                </div>
+                <div>
+                  <strong>{t("cash.cardTotal")}: {cashUp.cardTotal.toFixed(2)} {t("common.currency")}</strong>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div style={{ marginTop: 8, color: "var(--muted)" }}>{t("cash.noOpen")}</div>
@@ -164,6 +189,22 @@ export default function Cash() {
 
       {msg ? <div style={{ color: "var(--muted)" }}>{msg}</div> : null}
 
+      {lastClose ? (
+        <div className="card" role="status" style={{ display: "grid", gap: 4, fontSize: 14 }}>
+          <strong>{t("cash.closeSummary")}</strong>
+          <div>{t("cash.openingFloat")}: {Number(lastClose.openingFloat).toFixed(2)}</div>
+          <div>{t("cash.countedCash")}: {Number(lastClose.closingCountedCash).toFixed(2)}</div>
+          <div>{t("cash.cardTotal")}: {Number(lastClose.cardTotal ?? 0).toFixed(2)}</div>
+          <div>{t("cash.expected")}: {Number(lastClose.expectedCash).toFixed(2)}</div>
+          <div>
+            {t("cash.variance")}:{" "}
+            <span style={{ color: Number(lastClose.cashVariance) !== 0 ? "var(--warning)" : "inherit" }}>
+              {Number(lastClose.cashVariance).toFixed(2)}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
       <div className="card" style={{ overflowX: "auto" }}>
         <strong>{t("cash.history")}</strong>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, marginTop: 12 }}>
@@ -173,6 +214,7 @@ export default function Cash() {
               <th style={th}>{t("cash.openingFloat")}</th>
               <th style={th}>{t("cash.expected")}</th>
               <th style={th}>{t("cash.countedCash")}</th>
+              <th style={th}>{t("cash.cardTotal")}</th>
               <th style={th}>{t("cash.variance")}</th>
             </tr>
           </thead>
@@ -191,6 +233,7 @@ export default function Cash() {
                 <td style={td}>{Number(s.openingFloat).toFixed(2)}</td>
                 <td style={td}>{s.expectedCash != null ? Number(s.expectedCash).toFixed(2) : "—"}</td>
                 <td style={td}>{s.closingCountedCash != null ? Number(s.closingCountedCash).toFixed(2) : "—"}</td>
+                <td style={td}>{s.cardTotal != null ? Number(s.cardTotal).toFixed(2) : "—"}</td>
                 <td style={td}>
                   {s.cashVariance != null ? (
                     <span style={{ color: Number(s.cashVariance) !== 0 ? "var(--warning)" : "inherit" }}>
