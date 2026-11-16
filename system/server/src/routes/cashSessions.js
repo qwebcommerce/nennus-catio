@@ -2,11 +2,12 @@ import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { computeSessionExpectedCash } from "../lib/saleCash.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("pos", "view"));
 
 router.get("/open", async (req, res) => {
   const branchId = req.query.branchId || req.user.branchId;
@@ -28,7 +29,7 @@ router.get("/open", async (req, res) => {
   res.json(session);
 });
 
-router.post("/open", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("cashSession"), async (req, res) => {
+router.post("/open", requireModule("pos", "create"), async (req, res) => {
   const { branchId, openingFloat } = req.body || {};
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
@@ -71,7 +72,7 @@ router.post("/open", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
   res.status(201).json(session);
 });
 
-router.post("/:id/close", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("cashSession"), async (req, res) => {
+router.post("/:id/close", requireModule("pos", "create"), async (req, res) => {
   const { closingCountedCash, note } = req.body || {};
   const counted = Number(closingCountedCash);
   if (Number.isNaN(counted) || counted < 0) {

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { commitSaleHolds, releaseSaleHolds, restoreCommittedHolds } from "../lib/webOrder.js";
 import { refundSkipcashPayment } from "../lib/skipcash.js";
 import { writeAudit } from "../lib/auditLog.js";
@@ -9,6 +9,7 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("orders", "view"));
 
 const NEXT = {
   CONFIRMED: ["PREPARING", "CANCELLED"],
@@ -17,7 +18,7 @@ const NEXT = {
   READY_FOR_PICKUP: ["COLLECTED"],
 };
 
-router.get("/", requireRole("ADMIN", "MANAGER", "CASHIER"), async (req, res) => {
+router.get("/", async (req, res) => {
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.test(String(req.query.day || "")) ? String(req.query.day) : "";
   const rows = await prisma.sale.findMany({
     where: {
@@ -37,7 +38,7 @@ router.get("/", requireRole("ADMIN", "MANAGER", "CASHIER"), async (req, res) => 
   res.json(rows);
 });
 
-router.post("/:id/dispatch", requireRole("ADMIN", "MANAGER", "CASHIER"), async (req, res) => {
+router.post("/:id/dispatch", requireModule("orders", "edit"), async (req, res) => {
   const url = process.env.FLEETWIZ_API_URL?.trim();
   const key = process.env.FLEETWIZ_API_KEY?.trim();
   if (!url || !key) {
@@ -78,7 +79,7 @@ router.post("/:id/dispatch", requireRole("ADMIN", "MANAGER", "CASHIER"), async (
   res.json({ id: updated.id, fleetwizReference: updated.fleetwizReference, fleetwizStatus: updated.fleetwizStatus });
 });
 
-router.post("/:id/resolve-payment", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/resolve-payment", requireModule("orders", "edit"), async (req, res) => {
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, orderChannel: "WEBSITE", paymentReview: true, branch: { organizationId: req.user.organizationId } },
   });
@@ -101,7 +102,7 @@ router.post("/:id/resolve-payment", requireRole("ADMIN", "MANAGER"), async (req,
   res.json({ id: sale.id, accepted: Boolean(req.body?.accept) });
 });
 
-router.post("/:id/refund", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/refund", requireModule("orders", "refund"), async (req, res) => {
   const amount = Number(req.body?.amount);
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, orderChannel: "WEBSITE", branch: { organizationId: req.user.organizationId } },
@@ -147,7 +148,7 @@ router.post("/:id/refund", requireRole("ADMIN", "MANAGER"), async (req, res) => 
   res.status(201).json(refund);
 });
 
-router.post("/:id/status", requireRole("ADMIN", "MANAGER", "CASHIER"), async (req, res) => {
+router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => {
   const next = String(req.body?.status || "").toUpperCase();
   try {
     const sale = await prisma.$transaction(async (tx) => {

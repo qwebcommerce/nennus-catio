@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("pos", "view"));
 
 const MAX_HELD_PER_USER_BRANCH = 15;
 
@@ -64,7 +65,7 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireModule("pos", "create"), async (req, res) => {
   const {
     branchId: bodyBranch,
     label,
@@ -143,7 +144,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireModule("pos", "create"), async (req, res) => {
   const row = await prisma.heldCart.findFirst({
     where: {
       id: req.params.id,

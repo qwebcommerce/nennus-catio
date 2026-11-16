@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
   validateCatalogName,
   validateSkuCode,
@@ -11,6 +11,7 @@ import {
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("products", "view"));
 
 /** GET /api/catalog — categories + subcategories + skus for product forms */
 router.get("/", async (req, res) => {
@@ -54,7 +55,7 @@ router.get("/categories", async (req, res) => {
   res.json(list);
 });
 
-router.post("/categories", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.post("/categories", requireModule("products", "create"), async (req, res) => {
   const { name, nameEn } = req.body || {};
   const checked = validateCatalogName(name, "Category name");
   if (!checked.ok) return res.status(400).json({ error: checked.error });
@@ -89,7 +90,7 @@ router.post("/categories", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePe
   res.status(201).json(row);
 });
 
-router.patch("/categories/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.patch("/categories/:id", requireModule("products", "edit"), async (req, res) => {
   const existing = await prisma.category.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -130,7 +131,7 @@ router.patch("/categories/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requ
   res.json(row);
 });
 
-router.delete("/categories/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.delete("/categories/:id", requireModule("products", "delete"), async (req, res) => {
   const existing = await prisma.category.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -166,7 +167,7 @@ router.get("/subcategories", async (req, res) => {
   res.json(list);
 });
 
-router.post("/subcategories", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.post("/subcategories", requireModule("products", "create"), async (req, res) => {
   const { categoryId, name, nameEn } = req.body || {};
   if (!categoryId || !String(categoryId).trim()) {
     return res.status(400).json({ error: "Please select a parent category" });
@@ -217,7 +218,7 @@ router.post("/subcategories", requireRole("ADMIN", "MANAGER", "CASHIER"), requir
   }
 });
 
-router.patch("/subcategories/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.patch("/subcategories/:id", requireModule("products", "edit"), async (req, res) => {
   const existing = await prisma.subcategory.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -279,7 +280,7 @@ router.patch("/subcategories/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), r
   }
 });
 
-router.delete("/subcategories/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.delete("/subcategories/:id", requireModule("products", "delete"), async (req, res) => {
   const existing = await prisma.subcategory.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -316,7 +317,7 @@ router.get("/skus", async (req, res) => {
   res.json(list);
 });
 
-router.post("/skus", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.post("/skus", requireModule("products", "create"), async (req, res) => {
   const { code, name, subcategoryId } = req.body || {};
   const checked = validateSkuCode(code);
   if (!checked.ok) return res.status(400).json({ error: checked.error });
@@ -372,7 +373,7 @@ router.post("/skus", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
   }
 });
 
-router.patch("/skus/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.patch("/skus/:id", requireModule("products", "edit"), async (req, res) => {
   const existing = await prisma.catalogSku.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -436,7 +437,7 @@ router.patch("/skus/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
   }
 });
 
-router.delete("/skus/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("catalogEdit"), async (req, res) => {
+router.delete("/skus/:id", requireModule("products", "delete"), async (req, res) => {
   const existing = await prisma.catalogSku.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });

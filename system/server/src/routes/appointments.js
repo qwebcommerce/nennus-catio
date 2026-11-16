@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { qatarParts, slotTaken } from "../lib/groomingSlots.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requireRole("ADMIN", "MANAGER"));
+router.use(requireModule("grooming", "view"));
 
 const STATUSES = ["BOOKED", "PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "DONE", "NO_SHOW", "CANCELLED"];
 
@@ -63,7 +63,7 @@ router.get("/services", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/services", async (req, res) => {
+router.post("/services", requireModule("grooming", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     const name = String(b.name || "").trim();
@@ -135,7 +135,7 @@ router.get("/schedule", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/schedule", async (req, res) => {
+router.post("/schedule", requireModule("grooming", "edit"), async (req, res) => {
   const weekday = Number(req.body?.weekday);
   const startTime = String(req.body?.startTime || "").trim();
   const endTime = String(req.body?.endTime || "").trim();
@@ -149,7 +149,7 @@ router.post("/schedule", async (req, res) => {
   res.status(201).json(row);
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireModule("grooming", "create"), async (req, res) => {
   try {
     const b = req.body || {};
     const startAt = parseDateTime(b.startAt);
@@ -217,7 +217,7 @@ router.post("/", async (req, res) => {
   }
 });
 
-router.patch("/:id", async (req, res) => {
+router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
   try {
     const existing = await prisma.appointment.findFirst({
       where: { id: req.params.id, organizationId: req.user.organizationId },
@@ -262,7 +262,7 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
-router.post("/reminders/mark-due", async (req, res) => {
+router.post("/reminders/mark-due", requireModule("grooming", "edit"), async (req, res) => {
   const now = new Date();
   const due = await prisma.appointmentReminder.findMany({
     where: {

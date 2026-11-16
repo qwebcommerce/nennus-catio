@@ -2,11 +2,12 @@ import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { authMiddleware, requireRole, requirePermission, requireModule } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("pos", "view"));
 
 router.get("/", async (req, res) => {
   const { branchId, limit = "50" } = req.query;
@@ -34,7 +35,7 @@ const refundInclude = {
   user: { select: { name: true } },
 };
 
-router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("refunds"), requireModule("pos", "refund"), async (req, res) => {
+router.post("/", requireModule("pos", "refund"), async (req, res) => {
   const {
     branchId,
     saleId,

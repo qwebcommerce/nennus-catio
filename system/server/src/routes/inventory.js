@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { executeInventoryTransfer } from "../lib/inventoryTransfer.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("warehouses", "view"));
 
 router.get("/low-stock", async (req, res) => {
   const branchId = req.query.branchId || req.user.branchId;
@@ -28,7 +29,7 @@ router.get("/low-stock", async (req, res) => {
   res.json(low);
 });
 
-router.post("/reconcile", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("stockCount"), async (req, res) => {
+router.post("/reconcile", requireModule("warehouses", "edit"), async (req, res) => {
   const { branchId, lines } = req.body || {};
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
@@ -90,7 +91,7 @@ router.post("/reconcile", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
   }
 });
 
-router.post("/transfer", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("transfer"), async (req, res) => {
+router.post("/transfer", requireModule("warehouses", "edit"), async (req, res) => {
   const { fromBranchId, toBranchId, items } = req.body || {};
   const from = String(fromBranchId || "");
   const to = String(toBranchId || "");
@@ -122,7 +123,7 @@ router.post("/transfer", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePerm
   }
 });
 
-router.patch("/:productId/:branchId", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.patch("/:productId/:branchId", requireModule("warehouses", "edit"), async (req, res) => {
   const { quantity, minStockLevel } = req.body || {};
   const orgId = req.user.organizationId;
   const br = await findBranchInOrg(prisma, orgId, req.params.branchId);

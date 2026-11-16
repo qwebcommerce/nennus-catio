@@ -111,7 +111,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
 }
 
 export function AppLayout() {
-  const { user, logout, isAdmin, isManager, can } = useAuth();
+  const { user, logout, isAdmin, isManager, isOrgOwner, can } = useAuth();
   const {
     branches,
     activeBranchId,
@@ -374,7 +374,7 @@ export function AppLayout() {
                 <span>{t("nav.users")}</span>
               </NavLink>
             ) : null}
-            {isAdmin ? (
+            {isOrgOwner ? (
               <NavLink to="/permissions" className={sidebarLinkClass}>
                 <SidebarIcon name="audit" />
                 <span>{t("nav.permissions")}</span>

@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireModule, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("promotions", "view"));
 const KINDS = ["PERCENT", "FIXED", "PRODUCT", "CATEGORY", "BUNDLE", "BOGO"];
 const CHANNELS = ["ALL", "TILL", "WEBSITE", "GROOMING"];
 
@@ -16,7 +17,7 @@ function decimalOrNull(value) {
   return new Prisma.Decimal(n.toFixed(2));
 }
 
-router.get("/", requireModule("promotions", "view"), async (req, res) => {
+router.get("/", async (req, res) => {
   const rows = await prisma.promotion.findMany({
     where: { organizationId: req.user.organizationId },
     orderBy: { createdAt: "desc" },
@@ -24,7 +25,7 @@ router.get("/", requireModule("promotions", "view"), async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), requireModule("promotions", "create"), async (req, res) => {
+router.post("/", requireModule("promotions", "create"), async (req, res) => {
   const body = req.body || {};
   const name = String(body.name || "").trim();
   const kind = String(body.kind || "").toUpperCase();
@@ -61,7 +62,7 @@ router.post("/", requireRole("ADMIN", "MANAGER"), requireModule("promotions", "c
   res.status(201).json(row);
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER"), requireModule("promotions", "edit"), async (req, res) => {
+router.patch("/:id", requireModule("promotions", "edit"), async (req, res) => {
   const existing = await prisma.promotion.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });

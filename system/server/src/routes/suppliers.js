@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("purchasing", "view"));
 
 router.get("/", async (req, res) => {
   const rows = await prisma.supplier.findMany({
@@ -13,7 +14,7 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/", requireModule("purchasing", "create"), async (req, res) => {
   const { name, phone, note, email, address, isActive } = req.body || {};
   const n = String(name || "").trim();
   if (!n) return res.status(400).json({ error: "اسم المورد مطلوب" });
@@ -31,7 +32,7 @@ router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   res.status(201).json(row);
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.patch("/:id", requireModule("purchasing", "edit"), async (req, res) => {
   const { name, phone, note, email, address, isActive } = req.body || {};
   const data = {};
   if (name != null) {
@@ -59,7 +60,7 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   }
 });
 
-router.delete("/:id", requireRole("ADMIN"), async (req, res) => {
+router.delete("/:id", requireModule("purchasing", "delete"), async (req, res) => {
   const row = await prisma.supplier.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });

@@ -3,11 +3,6 @@ import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
-import {
-  DEFAULT_CASHIER_PERMISSIONS,
-  DEFAULT_MANAGER_PERMISSIONS,
-  PERMISSION_KEYS,
-} from "../lib/permissions.js";
 
 const ROLE_TABS = [
   { id: "MANAGER", labelKey: "permissions.roleManager" },
@@ -19,29 +14,23 @@ export default function Permissions() {
   const { t } = useI18n();
   const { showToast } = useToast();
   const [tab, setTab] = useState("MANAGER");
-  const [matrices, setMatrices] = useState({
-    MANAGER: { ...DEFAULT_MANAGER_PERMISSIONS },
-    CASHIER: { ...DEFAULT_CASHIER_PERMISSIONS },
-  });
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadOk, setLoadOk] = useState(false);
   const [modules, setModules] = useState({ MANAGER: {}, CASHIER: {} });
   const [moduleKeys, setModuleKeys] = useState([]);
   const [moduleActions, setModuleActions] = useState([]);
+  const [moduleDefaults, setModuleDefaults] = useState({ MANAGER: {}, CASHIER: {} });
 
   const load = async () => {
     const data = await api("/api/permissions");
-    setMatrices({
-      MANAGER: { ...DEFAULT_MANAGER_PERMISSIONS, ...(data?.matrices?.MANAGER || {}) },
-      CASHIER: { ...DEFAULT_CASHIER_PERMISSIONS, ...(data?.matrices?.CASHIER || {}) },
-    });
     setModules({
       MANAGER: data?.modules?.MANAGER || {},
       CASHIER: data?.modules?.CASHIER || {},
     });
     setModuleKeys(data?.moduleKeys || []);
     setModuleActions(data?.moduleActions || []);
+    setModuleDefaults(data?.moduleDefaults || { MANAGER: {}, CASHIER: {} });
     setDirty(false);
     setLoadOk(true);
   };
@@ -53,19 +42,9 @@ export default function Permissions() {
     });
   }, []);
 
-  const toggle = (key) => {
-    if (!loadOk) return;
-    setMatrices((prev) => ({
-      ...prev,
-      [tab]: { ...prev[tab], [key]: !prev[tab][key] },
-    }));
-    setDirty(true);
-  };
-
   const resetTab = () => {
     if (!loadOk) return;
-    const defaults = tab === "MANAGER" ? DEFAULT_MANAGER_PERMISSIONS : DEFAULT_CASHIER_PERMISSIONS;
-    setMatrices((prev) => ({ ...prev, [tab]: { ...defaults } }));
+    setModules((prev) => ({ ...prev, [tab]: JSON.parse(JSON.stringify(moduleDefaults[tab] || {})) }));
     setDirty(true);
   };
 
@@ -78,11 +57,8 @@ export default function Permissions() {
     try {
       await api("/api/permissions", {
         method: "PUT",
-        body: {
-          MANAGER: matrices.MANAGER,
-          CASHIER: matrices.CASHIER,
-          modules,
-        },
+        // The module matrix is the single source of truth (FR-08); legacy keys are derived from it.
+        body: { modules },
       });
       await refreshUser?.();
       setDirty(false);
@@ -93,8 +69,6 @@ export default function Permissions() {
       setBusy(false);
     }
   };
-
-  const current = matrices[tab] || {};
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, width: "100%" }}>
@@ -120,36 +94,6 @@ export default function Permissions() {
           >
             {t(r.labelKey)}
           </button>
-        ))}
-      </div>
-
-      <div className="card" style={{ display: "grid", gap: 0 }}>
-        {PERMISSION_KEYS.map((key) => (
-          <label
-            key={key}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              padding: "12px 4px",
-              borderBottom: "1px solid var(--border)",
-              cursor: "pointer",
-            }}
-          >
-            <span>
-              <strong style={{ display: "block" }}>{t(`permissions.key.${key}`)}</strong>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                {t(`permissions.keyHint.${key}`)}
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              checked={Boolean(current[key])}
-              onChange={() => toggle(key)}
-              style={{ width: 20, height: 20 }}
-            />
-          </label>
         ))}
       </div>
 

@@ -65,7 +65,8 @@ export default function Dashboard() {
       setSummary(s);
       const p = await api(`/api/dashboard/sales-by-product${q}`);
       setByProduct(p);
-      const m = await api(`/api/dashboard/monthly-profit${q}`);
+      // Profit needs Finance → view on the server; other cards still load without it.
+      const m = await api(`/api/dashboard/monthly-profit${q}`).catch(() => []);
       setMonthly(m);
       const [tp, tc] = await Promise.all([
         api(`/api/dashboard/top-products-month${q}`),
@@ -215,7 +216,7 @@ export default function Dashboard() {
                     <DashIcon name="spark" size={18} />
                   </span>
                   <div>
-                    <strong>{cur(summary.estimatedProfitMonth)}</strong>
+                    <strong>{summary.estimatedProfitMonth == null ? "—" : cur(summary.estimatedProfitMonth)}</strong>
                     <span>{t("dashboard.profitMonth")}</span>
                   </div>
                 </div>

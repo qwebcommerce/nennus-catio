@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requirePermission("receivables"));
+router.use(requireModule("finance", "view"));
 
 function roundMoney(n) {
   return Math.round(Number(n) * 100) / 100;
@@ -160,9 +160,7 @@ router.get("/:customerId/ledger", async (req, res) => {
 });
 
 /** تحصيل دفعة (يقلّل رصيد الذمّة) */
-router.post(
-  "/:customerId/payments",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
+router.post("/:customerId/payments", requireModule("finance", "create"),
   async (req, res) => {
     const orgId = req.user.organizationId;
     const customerId = String(req.params.customerId || "").trim();

@@ -2,12 +2,12 @@ import { Router } from "express";
 import { writeAudit } from "../lib/auditLog.js";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requirePermission, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requirePermission("purchases"));
+router.use(requireModule("purchasing", "view"));
 
 const include = {
   supplier: { select: { id: true, name: true } },
@@ -26,7 +26,7 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/", requireModule("purchasing", "create"), async (req, res) => {
   const supplierId = String(req.body?.supplierId || "");
   const branchId = String(req.body?.branchId || req.user.branchId || "");
   const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
@@ -77,7 +77,7 @@ router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   res.status(201).json(order);
 });
 
-router.post("/:id/send", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/send", requireModule("purchasing", "edit"), async (req, res) => {
   const order = await prisma.purchaseOrder.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -91,7 +91,7 @@ router.post("/:id/send", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   res.json(updated);
 });
 
-router.post("/:id/cancel", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/cancel", requireModule("purchasing", "edit"), async (req, res) => {
   const order = await prisma.purchaseOrder.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -107,7 +107,7 @@ router.post("/:id/cancel", requireRole("ADMIN", "MANAGER"), async (req, res) => 
   res.json(updated);
 });
 
-router.post("/:id/receive", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/:id/receive", requireModule("purchasing", "edit"), async (req, res) => {
   const orgId = req.user.organizationId;
   const order = await prisma.purchaseOrder.findFirst({
     where: { id: req.params.id, organizationId: orgId },
@@ -226,7 +226,7 @@ router.get("/bills", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/bills/:id/payments", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/bills/:id/payments", requireModule("purchasing", "create"), async (req, res) => {
   const amount = Number(req.body?.amount);
   const method = String(req.body?.method || "").toUpperCase() === "BANK" ? "BANK" : "CASH";
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "Enter a payment amount" });

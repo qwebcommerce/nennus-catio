@@ -1,9 +1,11 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
+/** Sales dashboard: anyone who can see the till; profit figures need Finance → view. */
+router.use(requireModule("pos", "view"));
 
 function startOfToday() {
   const d = new Date();
@@ -123,7 +125,7 @@ router.get("/summary", async (req, res) => {
     salesTodayCount: todaySales._count,
     salesTodayTotal: todaySales._sum.total?.toString() ?? "0",
     salesMonthTotal: monthSales._sum.total?.toString() ?? "0",
-    estimatedProfitMonth: (revenueMonth - costMonth).toFixed(2),
+    estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? (revenueMonth - costMonth).toFixed(2) : null,
     lowStockAlerts: lowStockCount + variantLow,
     channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: Number(row._sum.total || 0), count: row._count }])),
     waitingOrders,
@@ -187,7 +189,7 @@ router.get("/sales-by-branch", async (req, res) => {
   );
 });
 
-router.get("/monthly-profit", async (req, res) => {
+router.get("/monthly-profit", requireModule("finance", "view"), async (req, res) => {
   const branchId = req.query.branchId || (req.user.role === "ADMIN" ? null : req.user.branchId);
   const months = 6;
   const out = [];

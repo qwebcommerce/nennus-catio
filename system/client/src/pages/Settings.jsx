@@ -37,7 +37,7 @@ function SettingRow({ label, hint, control }) {
 export default function Settings() {
   const { t } = useI18n();
   const { theme, toggleTheme } = useTheme();
-  const { isAdmin, isManager } = useAuth();
+  const { isAdmin, isManager, isOrgOwner } = useAuth();
   const { showToast } = useToast();
   const [notifEnabled, setNotifEnabled] = useState(readNotifPref);
   const [notifPermission, setNotifPermission] = useState(() =>
@@ -168,7 +168,8 @@ export default function Settings() {
         />
       </section>
 
-      {isAdmin ? (
+      {/* FR-09: business settings are reserved for the owner. */}
+      {isOrgOwner ? (
         <section className="settings-card">
           <h2>{t("settings.websiteLocation")}</h2>
           <p>{t("settings.websiteLocationHint")}</p>

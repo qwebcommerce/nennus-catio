@@ -1,13 +1,13 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requireModule } from "../middleware/auth.js";
+import { authMiddleware, requireModule, requireOwner } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
 const router = Router();
 router.use(authMiddleware);
 
 /** Org ops settings for managers (website, alerts, contact details) */
-router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view"), async (req, res, next) => {
+router.get("/", requireModule("settings", "view"), async (req, res, next) => {
   try {
     const org = await prisma.organization.findUnique({
       where: { id: req.user.organizationId },
@@ -51,7 +51,8 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view
   }
 });
 
-router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "edit"), async (req, res, next) => {
+/** FR-09: business settings are reserved for the organisation owner. */
+router.patch("/", requireOwner, async (req, res, next) => {
   try {
     const b = req.body || {};
     const data = {};
@@ -90,33 +91,45 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
     if (!Object.keys(data).length) {
       return res.status(400).json({ error: "No settings to update" });
     }
-    const org = await prisma.organization.update({
-      where: { id: req.user.organizationId },
-      data,
-      select: {
-        id: true,
-        websiteBranchId: true,
-        holdMinutes: true,
-        whatsappNumber: true,
-        homeVisitFee: true,
-        phone: true,
-        publicEmail: true,
-        publicAddress: true,
-        hoursText: true,
-        hoursTextEn: true,
-        notifyEmail: true,
-        alertOrder: true,
-        alertBooking: true,
-        alertRelocation: true,
-        alertLowStock: true,
-      },
-    });
-    await writeAudit({
-      userId: req.user.sub,
-      action: "ORG_SETTINGS_UPDATE",
-      entityType: "Organization",
-      entityId: org.id,
-      summary: `Updated ${Object.keys(data).join(", ")}`,
+    const keys = Object.keys(data);
+    const org = await prisma.$transaction(async (tx) => {
+      const before = await tx.organization.findUnique({
+        where: { id: req.user.organizationId },
+        select: Object.fromEntries(keys.map((k) => [k, true])),
+      });
+      const row = await tx.organization.update({
+        where: { id: req.user.organizationId },
+        data,
+        select: {
+          id: true,
+          websiteBranchId: true,
+          holdMinutes: true,
+          whatsappNumber: true,
+          homeVisitFee: true,
+          phone: true,
+          publicEmail: true,
+          publicAddress: true,
+          hoursText: true,
+          hoursTextEn: true,
+          notifyEmail: true,
+          alertOrder: true,
+          alertBooking: true,
+          alertRelocation: true,
+          alertLowStock: true,
+        },
+      });
+      await writeAudit(
+        {
+          userId: req.user.sub,
+          action: "ORG_SETTINGS_UPDATE",
+          entityType: "Organization",
+          entityId: row.id,
+          summary: `Updated ${keys.join(", ")}`,
+          meta: { before, after: data },
+        },
+        tx
+      );
+      return row;
     });
     res.json({
       websiteBranchId: org.websiteBranchId,

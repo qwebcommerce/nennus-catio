@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { executeReceivePurchase } from "../lib/purchaseReceive.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("purchasing", "view"));
 
 async function receivePurchase(req, res, payload) {
   try {
@@ -46,10 +47,7 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post(
-  "/receive",
-  requireRole("ADMIN", "MANAGER", "CASHIER"),
-  requirePermission("purchases"),
+router.post("/receive", requireModule("purchasing", "create"),
   async (req, res) => {
     return receivePurchase(req, res, req.body);
   },

@@ -1,10 +1,11 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("delivery", "view"));
 
 router.get("/areas", async (req, res) => {
   const rows = await prisma.deliveryArea.findMany({
@@ -14,7 +15,7 @@ router.get("/areas", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/areas", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/areas", requireModule("delivery", "create"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   if (!name) return res.status(400).json({ error: "Area name is required" });
   const fee = Number(req.body?.fee);
@@ -38,7 +39,7 @@ router.get("/windows", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/windows", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/windows", requireModule("delivery", "create"), async (req, res) => {
   const label = String(req.body?.label || "").trim();
   const startTime = String(req.body?.startTime || "").trim();
   const endTime = String(req.body?.endTime || "").trim();

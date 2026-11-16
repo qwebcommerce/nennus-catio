@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireRole } from "../middleware/auth.js";
+import { authMiddleware, requireModule } from "../middleware/auth.js";
 
 const router = Router();
 router.use(authMiddleware);
+router.use(requireModule("products", "view"));
 
 router.get("/", async (req, res) => {
   const rows = await prisma.catalogPetType.findMany({
@@ -13,7 +14,7 @@ router.get("/", async (req, res) => {
   res.json(rows);
 });
 
-router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.post("/", requireModule("products", "create"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const nameEn = String(req.body?.nameEn || "").trim();
   if (!name || !nameEn) return res.status(400).json({ error: "Arabic and English names are required" });
@@ -28,7 +29,7 @@ router.post("/", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   res.status(201).json(row);
 });
 
-router.patch("/:id", requireRole("ADMIN", "MANAGER"), async (req, res) => {
+router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
   const existing = await prisma.catalogPetType.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
