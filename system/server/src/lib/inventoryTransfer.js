@@ -1,7 +1,6 @@
 import { prisma } from "./prisma.js";
 import { moveLotsBetweenBranches } from "./inventoryLots.js";
 import { writeAudit } from "./auditLog.js";
-import { scheduleInventoryWebhook } from "./inventoryWebhook.js";
 
 /**
  * Immediate multi-line stock transfer between two org branches.
@@ -191,14 +190,6 @@ export async function executeInventoryTransfer({
     entityId: `${from}->${to}`,
     branchId: from,
     summary: `Transfer ${prep.length} products to branch ${to}`,
-  });
-  scheduleInventoryWebhook(orgId, {
-    event: "inventory.transfer",
-    meta: { fromBranchId: from, toBranchId: to, lineCount: prep.length },
-    lines: prep.flatMap(({ productId, qty }) => [
-      { branchId: from, productId, quantityDelta: -qty },
-      { branchId: to, productId, quantityDelta: qty },
-    ]),
   });
 
   return { ok: true, fromBranchId: from, toBranchId: to, lineCount: prep.length, items: prep };

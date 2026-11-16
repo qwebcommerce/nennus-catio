@@ -5,7 +5,6 @@ import {
   getCachedSessionUser,
   setCachedSessionUser,
 } from "../lib/sessionUserCache.js";
-import { clearStoredSyncApiKey } from "../lib/syncApiKeySession.js";
 import { resolveClientPermissions } from "../lib/permissions.js";
 
 const AuthContext = createContext(null);
@@ -89,23 +88,10 @@ export function AuthProvider({ children }) {
     return data.user;
   };
 
-  /** إنشاء مؤسسة + حساب مدير ثم تسجيل الدخول تلقائياً */
-  const registerOrganization = async (body) => {
-    const data = await api("/api/auth/register-organization", {
-      method: "POST",
-      body,
-    });
-    localStorage.setItem("token", data.token);
-    setUser(data.user);
-    setCachedSessionUser(data.user);
-    return data.user;
-  };
-
   const logout = () => {
     localStorage.removeItem("token");
     setCachedSessionUser(null);
     setUser(null);
-    clearStoredSyncApiKey();
   };
 
   const refreshUser = useCallback(async () => {
@@ -123,13 +109,11 @@ export function AuthProvider({ children }) {
         user,
         loading,
         login,
-        registerOrganization,
         logout,
         refreshUser,
         isAdmin: user?.role === "ADMIN",
         isSuperAdmin: user?.role === "ADMIN",
         isManager: user?.role === "MANAGER" || user?.role === "ADMIN",
-        isPlatformAdmin: Boolean(user?.isPlatformAdmin),
         permissions,
         can: (key) => Boolean(permissions?.[key]),
       };

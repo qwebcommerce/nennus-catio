@@ -26,24 +26,6 @@ router.post("/", requireRole("ADMIN"), async (req, res) => {
   const { name, nameEn, address, kind, isActive } = req.body || {};
   if (!name?.trim()) return res.status(400).json({ error: "Branch name is required", code: "BRANCH_NAME_REQUIRED" });
 
-  const org = await prisma.organization.findUnique({
-    where: { id: req.user.organizationId },
-    select: { maxBranches: true, plan: true },
-  });
-  const maxBranches = org?.maxBranches ?? 3;
-  const count = await prisma.branch.count({
-    where: { organizationId: req.user.organizationId },
-  });
-  if (count >= maxBranches) {
-    return res.status(403).json({
-      error: `Branch limit reached (${count}/${maxBranches}). Upgrade the plan to add more branches.`,
-      code: "BRANCH_LIMIT",
-      maxBranches,
-      branchCount: count,
-      plan: org?.plan || "FREE",
-    });
-  }
-
   const b = await prisma.branch.create({
     data: {
       organizationId: req.user.organizationId,
@@ -61,13 +43,13 @@ router.post("/", requireRole("ADMIN"), async (req, res) => {
     entityId: b.id,
     branchId: b.id,
     summary: `Created branch "${b.name}"`,
-    meta: { name: b.name, plan: org?.plan, maxBranches },
+    meta: { name: b.name },
   });
   res.status(201).json(b);
 });
 
 router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
-  const { name, nameEn, address, supabaseId, kind, isActive } = req.body || {};
+  const { name, nameEn, address, kind, isActive } = req.body || {};
   const existing = await prisma.branch.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
@@ -79,10 +61,6 @@ router.patch("/:id", requireRole("ADMIN"), async (req, res) => {
     ...(kind !== undefined && { kind: locationKind(kind, existing.kind || "SHOP") }),
     ...(isActive !== undefined && { isActive: isActive !== false }),
   };
-  if (supabaseId !== undefined) {
-    const s = supabaseId != null && String(supabaseId).trim() ? String(supabaseId).trim() : null;
-    data.supabaseId = s;
-  }
   const b = await prisma.branch.update({
     where: { id: existing.id },
     data,

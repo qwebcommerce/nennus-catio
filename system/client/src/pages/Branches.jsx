@@ -7,20 +7,17 @@ import { useToast } from "../context/ToastContext.jsx";
 import { branchDisplayName } from "../utils/displayLabels.js";
 import { apiErrorMessage } from "../utils/apiError.js";
 import { EmptyState } from "../components/EmptyState.jsx";
-import { Link } from "react-router-dom";
 
 export default function Branches() {
   const { t, locale } = useI18n();
   const { refreshUser } = useAuth();
-  const { reloadBranches, maxBranches, plan, activeBranchId, setActiveBranchId } = useBranchContext();
+  const { reloadBranches, activeBranchId, setActiveBranchId } = useBranchContext();
   const { showToast } = useToast();
   const [list, setList] = useState([]);
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [kind, setKind] = useState("SHOP");
-  const [supaEdits, setSupaEdits] = useState({});
   const [busy, setBusy] = useState(false);
-  const [savingId, setSavingId] = useState("");
   const [editBranch, setEditBranch] = useState(null);
   const [editForm, setEditForm] = useState({ name: "", address: "", kind: "SHOP", isActive: true });
   const [editBusy, setEditBusy] = useState(false);
@@ -34,22 +31,8 @@ export default function Branches() {
     load().catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const m = {};
-    for (const b of list) {
-      m[b.id] = b.supabaseId ?? "";
-    }
-    setSupaEdits(m);
-  }, [list]);
-
-  const atLimit = list.length >= maxBranches;
-
   const add = async (e) => {
     e.preventDefault();
-    if (atLimit) {
-      showToast(t("branches.limitReached"), "error");
-      return;
-    }
     setBusy(true);
     try {
       await api("/api/branches", { method: "POST", body: { name, address, kind } });
@@ -130,43 +113,16 @@ export default function Branches() {
     }
   };
 
-  const saveSupabase = async (id) => {
-    const v = supaEdits[id];
-    setSavingId(id);
-    try {
-      await api(`/api/branches/${id}`, {
-        method: "PATCH",
-        body: { supabaseId: v != null && String(v).trim() ? String(v).trim() : null },
-      });
-      await load();
-      showToast(t("branches.toastSaved"), "success");
-    } catch (err) {
-      showToast(apiErrorMessage(err, t), "error");
-    } finally {
-      setSavingId("");
-    }
-  };
-
   return (
     <div className="branches-page">
       <header className="branches-page__header">
         <div>
           <h1 className="branches-page__title">{t("branches.title")}</h1>
-          <p className="branches-page__meta">
-            {t("branches.limit", { count: list.length, max: maxBranches })}
-            {plan ? <span className="branches-page__plan">{plan}</span> : null}
-          </p>
         </div>
       </header>
 
       <form className="card branches-create" onSubmit={add}>
         <strong className="branches-create__label">{t("branches.new")}</strong>
-        {atLimit ? (
-          <p className="branches-create__warn">
-            {t("branches.limitReached")}{" "}
-            <Link to="/plan">{t("nav.plan")}</Link>
-          </p>
-        ) : null}
         <div className="branches-create__grid">
           <label className="branches-field">
             <span>{t("branches.name")}</span>
@@ -174,12 +130,12 @@ export default function Branches() {
               required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              disabled={atLimit || busy}
+              disabled={busy}
             />
           </label>
           <label className="branches-field">
             <span>{t("branches.kind")}</span>
-            <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={atLimit || busy}>
+            <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={busy}>
               <option value="SHOP">{t("branches.kind.SHOP")}</option>
               <option value="VAN">{t("branches.kind.VAN")}</option>
               <option value="WAREHOUSE">{t("branches.kind.WAREHOUSE")}</option>
@@ -190,12 +146,12 @@ export default function Branches() {
             <input
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              disabled={atLimit || busy}
+              disabled={busy}
               placeholder={t("branches.address")}
             />
           </label>
         </div>
-        <button type="submit" className="btn-touch branches-create__submit" disabled={atLimit || busy}>
+        <button type="submit" className="btn-touch branches-create__submit" disabled={busy}>
           {t("common.add")}
         </button>
       </form>
@@ -205,7 +161,6 @@ export default function Branches() {
           <EmptyState title={t("branches.empty")} hint={t("branches.emptyHint")} />
         ) : (
           list.map((b, index) => {
-            const linked = Boolean(String(supaEdits[b.id] ?? "").trim() || b.supabaseId);
             return (
               <article key={b.id} className="branch-card">
                 <div className="branch-card__top">
@@ -223,9 +178,6 @@ export default function Branches() {
                     </div>
                   </div>
                   <div className="branch-card__aside">
-                    <span className={`branch-card__badge${linked ? " branch-card__badge--on" : ""}`}>
-                      {linked ? t("branches.linked") : t("branches.unlinked")}
-                    </span>
                     <div className="branch-card__actions">
                       <button type="button" className="btn-touch branch-card__edit" onClick={() => openEdit(b)}>
                         {t("common.edit")}
@@ -240,30 +192,6 @@ export default function Branches() {
                         {t("common.delete")}
                       </button>
                     </div>
-                  </div>
-                </div>
-
-                <div className="branch-card__sync">
-                  <div className="branch-card__sync-copy">
-                    <span className="branch-card__sync-title">{t("branches.supabaseId")}</span>
-                    <span className="branch-card__sync-hint">{t("branches.supabaseHint")}</span>
-                  </div>
-                  <div className="branch-card__sync-row">
-                    <input
-                      className="branch-card__uuid"
-                      placeholder="00000000-0000-0000-0000-000000000000"
-                      value={supaEdits[b.id] ?? ""}
-                      onChange={(e) => setSupaEdits((prev) => ({ ...prev, [b.id]: e.target.value }))}
-                      spellCheck={false}
-                    />
-                    <button
-                      type="button"
-                      className="btn-touch branch-card__save"
-                      disabled={savingId === b.id}
-                      onClick={() => saveSupabase(b.id)}
-                    >
-                      {savingId === b.id ? t("common.loading") : t("branches.saveSupabase")}
-                    </button>
                   </div>
                 </div>
               </article>

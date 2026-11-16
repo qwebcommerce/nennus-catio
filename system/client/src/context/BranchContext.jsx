@@ -102,9 +102,7 @@ export function BranchProvider({ children }) {
       canSwitchBranch: Boolean(isAdmin),
       loading,
       reloadBranches: loadBranches,
-      maxBranches: user?.maxBranches ?? 3,
       branchCount: user?.branchCount ?? branches.length,
-      plan: user?.plan || "FREE",
     }),
     [
       branches,
@@ -114,9 +112,7 @@ export function BranchProvider({ children }) {
       isAdmin,
       loading,
       loadBranches,
-      user?.maxBranches,
       user?.branchCount,
-      user?.plan,
     ]
   );
 

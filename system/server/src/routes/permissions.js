@@ -24,8 +24,6 @@ router.get("/", async (req, res) => {
   });
   if (!org) return res.status(404).json({ error: "Organization not found" });
   res.json({
-    plan: org.plan || "FREE",
-    maxBranches: org.maxBranches ?? 3,
     matrices: orgPermissionMatrices(org),
     modules: {
       MANAGER: resolveModulePermissions(org, "MANAGER"),

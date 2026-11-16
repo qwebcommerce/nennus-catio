@@ -9,7 +9,6 @@ const router = Router();
 router.use(authMiddleware);
 router.use(requireRole("ADMIN", "MANAGER"));
 
-const ACTIVE_STATUSES = ["BOOKED", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS"];
 const STATUSES = ["BOOKED", "PENDING_PAYMENT", "CONFIRMED", "CHECKED_IN", "IN_PROGRESS", "DONE", "NO_SHOW", "CANCELLED"];
 
 function parseDateTime(value) {
@@ -116,7 +115,6 @@ router.get("/", async (req, res) => {
       },
       include: {
         customer: { select: { id: true, name: true, phone: true } },
-        groomer: { select: { id: true, name: true } },
         service: { select: { id: true, name: true, durationMin: true, price: true } },
         branch: { select: { id: true, name: true } },
       },
@@ -126,37 +124,6 @@ router.get("/", async (req, res) => {
     res.json(rows);
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "تعذر جلب المواعيد" });
-  }
-});
-
-router.get("/availability", async (req, res) => {
-  try {
-    const groomerId = String(req.query.groomerId || "");
-    const startAt = parseDateTime(req.query.startAt);
-    const endAt = parseDateTime(req.query.endAt);
-    const branchId = req.query.branchId ? String(req.query.branchId) : req.user.branchId || null;
-    const excludeId = req.query.excludeId ? String(req.query.excludeId) : null;
-    if (!groomerId || !startAt || !endAt || endAt <= startAt) {
-      return res.status(400).json({ error: "بيانات التوقيت غير صالحة" });
-    }
-    if (branchId) await assertBranchAllowed(req, branchId);
-
-    const overlap = await prisma.appointment.findFirst({
-      where: {
-        organizationId: req.user.organizationId,
-        groomerId,
-        ...(branchId ? { branchId } : {}),
-        ...(excludeId ? { NOT: { id: excludeId } } : {}),
-        status: { in: ACTIVE_STATUSES },
-        startAt: { lt: endAt },
-        endAt: { gt: startAt },
-      },
-      select: { id: true, startAt: true, endAt: true },
-    });
-
-    res.json({ available: !overlap, overlap: overlap || null });
-  } catch (e) {
-    res.status(400).json({ error: e instanceof Error ? e.message : "تعذر فحص التوفر" });
   }
 });
 
@@ -194,30 +161,8 @@ router.post("/", async (req, res) => {
     if (!branchId) {
       return res.status(400).json({ error: "يجب اختيار الفرع" });
     }
-    const groomerId = b.groomerId ? String(b.groomerId) : null;
     const serviceId = b.serviceId ? String(b.serviceId) : null;
     const customerId = b.customerId ? String(b.customerId) : null;
-
-    if (groomerId) {
-      const emp = await prisma.employee.findFirst({
-        where: { id: groomerId, organizationId: req.user.organizationId },
-        select: { id: true, branchId: true },
-      });
-      if (!emp) return res.status(400).json({ error: "الموظف غير صالح" });
-      if (branchId && emp.branchId && emp.branchId !== branchId) {
-        return res.status(400).json({ error: "الموظف ليس ضمن هذا الفرع" });
-      }
-      const overlap = await prisma.appointment.findFirst({
-        where: {
-          organizationId: req.user.organizationId,
-          groomerId,
-          status: { in: ACTIVE_STATUSES },
-          startAt: { lt: endAt },
-          endAt: { gt: startAt },
-        },
-      });
-      if (overlap) return res.status(409).json({ error: "الموعد يتعارض مع موعد آخر لنفس الموظف" });
-    }
 
     if (serviceId) {
       const service = await prisma.groomingService.findFirst({
@@ -248,7 +193,6 @@ router.post("/", async (req, res) => {
         branchId,
         customerId,
         serviceId,
-        groomerId,
         petName: b.petName ? String(b.petName).trim() : null,
         petType: ["CAT", "DOG", "OTHER"].includes(String(b.petType || "").toUpperCase())
           ? String(b.petType).toUpperCase()
@@ -264,7 +208,6 @@ router.post("/", async (req, res) => {
       },
       include: {
         customer: { select: { id: true, name: true, phone: true } },
-        groomer: { select: { id: true, name: true } },
         service: { select: { id: true, name: true, durationMin: true, price: true } },
       },
     });
@@ -311,48 +254,6 @@ router.patch("/:id", async (req, res) => {
         where: { id: existing.id },
         data,
       });
-      if (data.status === "DONE" && existing.groomerId && existing.serviceId) {
-        const already = await tx.commissionEntry.findFirst({
-          where: {
-            organizationId: req.user.organizationId,
-            appointmentId: existing.id,
-            employeeId: existing.groomerId,
-          },
-        });
-        if (!already) {
-          const rule = await tx.commissionRule.findFirst({
-            where: {
-              organizationId: req.user.organizationId,
-              employeeId: existing.groomerId,
-              active: true,
-            },
-            orderBy: { createdAt: "desc" },
-          });
-          if (rule) {
-            const service = await tx.groomingService.findFirst({
-              where: { id: existing.serviceId, organizationId: req.user.organizationId },
-              select: { price: true, name: true },
-            });
-            const base = Number(service?.price || 0);
-            if (base > 0) {
-              const percent = Number(rule.percent || 0);
-              const amount = (base * percent) / 100;
-              await tx.commissionEntry.create({
-                data: {
-                  organizationId: req.user.organizationId,
-                  employeeId: existing.groomerId,
-                  ruleId: rule.id,
-                  appointmentId: existing.id,
-                  baseAmount: new Prisma.Decimal(base.toFixed(2)),
-                  percent: new Prisma.Decimal(percent.toFixed(2)),
-                  commissionAmount: new Prisma.Decimal(amount.toFixed(2)),
-                  note: `Auto from appointment ${existing.id}${service?.name ? ` (${service.name})` : ""}`,
-                },
-              });
-            }
-          }
-        }
-      }
       return updated;
     });
     res.json(row);

@@ -6,14 +6,13 @@ import { writeAudit } from "../lib/auditLog.js";
 const router = Router();
 router.use(authMiddleware);
 
-/** Org ops settings for managers (floor associate payment, etc.) */
+/** Org ops settings for managers (website, alerts, contact details) */
 router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view"), async (req, res, next) => {
   try {
     const org = await prisma.organization.findUnique({
       where: { id: req.user.organizationId },
       select: {
         id: true,
-        associateCanAcceptPayment: true,
         websiteBranchId: true,
         holdMinutes: true,
         whatsappNumber: true,
@@ -32,7 +31,6 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view
     });
     if (!org) return res.status(404).json({ error: "Organization not found" });
     res.json({
-      associateCanAcceptPayment: org.associateCanAcceptPayment !== false,
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
       whatsappNumber: org.whatsappNumber || "",
@@ -57,9 +55,6 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
   try {
     const b = req.body || {};
     const data = {};
-    if (b.associateCanAcceptPayment !== undefined) {
-      data.associateCanAcceptPayment = Boolean(b.associateCanAcceptPayment);
-    }
     if (b.whatsappNumber !== undefined) {
       const digits = String(b.whatsappNumber || "").replace(/[^\d]/g, "");
       data.whatsappNumber = digits || null;
@@ -100,7 +95,6 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
       data,
       select: {
         id: true,
-        associateCanAcceptPayment: true,
         websiteBranchId: true,
         holdMinutes: true,
         whatsappNumber: true,
@@ -122,10 +116,9 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
       action: "ORG_SETTINGS_UPDATE",
       entityType: "Organization",
       entityId: org.id,
-      summary: `associateCanAcceptPayment=${org.associateCanAcceptPayment}`,
+      summary: `Updated ${Object.keys(data).join(", ")}`,
     });
     res.json({
-      associateCanAcceptPayment: org.associateCanAcceptPayment !== false,
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
       whatsappNumber: org.whatsappNumber || "",

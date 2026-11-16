@@ -38,14 +38,12 @@ function SettingRow({ label, hint, control }) {
 export default function Settings() {
   const { t } = useI18n();
   const { theme, toggleTheme } = useTheme();
-  const { user, isAdmin, isManager, refreshUser } = useAuth();
+  const { isAdmin, isManager } = useAuth();
   const { showToast } = useToast();
   const [notifEnabled, setNotifEnabled] = useState(readNotifPref);
   const [notifPermission, setNotifPermission] = useState(() =>
     typeof Notification !== "undefined" ? Notification.permission : "unsupported",
   );
-  const [associatePay, setAssociatePay] = useState(() => user?.associateCanAcceptPayment !== false);
-  const [associatePayBusy, setAssociatePayBusy] = useState(false);
   const { branches } = useBranchContext();
   const [websiteBranchId, setWebsiteBranchId] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
@@ -53,16 +51,11 @@ export default function Settings() {
   const [profile, setProfile] = useState({ phone: "", publicEmail: "", publicAddress: "", hoursText: "", hoursTextEn: "", notifyEmail: "", alertOrder: true, alertBooking: true, alertRelocation: true, alertLowStock: false });
 
   useEffect(() => {
-    setAssociatePay(user?.associateCanAcceptPayment !== false);
-  }, [user?.associateCanAcceptPayment]);
-
-  useEffect(() => {
     if (!isAdmin && !isManager) return undefined;
     let cancelled = false;
     api("/api/org-settings")
       .then((s) => {
         if (!cancelled) {
-          setAssociatePay(s?.associateCanAcceptPayment !== false);
           setWebsiteBranchId(s?.websiteBranchId || "");
           setWhatsappNumber(s?.whatsappNumber || "");
           setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
@@ -85,27 +78,6 @@ export default function Settings() {
       cancelled = true;
     };
   }, [isAdmin, isManager]);
-
-  const toggleAssociatePayment = async () => {
-    const next = !associatePay;
-    setAssociatePayBusy(true);
-    try {
-      const s = await api("/api/org-settings", {
-        method: "PATCH",
-        body: { associateCanAcceptPayment: next },
-      });
-      setAssociatePay(s?.associateCanAcceptPayment !== false);
-      if (typeof refreshUser === "function") await refreshUser();
-      showToast(
-        next ? t("settings.associatePayOn") : t("settings.associatePayOff"),
-        "success"
-      );
-    } catch (e) {
-      showToast(e.message || t("settings.associatePayFail"), "error");
-    } finally {
-      setAssociatePayBusy(false);
-    }
-  };
 
   const toggleNotifications = async () => {
     if (typeof Notification === "undefined") {
@@ -196,28 +168,6 @@ export default function Settings() {
           control={<LanguageSwitcher variant="segmented" />}
         />
       </section>
-
-      {isAdmin || isManager ? (
-        <section className="settings-card" aria-labelledby="settings-floor-heading">
-          <h2 id="settings-floor-heading">{t("settings.floorSales")}</h2>
-          <SettingRow
-            label={t("settings.associateCanPay")}
-            hint={t("settings.associateCanPayHint")}
-            control={
-              <button
-                type="button"
-                className={`settings-switch${associatePay ? " is-on" : ""}`}
-                role="switch"
-                aria-checked={associatePay}
-                disabled={associatePayBusy}
-                onClick={toggleAssociatePayment}
-              >
-                <span className="settings-switch-knob" />
-              </button>
-            }
-          />
-        </section>
-      ) : null}
 
       {isAdmin ? (
         <section className="settings-card">

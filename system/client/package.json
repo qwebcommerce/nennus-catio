@@ -11,9 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.101.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "dexie": "^4.4.2",
     "jsbarcode": "^3.12.3",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.14.0",

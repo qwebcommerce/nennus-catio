@@ -65,9 +65,6 @@ router.get("/", async (req, res) => {
     branchId: String(bid),
     branch: { organizationId: req.user.organizationId },
   };
-  if (req.user.role === "ASSOCIATE") {
-    where.userId = req.user.sub;
-  }
   const rows = await prisma.heldCart.findMany({
     where,
     orderBy: { createdAt: "desc" },

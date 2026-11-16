@@ -4,9 +4,6 @@ import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { authMiddleware, requireRole, requirePermission, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
-import { assessRefundRisk } from "../lib/cashierCopilot.js";
-import { sendError } from "../lib/apiError.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -185,20 +182,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       });
     }
 
-    const refundRisk = assessRefundRisk({
-      totalAmount: Number(total),
-      note,
-    });
-    if (!refundRisk.canProceed) {
-      return sendError(
-        res,
-        400,
-        "يلزم إدخال سبب للإرجاع عالي القيمة",
-        "A note/reason is required for high-value refunds",
-        { code: "REFUND_NOTE_REQUIRED", risk: refundRisk },
-      );
-    }
-
     const refund = await prisma.$transaction(async (tx) => {
       const created = await tx.refund.create({
         data: {
@@ -307,16 +290,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       branchId: bid,
       summary: `Refund total ${refund.total}`,
       meta: { lines: refund.items?.length, saleId: saleRef?.id ?? null },
-    });
-
-    scheduleInventoryWebhook(orgId, {
-      event: "refund.created",
-      meta: { refundId: refund.id, branchId: bid },
-      lines: lineData.map((l) => ({
-        branchId: bid,
-        productId: l.productId,
-        quantityDelta: l.quantity,
-      })),
     });
 
     res.status(201).json(refund);

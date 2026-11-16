@@ -21,7 +21,6 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import { printPaperClass } from "../utils/printPaper.js";
-import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 
 const tooltipStyle = {
@@ -48,13 +47,7 @@ export default function Dashboard() {
   const { format: cur } = useOrgCurrency();
   const navigate = useNavigate();
   const branchId = useActiveBranchId();
-  const showWholesale = isVerticalFeatureEnabled("wholesale", user?.businessVertical);
-  const showServices = isVerticalFeatureEnabled("appointments", user?.businessVertical);
-  const showStockBrain = isVerticalFeatureEnabled("stockBrain", user?.businessVertical);
-  const showWaste = isVerticalFeatureEnabled("lotsExpiry", user?.businessVertical);
-  const showPriceBrain = isVerticalFeatureEnabled("priceBrain", user?.businessVertical);
-  const showOwnerBrief = isVerticalFeatureEnabled("ownerBrief", user?.businessVertical);
-  const showCostBrain = isVerticalFeatureEnabled("costBrain", user?.businessVertical);
+  const showWholesale = true;
   const [query, setQuery] = useState("");
   const [summary, setSummary] = useState(null);
   const [byProduct, setByProduct] = useState([]);
@@ -64,11 +57,6 @@ export default function Dashboard() {
   const [topServices, setTopServices] = useState([]);
   const [salesByEmployees, setSalesByEmployees] = useState([]);
   const [byBranch, setByBranch] = useState([]);
-  const [reorderSuggestions, setReorderSuggestions] = useState([]);
-  const [wasteSuggestions, setWasteSuggestions] = useState([]);
-  const [pricingSuggestions, setPricingSuggestions] = useState([]);
-  const [ownerBriefTeaser, setOwnerBriefTeaser] = useState(null);
-  const [costTeaser, setCostTeaser] = useState(null);
 
   useEffect(() => {
     const q = branchId ? `?branchId=${branchId}` : "";
@@ -92,73 +80,6 @@ export default function Dashboard() {
       ]);
       setTopServices(Array.isArray(ts) ? ts : []);
       setSalesByEmployees(Array.isArray(se) ? se : []);
-      if (branchId) {
-        try {
-          const res = await api(
-            `/api/purchases/reorder-recommendations?branchId=${encodeURIComponent(branchId)}&lookbackDays=30&targetStockDays=21`,
-          );
-          const rows = Array.isArray(res?.recommendations) ? res.recommendations : [];
-          setReorderSuggestions(rows.slice(0, 8));
-        } catch {
-          setReorderSuggestions([]);
-        }
-        if (showWaste) {
-          try {
-            const res = await api(
-              `/api/intelligence/waste?branchId=${encodeURIComponent(branchId)}&withinDays=14`,
-            );
-            const rows = Array.isArray(res?.items) ? res.items : [];
-            setWasteSuggestions(rows.slice(0, 5));
-          } catch {
-            setWasteSuggestions([]);
-          }
-        } else {
-          setWasteSuggestions([]);
-        }
-        if (showPriceBrain && (user?.role === "ADMIN" || user?.role === "MANAGER")) {
-          try {
-            const res = await api(
-              `/api/intelligence/pricing/markdowns?branchId=${encodeURIComponent(branchId)}&withinDays=14`,
-            );
-            const rows = Array.isArray(res?.items) ? res.items : [];
-            setPricingSuggestions(rows.slice(0, 5));
-          } catch {
-            setPricingSuggestions([]);
-          }
-        } else {
-          setPricingSuggestions([]);
-        }
-        if (showOwnerBrief && (user?.role === "ADMIN" || user?.role === "MANAGER")) {
-          try {
-            const res = await api(
-              `/api/intelligence/brief/teaser?branchId=${encodeURIComponent(branchId)}`,
-            );
-            setOwnerBriefTeaser(res || null);
-          } catch {
-            setOwnerBriefTeaser(null);
-          }
-        } else {
-          setOwnerBriefTeaser(null);
-        }
-        if (showCostBrain && (user?.role === "ADMIN" || user?.role === "MANAGER")) {
-          try {
-            const res = await api(
-              `/api/intelligence/cost/overview?branchId=${encodeURIComponent(branchId)}&lookbackDays=90`,
-            );
-            setCostTeaser(res || null);
-          } catch {
-            setCostTeaser(null);
-          }
-        } else {
-          setCostTeaser(null);
-        }
-      } else {
-        setReorderSuggestions([]);
-        setWasteSuggestions([]);
-        setPricingSuggestions([]);
-        setOwnerBriefTeaser(null);
-        setCostTeaser(null);
-      }
       if (user?.role === "ADMIN" && !branchId) {
         try {
           const bb = await api("/api/dashboard/sales-by-branch");
@@ -171,12 +92,9 @@ export default function Dashboard() {
       }
     };
     run().catch(() => {});
-  }, [branchId, user?.role, showWaste, showPriceBrain, showOwnerBrief, showCostBrain]);
+  }, [branchId, user?.role]);
 
-  const stockBrainPath = showStockBrain ? "/stock-brain" : "/purchases";
-  const pricingPath = showPriceBrain ? "/pricing-brain" : "/loyalty";
-  const commandCenterPath = "/command-center";
-  const costBrainPath = "/cost-brain";
+  const lowStockPath = "/purchases";
 
   const employeeRowName = (r) => {
     if (locale === "en" && r.nameEn?.trim()) return r.nameEn.trim();
@@ -318,9 +236,9 @@ export default function Dashboard() {
                   role="button"
                   tabIndex={0}
                   style={{ cursor: "pointer" }}
-                  onClick={() => navigate(stockBrainPath)}
+                  onClick={() => navigate(lowStockPath)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") navigate(stockBrainPath);
+                    if (e.key === "Enter" || e.key === " ") navigate(lowStockPath);
                   }}
                 >
                   <span className="dash-mini-ico tone-warn">
@@ -332,157 +250,6 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
-
-              {showOwnerBrief && ownerBriefTeaser ? (
-                <section className="dash-shell-card dash-customers-strip">
-                  <div className="dash-strip-head">
-                    <h3>{t("dashboard.briefTitle")}</h3>
-                    <Link to={commandCenterPath} className="dash-link-all">
-                      {t("dashboard.briefOpen")}
-                      <span aria-hidden>→</span>
-                    </Link>
-                  </div>
-                  <p style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 600, lineHeight: 1.4 }}>
-                    {locale === "en" ? ownerBriefTeaser.headline?.en : ownerBriefTeaser.headline?.ar}
-                  </p>
-                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
-                    {t("dashboard.briefLine", {
-                      delta: `${Number(ownerBriefTeaser.salesDeltaPct) > 0 ? "+" : ""}${ownerBriefTeaser.salesDeltaPct}%`,
-                      restock: String(ownerBriefTeaser.reorderCritical ?? 0),
-                      waste: String(ownerBriefTeaser.wasteCount ?? 0),
-                      anomalies: String(ownerBriefTeaser.anomalyCount ?? 0),
-                    })}
-                  </div>
-                </section>
-              ) : null}
-
-              {reorderSuggestions.length > 0 ? (
-                <section className="dash-shell-card dash-customers-strip">
-                  <div className="dash-strip-head">
-                    <h3>{t("dashboard.reorderTitle")}</h3>
-                    <Link to={stockBrainPath} className="dash-link-all">
-                      {t("dashboard.reorderOpenPurchases")}
-                      <span aria-hidden>→</span>
-                    </Link>
-                  </div>
-                  <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
-                    {reorderSuggestions.map((r) => (
-                      <li
-                        key={r.productId}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          fontSize: 13,
-                          padding: "6px 0",
-                          borderBottom: "1px solid var(--border)",
-                        }}
-                      >
-                        <span style={{ fontWeight: 600 }}>{r.name}</span>
-                        <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-                          {t("dashboard.reorderLine", {
-                            stock: String(r.currentQty),
-                            suggest: String(r.suggestedQty),
-                          })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
-              {showWaste && wasteSuggestions.length > 0 ? (
-                <section className="dash-shell-card dash-customers-strip">
-                  <div className="dash-strip-head">
-                    <h3>{t("dashboard.wasteTitle")}</h3>
-                    <Link to={stockBrainPath} className="dash-link-all">
-                      {t("dashboard.wasteOpen")}
-                      <span aria-hidden>→</span>
-                    </Link>
-                  </div>
-                  <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
-                    {wasteSuggestions.map((r) => (
-                      <li
-                        key={`${r.kind}-${r.lotId || r.productId}`}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          fontSize: 13,
-                          padding: "6px 0",
-                          borderBottom: "1px solid var(--border)",
-                        }}
-                      >
-                        <span style={{ fontWeight: 600 }}>{r.name}</span>
-                        <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-                          {t("dashboard.wasteLine", {
-                            days: String(r.daysUntilExpiry ?? "—"),
-                            value: cur(r.valueAtRisk ?? 0),
-                          })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
-              {showPriceBrain && pricingSuggestions.length > 0 ? (
-                <section className="dash-shell-card dash-customers-strip">
-                  <div className="dash-strip-head">
-                    <h3>{t("dashboard.pricingTitle")}</h3>
-                    <Link to={pricingPath} className="dash-link-all">
-                      {t("dashboard.pricingOpen")}
-                      <span aria-hidden>→</span>
-                    </Link>
-                  </div>
-                  <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
-                    {pricingSuggestions.map((r) => (
-                      <li
-                        key={r.productId}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          gap: 12,
-                          fontSize: 13,
-                          padding: "6px 0",
-                          borderBottom: "1px solid var(--border)",
-                        }}
-                      >
-                        <span style={{ fontWeight: 600 }}>{r.name}</span>
-                        <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>
-                          {t("dashboard.pricingLine", {
-                            off: String(r.discountPercent),
-                            from: cur(r.currentPrice),
-                            to: cur(r.suggestedPrice),
-                          })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-
-              {showCostBrain &&
-              costTeaser &&
-              ((costTeaser.alerts?.count || 0) > 0 ||
-                (costTeaser.best?.multiSupplierSkus || 0) > 0) ? (
-                <section className="dash-shell-card dash-customers-strip">
-                  <div className="dash-strip-head">
-                    <h3>{t("dashboard.costTitle")}</h3>
-                    <Link to={costBrainPath} className="dash-link-all">
-                      {t("dashboard.costOpen")}
-                      <span aria-hidden>→</span>
-                    </Link>
-                  </div>
-                  <div style={{ fontSize: 13, color: "var(--muted)" }}>
-                    {t("dashboard.costLine", {
-                      alerts: String(costTeaser.alerts?.count ?? 0),
-                      multi: String(costTeaser.best?.multiSupplierSkus ?? 0),
-                      save: cur(costTeaser.best?.estimatedUnitSavings ?? 0),
-                    })}
-                  </div>
-                </section>
-              ) : null}
 
               <section className="dash-shell-card dash-customers-strip">
                 <div className="dash-strip-head">
@@ -648,24 +415,22 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {showServices ? (
-                <TopTenList
-                  title={t("dashboard.topServicesMonth")}
-                  emptyLabel={t("dashboard.topTenEmpty")}
-                  metricLabel={t("dashboard.topServicesMetric")}
-                  variant="compact"
-                  rows={topServices.slice(0, 5).map((r, i) => ({
-                    name: r.name,
-                    value: cur(r.value),
-                    sub:
-                      r.count != null
-                        ? t("dashboard.topServicesCount", { count: String(r.count) })
-                        : undefined,
-                    status: "active",
-                    statusLabel: t("dashboard.statusActive"),
-                  }))}
-                />
-              ) : null}
+              <TopTenList
+                title={t("dashboard.topServicesMonth")}
+                emptyLabel={t("dashboard.topTenEmpty")}
+                metricLabel={t("dashboard.topServicesMetric")}
+                variant="compact"
+                rows={topServices.slice(0, 5).map((r, i) => ({
+                  name: r.name,
+                  value: cur(r.value),
+                  sub:
+                    r.count != null
+                      ? t("dashboard.topServicesCount", { count: String(r.count) })
+                      : undefined,
+                  status: "active",
+                  statusLabel: t("dashboard.statusActive"),
+                }))}
+              />
             </aside>
           </div>
         )}

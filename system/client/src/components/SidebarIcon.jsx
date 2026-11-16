@@ -35,27 +35,11 @@ export function SidebarIcon({ name, size = 18 }) {
           <path d="M16 15v-7" />
         </svg>
       );
-    case "spark":
-      return (
-        <svg {...props}>
-          <path d="M12 3l1.6 5.2L19 10l-5.4 1.8L12 17l-1.6-5.2L5 10l5.4-1.8L12 3z" />
-          <path d="M19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15z" />
-        </svg>
-      );
     case "bell":
       return (
         <svg {...props}>
           <path d="M6 16h12l-1.2-2.2V10a4.8 4.8 0 10-9.6 0v3.8L6 16z" />
           <path d="M10 19a2 2 0 004 0" />
-        </svg>
-      );
-    case "sync":
-      return (
-        <svg {...props}>
-          <path d="M4 12a8 8 0 0114.1-5.1" />
-          <path d="M18 4v5h-5" />
-          <path d="M20 12a8 8 0 01-14.1 5.1" />
-          <path d="M6 20v-5h5" />
         </svg>
       );
     case "pos":
@@ -140,16 +124,6 @@ export function SidebarIcon({ name, size = 18 }) {
           <path d="M9 12.5h6" />
         </svg>
       );
-    case "plan":
-      return (
-        <svg {...props}>
-          <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
-          <path d="M3.5 9.5h17" />
-          <path d="M7.5 14h4" />
-          <path d="M15.5 13.5v3" />
-          <path d="M14 15h3" />
-        </svg>
-      );
     case "admin":
       return (
         <svg {...props}>
@@ -171,14 +145,6 @@ export function SidebarIcon({ name, size = 18 }) {
         <svg {...props}>
           <path d="M4 20V9l8-5 8 5v11" />
           <path d="M10 20v-6h4v6" />
-        </svg>
-      );
-    case "platform":
-      return (
-        <svg {...props}>
-          <path d="M4 18h16" />
-          <path d="M6 18V9l6-4 6 4v9" />
-          <path d="M10 18v-4h4v4" />
         </svg>
       );
     case "settings":
@@ -256,56 +222,6 @@ export function SidebarIcon({ name, size = 18 }) {
         <svg {...props}>
           <rect x="4" y="5" width="16" height="15" rx="2" />
           <path d="M8 3v4M16 3v4M4 10h16" />
-        </svg>
-      );
-    case "business":
-      return (
-        <svg {...props}>
-          <path d="M4 20V9l8-5 8 5v11" />
-          <path d="M9 20v-5h6v5" />
-        </svg>
-      );
-    case "accounting":
-      return (
-        <svg {...props}>
-          <rect x="5" y="3" width="14" height="18" rx="2" />
-          <path d="M9 8h6M9 12h6M9 16h4" />
-        </svg>
-      );
-    case "zakat":
-      return (
-        <svg {...props}>
-          <circle cx="12" cy="12" r="8" />
-          <path d="M12 7v10M9 9.5c1.5-1 4.5-1 6 0M9 14.5c1.5 1 4.5 1 6 0" />
-        </svg>
-      );
-    case "commissions":
-      return (
-        <svg {...props}>
-          <circle cx="12" cy="12" r="8" />
-          <path d="M12 7v2M12 15v2M9.5 10.5c.6-.8 1.6-1.2 2.5-1.2 1.4 0 2.5.8 2.5 2s-1.1 2-2.5 2c-.9 0-1.9-.4-2.5-1.2" />
-        </svg>
-      );
-    case "automations":
-      return (
-        <svg {...props}>
-          <path d="M12 3v3M12 18v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M3 12h3M18 12h3M4.9 19.1l2.1-2.1M17 7l2.1-2.1" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      );
-    case "hr":
-      return (
-        <svg {...props}>
-          <circle cx="9" cy="8" r="3" />
-          <path d="M3.5 19c.6-3 2.7-4.8 5.5-4.8" />
-          <path d="M15 11l2 2 4-4" />
-        </svg>
-      );
-    case "websiteSync":
-      return (
-        <svg {...props}>
-          <circle cx="12" cy="12" r="8" />
-          <path d="M3 12h18M12 4a14 14 0 010 16M12 4a14 14 0 000 16" />
         </svg>
       );
     case "chevron":

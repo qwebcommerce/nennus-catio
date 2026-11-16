@@ -3,15 +3,13 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
-import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 
 const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "", creditApproved: false, creditLimit: "" });
 
 export default function Customers() {
   const { t } = useI18n();
-  const { isAdmin, isManager, can, user } = useAuth();
-  const showReceivable =
-    can("receivables") && isVerticalFeatureEnabled("customerAccounts", user?.businessVertical);
+  const { isAdmin, isManager, can } = useAuth();
+  const showReceivable = can("receivables");
   const showOpeningBalance = isManager;
   const [list, setList] = useState([]);
   const [q, setQ] = useState("");

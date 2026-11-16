@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
-import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
-import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 
 const inp = {
   padding: 12,
@@ -22,11 +20,9 @@ function toInputDateTimeLocal(d) {
 
 export default function Appointments() {
   const { t } = useI18n();
-  const { user } = useAuth();
   const branchId = useActiveBranchId();
-  const showPetFields = isVerticalFeatureEnabled("petPosFilters", user?.businessVertical);
+  const showPetFields = true;
   const [customers, setCustomers] = useState([]);
-  const [employees, setEmployees] = useState([]);
   const [services, setServices] = useState([]);
   const [list, setList] = useState([]);
   const [day, setDay] = useState(new Date().toISOString().slice(0, 10));
@@ -39,7 +35,6 @@ export default function Appointments() {
     return {
       customerId: "",
       serviceId: "",
-      groomerId: "",
       petName: "",
       petType: "OTHER",
       startAt: toInputDateTimeLocal(start),
@@ -55,7 +50,6 @@ export default function Appointments() {
 
   useEffect(() => {
     api("/api/customers").then(setCustomers).catch(() => setCustomers([]));
-    api("/api/employees").then(setEmployees).catch(() => setEmployees([]));
   }, []);
 
   useEffect(() => {
@@ -127,7 +121,6 @@ export default function Appointments() {
           branchId: bid,
           customerId: form.customerId || undefined,
           serviceId: form.serviceId || undefined,
-          groomerId: form.groomerId || undefined,
           petName: form.petName || undefined,
           petType: form.petType,
           startAt: new Date(form.startAt).toISOString(),
@@ -191,18 +184,6 @@ export default function Appointments() {
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <select
-            value={form.groomerId}
-            onChange={(e) => setForm((f) => ({ ...f, groomerId: e.target.value }))}
-            style={{ ...inp, minWidth: 180 }}
-          >
-            <option value="">{t("appointments.staff")}</option>
-            {employees.map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.name}
-              </option>
-            ))}
-          </select>
           {showPetFields ? (
             <>
               <input
@@ -271,7 +252,6 @@ export default function Appointments() {
                 <th style={th}>{t("appointments.thTime")}</th>
                 <th style={th}>{t("appointments.thCustomerPet")}</th>
                 <th style={th}>{t("appointments.thService")}</th>
-                <th style={th}>{t("appointments.thStaff")}</th>
                 <th style={th}>{t("appointments.thStatus")}</th>
                 <th style={th}>{t("appointments.thQuick")}</th>
               </tr>
@@ -286,7 +266,6 @@ export default function Appointments() {
                     {a.customer?.name || t("appointments.walkIn")} {a.petName ? `• ${a.petName}` : ""}
                   </td>
                   <td style={td}>{a.service?.name || "—"}</td>
-                  <td style={td}>{a.groomer?.name || "—"}</td>
                   <td style={td}>{a.status}</td>
                   <td style={td}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

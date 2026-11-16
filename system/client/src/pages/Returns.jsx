@@ -3,11 +3,6 @@ import { useLocation } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useOffline } from "../context/OfflineContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
-import {
-  hydrateInventoryFromProducts,
-  loadProductsForBranch,
-  saveProductsForBranch,
-} from "../offline/cache.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 
 const inp = {
@@ -52,23 +47,9 @@ export default function Returns() {
     if (!bid) return;
     const q = new URLSearchParams();
     q.set("branchId", bid);
-    const offline = typeof navigator !== "undefined" && !navigator.onLine;
-    if (offline) {
-      loadProductsForBranch(bid)
-        .then(setProducts)
-        .catch(() => setProducts([]));
-      return;
-    }
     api(`/api/products?${q.toString()}`)
-      .then(async (rows) => {
-        setProducts(rows);
-        await saveProductsForBranch(bid, rows);
-        await hydrateInventoryFromProducts(bid, rows);
-      })
-      .catch(async () => {
-        const cached = await loadProductsForBranch(bid);
-        setProducts(cached);
-      });
+      .then(setProducts)
+      .catch(() => setProducts([]));
   }, [branchId]);
 
   const loadRefunds = () => {

@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
-import { listSyncQueueRows } from "../offline/syncQueueList.js";
-import { addLocalReadKeys, addLocalDismissedKeys, getLocalDismissedKeySet, getLocalReadKeySet } from "../alerts/localRead.js";
+import { addLocalDismissedKeys, getLocalDismissedKeySet, getLocalReadKeySet } from "../alerts/localRead.js";
 
 const card = {
   padding: 16,
@@ -31,12 +30,10 @@ export default function Alerts() {
   const [typeLow, setTypeLow] = useState(true);
   const [typeExp, setTypeExp] = useState(true);
   const [typeCash, setTypeCash] = useState(true);
-  const [typeSync, setTypeSync] = useState(true);
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
 
   const [serverItems, setServerItems] = useState([]);
   const [readKeys, setReadKeys] = useState(new Set());
-  const [syncRows, setSyncRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
 
@@ -65,8 +62,6 @@ export default function Alerts() {
         setServerItems(Array.isArray(data.items) ? data.items : []);
         setReadKeys(new Set(Array.isArray(data.readKeys) ? data.readKeys : []));
       }
-      const rows = await listSyncQueueRows();
-      setSyncRows(rows);
     } catch (e) {
       setMsg(String(e?.message || e));
     } finally {
@@ -94,37 +89,9 @@ export default function Alerts() {
       out.push({ ...it, source: "server", read });
     }
 
-    if (typeSync) {
-      for (const row of syncRows) {
-        const key = `sync-local:${row.localId}`;
-        if (dismissed.has(key)) continue;
-        const read = localRead.has(key);
-        const hasIssue = !!(row.lastError || (row.retryCount ?? 0) > 0);
-        const severity = hasIssue ? "warning" : "info";
-        out.push({
-          key,
-          type: "SYNC_QUEUE",
-          severity,
-          at: new Date(row.createdAt).toISOString(),
-          branchId: row.payload?.branchId ?? null,
-          branchName: null,
-          branchNameEn: null,
-          payload: {
-            syncType: row.type,
-            clientMutationId: row.clientMutationId,
-            lastError: row.lastError,
-            retryCount: row.retryCount ?? 0,
-          },
-          action: { path: "/sync-queue" },
-          source: "local",
-          read,
-        });
-      }
-    }
-
     out.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
     return out;
-  }, [serverItems, readKeys, syncRows, typeSync, localReadTick]);
+  }, [serverItems, readKeys, localReadTick]);
 
   const filtered = useMemo(() => {
     if (!showUnreadOnly) return merged;
@@ -158,9 +125,6 @@ export default function Alerts() {
     if (it.type === "CASH_NO_SESSION") {
       return t("alerts.title.cashNoSession");
     }
-    if (it.type === "SYNC_QUEUE") {
-      return t("alerts.title.sync", { type: String(it.payload?.syncType || "") });
-    }
     return it.key;
   };
 
@@ -180,26 +144,17 @@ export default function Alerts() {
     if (it.type === "CASH_NO_SESSION") {
       return t("alerts.body.cashNoSession");
     }
-    if (it.type === "SYNC_QUEUE") {
-      if (it.payload?.lastError) return it.payload.lastError;
-      return t("alerts.body.syncPending", { n: String(it.payload?.retryCount ?? 0) });
-    }
     return "";
   };
 
   const onMarkRead = async (it) => {
     setMsg("");
     try {
-      if (it.key.startsWith("sync-local:")) {
-        addLocalReadKeys([it.key]);
-        setLocalReadTick((x) => x + 1);
-      } else {
-        await api("/api/notifications/mark-read", {
-          method: "POST",
-          body: { keys: [it.key] },
-        });
-        setReadKeys((prev) => new Set([...prev, it.key]));
-      }
+      await api("/api/notifications/mark-read", {
+        method: "POST",
+        body: { keys: [it.key] },
+      });
+      setReadKeys((prev) => new Set([...prev, it.key]));
       await load();
     } catch (e) {
       setMsg(String(e?.message || e));
@@ -218,8 +173,6 @@ export default function Alerts() {
           },
         });
       }
-      const syncKeys = syncRows.map((r) => `sync-local:${r.localId}`);
-      if (syncKeys.length) addLocalReadKeys(syncKeys);
       setLocalReadTick((x) => x + 1);
       await load();
       window.dispatchEvent(new Event("alerts-changed"));
@@ -281,10 +234,6 @@ export default function Alerts() {
         <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={typeCash} onChange={(e) => setTypeCash(e.target.checked)} />
           {t("alerts.type.cash")}
-        </label>
-        <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-          <input type="checkbox" checked={typeSync} onChange={(e) => setTypeSync(e.target.checked)} />
-          {t("alerts.type.sync")}
         </label>
 
         <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6, marginInlineStart: 8 }}>
@@ -364,13 +313,6 @@ export default function Alerts() {
           </ul>
         )}
       </div>
-
-      <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
-        {t("alerts.footerHint")}{" "}
-        <Link to="/sync-queue" style={{ color: "var(--accent)" }}>
-          {t("nav.syncQueue")}
-        </Link>
-      </p>
     </div>
   );
 }

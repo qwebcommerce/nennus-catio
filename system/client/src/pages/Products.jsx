@@ -8,7 +8,6 @@ import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { BarcodeLabelPrint } from "../components/BarcodeLabelPrint.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
-import { isVerticalFeatureEnabled } from "../lib/verticalFeatures.js";
 
 function emptyProductForm() {
   return {
@@ -83,7 +82,7 @@ export default function Products() {
 
   const activeBranchId = useActiveBranchId();
   const canEditProducts = can("productsEdit");
-  const showLots = isVerticalFeatureEnabled("lotsExpiry", user?.businessVertical);
+  const showLots = true;
 
   const catalogLabel = (row) => {
     if (!row) return "";

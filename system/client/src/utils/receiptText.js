@@ -49,14 +49,7 @@ export function buildReceiptPlainText(sale, branchName, locale, taxInfo) {
     locale === "en" && sale.user?.nameEn?.trim()
       ? sale.user.nameEn.trim()
       : sale.user?.name || "—";
-  const sellerLabel =
-    sale.user?.role === "ASSOCIATE"
-      ? locale === "en"
-        ? "Floor associate"
-        : "بائع الأرضية"
-      : locale === "en"
-        ? "Cashier"
-        : "الكاشير";
+  const sellerLabel = locale === "en" ? "Cashier" : "الكاشير";
   lines.push(`${sellerLabel}: ${sellerName}${sale.user?.email ? ` (${sale.user.email})` : ""}`);
   if (sale.channel === "WHOLESALE") {
     lines.push(locale === "en" ? "Channel: Wholesale" : "القناة: بيع بالجملة");

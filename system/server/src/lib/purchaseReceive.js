@@ -2,7 +2,6 @@ import { Prisma } from "./prisma-client-bundle.js";
 import { prisma } from "./prisma.js";
 import { findBranchInOrg } from "./orgScope.js";
 import { writeAudit } from "./auditLog.js";
-import { scheduleInventoryWebhook } from "./inventoryWebhook.js";
 
 /**
  * Core purchase receive — used by /api/purchases and intelligence draft convert.
@@ -161,15 +160,6 @@ export async function executeReceivePurchase({
     summary: `Purchase lines ${purchase.items?.length}`,
   });
 
-  scheduleInventoryWebhook(orgId, {
-    event: "purchase.received",
-    meta: { purchaseId: purchase.id, branchId: bid },
-    lines: lineData.map((l) => ({
-      branchId: bid,
-      productId: l.productId,
-      quantityDelta: l.quantity,
-    })),
-  });
 
   return { purchase, branchId: bid, lineData };
 }

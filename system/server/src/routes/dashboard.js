@@ -361,7 +361,7 @@ router.get("/top-services-month", async (req, res) => {
   res.json(rows);
 });
 
-/** Sales totals per employee (linked user) for the period; includes active employees with zero sales. */
+/** Sales totals per staff user for the period. */
 router.get("/sales-by-employees-month", async (req, res) => {
   const branchId = req.query.branchId || (req.user.role === "ADMIN" ? null : req.user.branchId);
   const { from, to } = monthRangeFromQuery(req);
@@ -385,37 +385,11 @@ router.get("/sales-by-employees-month", async (req, res) => {
     byUser.set(uid, prev);
   }
 
-  const empWhere = {
-    organizationId: orgId,
-    status: "ACTIVE",
-  };
-  if (branchId) empWhere.branchId = String(branchId);
-
-  const employees = await prisma.employee.findMany({
-    where: empWhere,
-    include: { user: { select: { id: true, name: true, nameEn: true } } },
-    orderBy: { name: "asc" },
-  });
-
   const rows = [];
-  const seenUserIds = new Set();
-
-  for (const emp of employees) {
-    const uid = emp.userId;
-    const stats = uid ? byUser.get(uid) : null;
-    if (uid) seenUserIds.add(uid);
-    rows.push({
-      name: emp.name,
-      nameEn: emp.nameEn || emp.user?.nameEn || null,
-      value: stats ? Number(stats.value.toFixed(2)) : 0,
-      orders: stats?.orders ?? 0,
-    });
-  }
-
-  const orphanUserIds = [...byUser.keys()].filter((uid) => !seenUserIds.has(uid));
-  if (orphanUserIds.length) {
+  const userIds = [...byUser.keys()];
+  if (userIds.length) {
     const users = await prisma.user.findMany({
-      where: { id: { in: orphanUserIds }, organizationId: orgId },
+      where: { id: { in: userIds }, organizationId: orgId },
       select: { id: true, name: true, nameEn: true },
     });
     for (const u of users) {

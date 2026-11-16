@@ -53,7 +53,7 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
           {t("invoice.id")} {sale.invoiceNumber || sale.id}
         </div>
         <div>
-          {sale.user?.role === "ASSOCIATE" ? t("invoice.associate") : t("invoice.cashier")}{" "}
+          {t("invoice.cashier")}{" "}
           {locale === "en" && sale.user?.nameEn?.trim()
             ? sale.user.nameEn.trim()
             : sale.user?.name || "—"}

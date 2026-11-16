@@ -19,7 +19,6 @@ import {
   allocateUniqueBarcode,
   assertBarcodeAvailable,
 } from "../lib/productBarcode.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
 import { syncProductExtras } from "../lib/catalogExtras.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
@@ -641,17 +640,6 @@ router.post("/import/excel/confirm", requireRole("ADMIN", "MANAGER"), async (req
       asDraft: req.body?.asDraft === true,
     });
 
-    if (touchedProductIds.size > 0) {
-      scheduleInventoryWebhook(orgId, {
-        event: "products.import",
-        meta: { branchId, created, updated },
-        lines: [...touchedProductIds].map((productId) => ({
-          branchId,
-          productId,
-          quantityDelta: 0,
-        })),
-      });
-    }
 
     await writeAudit({
       userId: req.user.sub,
@@ -712,17 +700,6 @@ router.post(
         rows,
       });
 
-      if (touchedProductIds.size > 0) {
-        scheduleInventoryWebhook(orgId, {
-          event: "products.import",
-          meta: { branchId, created, updated },
-          lines: [...touchedProductIds].map((productId) => ({
-            branchId,
-            productId,
-            quantityDelta: 0,
-          })),
-        });
-      }
 
       await writeAudit({
         userId: req.user.sub,
@@ -991,17 +968,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     }
     throw e;
   }
-  scheduleInventoryWebhook(req.user.organizationId, {
-    event: "product.created",
-    meta: { productId: product.id, branchId: bid },
-    lines: [
-      {
-        branchId: bid,
-        productId: product.id,
-        quantityDelta: stockQty,
-      },
-    ],
-  });
   await writeAudit({
     userId: req.user.sub,
     action: "PRODUCT_CREATE",

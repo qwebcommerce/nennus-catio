@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
@@ -28,11 +27,6 @@ export default function Purchases() {
   const [newSupplier, setNewSupplier] = useState({ name: "", phone: "" });
   const [editingSupplierId, setEditingSupplierId] = useState("");
   const [editSupplier, setEditSupplier] = useState({ name: "", phone: "" });
-  const [lookbackDays, setLookbackDays] = useState("30");
-  const [targetStockDays, setTargetStockDays] = useState("21");
-  const [recommendations, setRecommendations] = useState([]);
-  const [selectedRecommendations, setSelectedRecommendations] = useState({});
-  const [autoLoading, setAutoLoading] = useState(false);
 
   useEffect(() => {
     api("/api/suppliers")
@@ -60,16 +54,6 @@ export default function Purchases() {
   useEffect(() => {
     loadPurchases().catch(() => setList([]));
   }, [branchId]);
-
-  useEffect(() => {
-    if (!branchId) {
-      setRecommendations([]);
-      setSelectedRecommendations({});
-      return;
-    }
-    loadAutoRecommendations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when branch or lookback/target change
-  }, [branchId, lookbackDays, targetStockDays]);
 
   const addSupplier = async (e) => {
     e.preventDefault();
@@ -157,75 +141,6 @@ export default function Purchases() {
     }
   };
 
-  const loadAutoRecommendations = async () => {
-    const bid = branchId;
-    if (!bid) {
-      setMsg(t("purchases.needBranch"));
-      return;
-    }
-    setAutoLoading(true);
-    setMsg("");
-    try {
-      const q = new URLSearchParams();
-      q.set("branchId", bid);
-      q.set("lookbackDays", String(Math.max(7, Number(lookbackDays) || 30)));
-      q.set("targetStockDays", String(Math.max(7, Number(targetStockDays) || 21)));
-      const res = await api(`/api/purchases/reorder-recommendations?${q.toString()}`);
-      const rows = Array.isArray(res?.recommendations) ? res.recommendations : [];
-      setRecommendations(rows);
-      const nextSel = {};
-      rows.forEach((r) => {
-        nextSel[r.productId] = { checked: true, quantity: String(r.suggestedQty || 1) };
-      });
-      setSelectedRecommendations(nextSel);
-      if (!rows.length) setMsg(t("purchases.noReorderNeeded"));
-    } catch (x) {
-      setMsg(x.message || t("purchases.reorderGenFailed"));
-    } finally {
-      setAutoLoading(false);
-    }
-  };
-
-  const receiveRecommendations = async () => {
-    const bid = branchId;
-    if (!bid) return;
-    const items = recommendations
-      .filter((r) => selectedRecommendations[r.productId]?.checked)
-      .map((r) => ({
-        productId: r.productId,
-        quantity: Math.max(
-          1,
-          parseInt(String(selectedRecommendations[r.productId]?.quantity || "1"), 10) || 1
-        ),
-        unitCost: r.defaultUnitCost ?? "",
-      }));
-    if (!items.length) {
-      setMsg(t("purchases.needPickOneProduct"));
-      return;
-    }
-    setAutoLoading(true);
-    setMsg("");
-    try {
-      await api("/api/purchases/reorder-recommendations/receive", {
-        method: "POST",
-        body: {
-          branchId: bid,
-          supplierId: supplierId || undefined,
-          lookbackDays: Number(lookbackDays) || 30,
-          targetStockDays: Number(targetStockDays) || 21,
-          updateProductCost: false,
-          items,
-        },
-      });
-      await Promise.all([loadPurchases(), loadAutoRecommendations()]);
-      setMsg(t("purchases.autoReceiveDone"));
-    } catch (x) {
-      setMsg(x.message || t("purchases.autoReceiveFailed"));
-    } finally {
-      setAutoLoading(false);
-    }
-  };
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h1 style={{ margin: 0 }}>{t("purchases.title")}</h1>
@@ -307,113 +222,6 @@ export default function Purchases() {
           </table>
         </div>
       ) : null}
-
-      <div className="card" style={{ display: "grid", gap: 10 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
-          <strong>{t("purchases.autoReorderTitle")}</strong>
-          <Link to="/stock-brain" style={{ fontSize: 13 }}>
-            {t("nav.stockBrain")} →
-          </Link>
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <input
-            type="number"
-            min={7}
-            value={lookbackDays}
-            onChange={(e) => setLookbackDays(e.target.value)}
-            style={{ ...inp, width: 170 }}
-            placeholder={t("purchases.lookbackPlaceholder")}
-          />
-          <input
-            type="number"
-            min={7}
-            value={targetStockDays}
-            onChange={(e) => setTargetStockDays(e.target.value)}
-            style={{ ...inp, width: 170 }}
-            placeholder={t("purchases.targetStockPlaceholder")}
-          />
-          <button
-            type="button"
-            className="btn-touch"
-            onClick={loadAutoRecommendations}
-            disabled={autoLoading}
-            style={{ background: "var(--surface2)" }}
-          >
-            {t("purchases.generateSuggestions")}
-          </button>
-          <button
-            type="button"
-            className="btn-touch"
-            onClick={receiveRecommendations}
-            disabled={autoLoading || !recommendations.length}
-            style={{ background: "var(--accent)", color: "#fff" }}
-          >
-            {t("purchases.receiveSuggested")}
-          </button>
-        </div>
-
-        {recommendations.length ? (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ color: "var(--muted)", textAlign: "start" }}>
-                  <th style={th}>{t("purchases.colSelect")}</th>
-                  <th style={th}>{t("purchases.colProduct")}</th>
-                  <th style={th}>{t("purchases.colCurrent")}</th>
-                  <th style={th}>{t("purchases.colReorderPoint")}</th>
-                  <th style={th}>{t("purchases.colSuggested")}</th>
-                  <th style={th}>{t("purchases.colCost")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recommendations.map((r) => (
-                  <tr key={r.productId}>
-                    <td style={td}>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(selectedRecommendations[r.productId]?.checked)}
-                        onChange={(e) =>
-                          setSelectedRecommendations((prev) => ({
-                            ...prev,
-                            [r.productId]: {
-                              ...(prev[r.productId] || {}),
-                              checked: e.target.checked,
-                              quantity: prev[r.productId]?.quantity || String(r.suggestedQty || 1),
-                            },
-                          }))
-                        }
-                      />
-                    </td>
-                    <td style={td}>{r.name}</td>
-                    <td style={td}>{r.currentQty}</td>
-                    <td style={td}>{r.reorderPoint}</td>
-                    <td style={td}>
-                      <input
-                        type="number"
-                        min={1}
-                        value={selectedRecommendations[r.productId]?.quantity || String(r.suggestedQty || 1)}
-                        onChange={(e) =>
-                          setSelectedRecommendations((prev) => ({
-                            ...prev,
-                            [r.productId]: {
-                              checked: prev[r.productId]?.checked ?? true,
-                              quantity: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{ ...inp, width: 90, minHeight: 36 }}
-                      />
-                    </td>
-                    <td style={td}>
-                      {r.defaultUnitCost != null ? Number(r.defaultUnitCost).toFixed(2) : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </div>
 
       <form className="card" onSubmit={submit} style={{ display: "grid", gap: 12 }}>
         <div className="page-form-grid">

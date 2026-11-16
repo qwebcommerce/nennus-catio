@@ -5,7 +5,6 @@ import { findBranchInOrg } from "../lib/orgScope.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { mailStaff } from "../lib/mailer.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
 import { unitPriceDecimalForSale } from "../lib/productPricing.js";
 import { saleRequiresOpenCashSession } from "../lib/saleCash.js";
 import {
@@ -32,7 +31,6 @@ import {
   ensureLotsCoverQuantity,
 } from "../lib/inventoryLots.js";
 import { getOrCreateTaxSettings, resolveSaleTaxPercent } from "../lib/taxPacks.js";
-import { assessCheckoutRisk } from "../lib/cashierCopilot.js";
 import { heldQuantity } from "../lib/webOrder.js";
 
 const router = Router();
@@ -169,20 +167,6 @@ router.post("/checkout", async (req, res) => {
   const paymentReference = String(paymentReferenceRaw || "").trim();
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "السلة فارغة" });
-  }
-  if (req.user.role === "ASSOCIATE") {
-    const orgFlags = await prisma.organization.findUnique({
-      where: { id: req.user.organizationId },
-      select: { associateCanAcceptPayment: true },
-    });
-    if (orgFlags && orgFlags.associateCanAcceptPayment === false) {
-      return res.status(403).json({
-        error: "الدفع من بائع الأرضية معطّل — أرسل السلة للكاشير",
-        errorAr: "الدفع من بائع الأرضية معطّل — أرسل السلة للكاشير",
-        errorEn: "Floor associate payment is disabled — send the cart to the cashier",
-        code: "ASSOCIATE_PAYMENT_DISABLED",
-      });
-    }
   }
   const pmSingle = OK_PAY.has(String(paymentMethod).toUpperCase())
     ? String(paymentMethod).toUpperCase()
@@ -356,19 +340,6 @@ router.post("/checkout", async (req, res) => {
       discountDec = new Prisma.Decimal(applied.toFixed(2));
     }
 
-    const checkoutRisk = assessCheckoutRisk({
-      subtotal: Number(subtotalDec),
-      discountAmount: Number(discountDec),
-      itemCount: lineData.length,
-      hasDiscountReason: Boolean(discountReason),
-    });
-    if (!checkoutRisk.canProceed) {
-      throw new Error(
-        checkoutRisk.requireDiscountReason
-          ? "يلزم إدخال سبب للخصم الكبير"
-          : "الخصم غير صالح",
-      );
-    }
     if (discountReason && Number(discountDec) > 0) {
       const tag = `Discount reason: ${discountReason}`;
       orderNote = orderNote ? `${orderNote} · ${tag}`.slice(0, 500) : tag;
@@ -866,16 +837,6 @@ router.post("/checkout", async (req, res) => {
         split: sale.paymentMethod === "SPLIT",
         channel: sale.channel,
       },
-    });
-
-    scheduleInventoryWebhook(orgId, {
-      event: "sale.checkout",
-      meta: { saleId: sale.id, branchId: bid },
-      lines: lineData.map((l) => ({
-        branchId: bid,
-        productId: l.productId,
-        quantityDelta: -l.quantity,
-      })),
     });
 
     const lowNames = [];

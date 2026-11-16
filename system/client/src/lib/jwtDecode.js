@@ -30,6 +30,5 @@ export function minimalUserFromTokenPayload(p) {
     organizationSlug: null,
     loyaltyProgramEnabled: false,
     loyaltyRedemptionEnabled: false,
-    isPlatformAdmin: false,
   };
 }

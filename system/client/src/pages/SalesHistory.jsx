@@ -221,7 +221,7 @@ export default function SalesHistory() {
                 <th style={th}>{t("sales.colPayment")}</th>
                 <th style={th}>{t("sales.colTotal")}</th>
                 <th style={th}>{t("sales.colLoyalty")}</th>
-                <th style={th}>{t("automations.thActions")}</th>
+                <th style={th}>{t("sales.thActions")}</th>
               </tr>
             </thead>
             <tbody>

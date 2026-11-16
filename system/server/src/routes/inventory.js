@@ -1,10 +1,8 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { scheduleInventoryWebhook } from "../lib/inventoryWebhook.js";
 import { resolveStoredImageUrl } from "../lib/productImageUrl.js";
 import { calendarDaysUntilExpiryUTC } from "../lib/productExpiry.js";
 import {
@@ -303,15 +301,6 @@ router.post("/reconcile", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
       branchId: bid,
       summary: `Reconcile ${normalized.length} lines`,
     });
-    scheduleInventoryWebhook(orgId, {
-      event: "inventory.reconcile",
-      meta: { branchId: bid, lineCount: normalized.length },
-      lines: normalized.map((line) => ({
-        branchId: bid,
-        productId: line.productId,
-        quantityDelta: 0,
-      })),
-    });
     res.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "فشل الجرد";
@@ -351,98 +340,6 @@ router.post("/transfer", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePerm
   }
 });
 
-/** تعديل مخزون مع idempotency للمزامنة بعد العمل دون اتصال */
-router.post("/offline-upsert", requireRole("ADMIN", "MANAGER"), async (req, res) => {
-  const {
-    clientMutationId: cmRaw,
-    productId,
-    branchId,
-    quantity,
-    minStockLevel,
-    deviceId: _deviceId,
-  } = req.body || {};
-  const cmid = cmRaw != null && String(cmRaw).trim() ? String(cmRaw).trim() : null;
-  if (!cmid) return res.status(400).json({ error: "clientMutationId مطلوب" });
-  if (!productId || !branchId) {
-    return res.status(400).json({ error: "productId و branchId مطلوبان" });
-  }
-  const bid = String(branchId);
-  if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== bid) {
-    return res.status(403).json({ error: "لا يمكن التعديل لفروع أخرى" });
-  }
-
-  const cached = await prisma.offlineInventoryReceipt.findFirst({
-    where: { clientMutationId: cmid, organizationId: req.user.organizationId },
-  });
-  if (cached) {
-    return res.status(200).json(cached.payload);
-  }
-
-  const br = await findBranchInOrg(prisma, req.user.organizationId, bid);
-  if (!br) return res.status(400).json({ error: "فرع غير صالح" });
-  const prodOk = await prisma.product.findFirst({
-    where: { id: String(productId), organizationId: req.user.organizationId },
-  });
-  if (!prodOk) return res.status(400).json({ error: "منتج غير صالح" });
-
-  try {
-    const inv = await prisma.inventory.upsert({
-      where: {
-        productId_branchId: {
-          productId: String(productId),
-          branchId: bid,
-        },
-      },
-      create: {
-        productId: String(productId),
-        branchId: bid,
-        quantity: Math.max(0, Number(quantity) || 0),
-        minStockLevel: Math.max(0, Number(minStockLevel) || 5),
-      },
-      update: {
-        ...(quantity != null && { quantity: Math.max(0, Number(quantity)) }),
-        ...(minStockLevel != null && {
-          minStockLevel: Math.max(0, Number(minStockLevel)),
-        }),
-      },
-      include: { product: true, branch: true },
-    });
-    const payload = JSON.parse(JSON.stringify(inv));
-    try {
-      await prisma.offlineInventoryReceipt.create({
-        data: {
-          clientMutationId: cmid,
-          organizationId: req.user.organizationId,
-          payload,
-        },
-      });
-    } catch (e) {
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-        const again = await prisma.offlineInventoryReceipt.findFirst({
-          where: { clientMutationId: cmid, organizationId: req.user.organizationId },
-        });
-        if (again) return res.status(200).json(again.payload);
-      }
-      throw e;
-    }
-    scheduleInventoryWebhook(req.user.organizationId, {
-      event: "inventory.offline_upsert",
-      meta: { branchId: bid, productId: String(productId) },
-      lines: [
-        {
-          branchId: bid,
-          productId: String(productId),
-          quantityDelta: 0,
-        },
-      ],
-    });
-    res.status(201).json(payload);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "فشل التحديث";
-    res.status(400).json({ error: msg });
-  }
-});
-
 router.patch("/:productId/:branchId", requireRole("ADMIN", "MANAGER"), async (req, res) => {
   const { quantity, minStockLevel } = req.body || {};
   const orgId = req.user.organizationId;
@@ -472,20 +369,6 @@ router.patch("/:productId/:branchId", requireRole("ADMIN", "MANAGER"), async (re
       }),
     },
     include: { product: true, branch: true },
-  });
-  scheduleInventoryWebhook(orgId, {
-    event: "inventory.patch",
-    meta: {
-      branchId: req.params.branchId,
-      productId: req.params.productId,
-    },
-    lines: [
-      {
-        branchId: req.params.branchId,
-        productId: req.params.productId,
-        quantityDelta: 0,
-      },
-    ],
   });
   res.json(inv);
 });

@@ -1,15 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
-import { listSyncQueueRows } from "../offline/syncQueueList.js";
 import { getLocalDismissedKeySet, getLocalReadKeySet } from "../alerts/localRead.js";
-import { useOffline } from "../context/OfflineContext.jsx";
 
 /**
- * غير مقروء: تنبيهات الخادم + عناصر طابور المزامنة غير المعلّمة محلياً.
+ * غير مقروء: تنبيهات الخادم غير المعلّمة محلياً.
  * يحترم المفاتيح الممسوحة محلياً (Clear all).
  */
 export function useAlertsBadgeCount() {
-  const { pendingCount } = useOffline();
   const [count, setCount] = useState(0);
 
   const load = useCallback(async () => {
@@ -33,18 +30,7 @@ export function useAlertsBadgeCount() {
         server = 0;
       }
     }
-    let local = 0;
-    try {
-      const rows = await listSyncQueueRows();
-      for (const row of rows) {
-        const k = `sync-local:${row.localId}`;
-        if (dismissed.has(k) || read.has(k)) continue;
-        local += 1;
-      }
-    } catch {
-      local = 0;
-    }
-    setCount(server + local);
+    setCount(server);
   }, []);
 
   useEffect(() => {
@@ -59,7 +45,7 @@ export function useAlertsBadgeCount() {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("alerts-changed", onAlerts);
     };
-  }, [load, pendingCount]);
+  }, [load]);
 
   return { count, refresh: load };
 }
