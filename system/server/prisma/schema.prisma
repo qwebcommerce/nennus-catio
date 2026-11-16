@@ -57,7 +57,7 @@ model Organization {
   /// Business WhatsApp for a custom pet-house enquiry. Digits only, country code included.
   whatsappNumber String?
   /// Added to a grooming booking when the customer chooses a home visit.
-  homeVisitFee Decimal @default(0)
+  homeVisitFee Int     @default(0)
   /// A customer may cancel a grooming booking up to this many hours before it starts.
   bookingCancelHours Int @default(24)
   phone           String?
@@ -223,7 +223,7 @@ model OrganizationPlanPurchase {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   plan           String
-  amount         Decimal?
+  amount         Int?
   currency       String       @default("SAR")
   reference      String?
   note           String?
@@ -250,7 +250,7 @@ model Expense {
   organizationId   String
   organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   category         ExpenseCategory
-  amount           Decimal
+  amount           Int
   description      String?
   /// تاريخ انتماء المصروف للتقارير (يوم/شهر/سنة)
   expenseDate      DateTime
@@ -363,7 +363,7 @@ model Employee {
   hireDate       DateTime?
   status         EmployeeStatus @default(ACTIVE)
   /// راتب أساسي افتراضي لنسخ كشوف الرواتب
-  defaultBaseSalary Decimal?
+  defaultBaseSalary Int?
   notes          String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -403,11 +403,11 @@ model PayrollLine {
   payrollPeriod     PayrollPeriod @relation(fields: [payrollPeriodId], references: [id], onDelete: Cascade)
   employeeId        String
   employee          Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  baseAmount        Decimal
-  allowancesTotal   Decimal       @default(0)
-  deductionsTotal   Decimal       @default(0)
-  loanDeduction     Decimal       @default(0)
-  netAmount         Decimal
+  baseAmount        Int
+  allowancesTotal   Int           @default(0)
+  deductionsTotal   Int           @default(0)
+  loanDeduction     Int           @default(0)
+  netAmount         Int
   notes             String?
   loanRepayments    LoanRepayment[]
 
@@ -421,8 +421,8 @@ model EmployeeLoan {
   organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   employeeId     String
   employee       Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  principal      Decimal
-  paidAmount     Decimal            @default(0)
+  principal      Int
+  paidAmount     Int                @default(0)
   status         EmployeeLoanStatus @default(OPEN)
   description    String?
   createdAt      DateTime           @default(now())
@@ -437,7 +437,7 @@ model LoanRepayment {
   id               String       @id @default(cuid())
   employeeLoanId   String
   employeeLoan     EmployeeLoan @relation(fields: [employeeLoanId], references: [id], onDelete: Cascade)
-  amount           Decimal
+  amount           Int
   payrollLineId    String?
   payrollLine      PayrollLine? @relation(fields: [payrollLineId], references: [id], onDelete: SetNull)
   note             String?
@@ -634,14 +634,14 @@ model Customer {
   /// رصيد نقاط الولاء الحالي
   loyaltyPoints   Int          @default(0)
   /// مجموع المشتريات المؤهّلة (لنمط LIFETIME_SPEND)
-  lifetimeSpend   Decimal      @default(0)
+  lifetimeSpend   Int          @default(0)
   /// رصيد ذمّة (ما للمحل على الزبون) — يُحدَّث مع CustomerAccountLedger
-  accountBalance  Decimal      @default(0)
+  accountBalance  Int          @default(0)
   passwordHash    String?
   emailVerifiedAt DateTime?
   /// Approved to buy now and pay later.
   creditApproved  Boolean      @default(false)
-  creditLimit     Decimal?
+  creditLimit     Int?
   locale          String       @default("ar")
   /// Staff-only labels. Never returned on the shop account.
   tags            String?
@@ -677,7 +677,7 @@ model CustomerAccountLedger {
   branch           Branch?                 @relation(fields: [branchId], references: [id], onDelete: SetNull)
   entryType        CustomerLedgerEntryType
   /// موجب = يزيد ما يستحقه المحل على الزبون؛ سالب = تسديد
-  amount           Decimal
+  amount           Int
   saleId           String?
   sale             Sale?                   @relation(fields: [saleId], references: [id], onDelete: SetNull)
   paymentMethod    PaymentMethod?
@@ -698,9 +698,9 @@ model LoyaltyProgramSettings {
   enabled        Boolean      @default(true)
   earnBase       LoyaltyEarnBase @default(PER_ORDER_TOTAL)
   /// كل قدر من العملة يمنح earnPoints (مثلاً 10 = نقطة واحدة لكل 10 من العملة)
-  earnEveryAmount   Decimal   @default(10)
+  earnEveryAmount   Int       @default(1000)
   earnPoints        Int       @default(1)
-  minOrderForEarn   Decimal   @default(0)
+  minOrderForEarn   Int       @default(0)
   excludeWholesale  Boolean   @default(true)
   awardTiming       LoyaltyAwardTiming @default(ON_PAYMENT)
   redemptionEnabled Boolean   @default(true)
@@ -723,8 +723,8 @@ model Coupon {
   kind           CouponKind   @default(PERCENT)
   /// نسبة أو مبلغ ثابت حسب kind
   value          Decimal
-  minOrderAmount Decimal?
-  maxDiscountAmount Decimal?
+  minOrderAmount Int?
+  maxDiscountAmount Int?
   maxUsesTotal   Int?
   maxUsesPerCustomer Int?
   usesCount      Int          @default(0)
@@ -938,8 +938,8 @@ model JournalLine {
   journalEntry   JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
   accountId      String
   account        Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  debit          Decimal      @default(0)
-  credit         Decimal      @default(0)
+  debit          Int          @default(0)
+  credit         Int          @default(0)
   createdAt      DateTime     @default(now())
 
   @@index([organizationId, accountId])
@@ -1030,9 +1030,9 @@ model CommissionEntry {
   rule             CommissionRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
   appointmentId    String?
   appointment      Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
-  baseAmount       Decimal
+  baseAmount       Int
   percent          Decimal
-  commissionAmount Decimal
+  commissionAmount Int
   note             String?
   createdAt        DateTime       @default(now())
 
@@ -1121,7 +1121,7 @@ model GroomingService {
   branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
   name           String
   durationMin    Int          @default(60)
-  price          Decimal
+  price          Int
   nameEn         String?
   included       String?
   includedEn     String?
@@ -1196,10 +1196,10 @@ model Product {
   featuresEn     String?
   sku            String?
   barcode        String?
-  price            Decimal
+  price            Int
   /// سعر الجملة (اختياري) — يُستخدم في POS عند تفعيل وضع الجملة
-  wholesalePrice   Decimal?
-  cost             Decimal?
+  wholesalePrice   Int?
+  cost             Int?
   petType        PetType      @default(OTHER)
   category       String?
   brandId        String?
@@ -1217,7 +1217,7 @@ model Product {
   /// Ready-made pet house sold through the same checkout.
   isPetHouse       Boolean  @default(false)
   leadTimeDays     Int?
-  houseDeliveryFee Decimal  @default(0)
+  houseDeliveryFee Int      @default(0)
   /// Made-to-order houses do not reduce on-hand quantity.
   takesStock       Boolean  @default(true)
   productImages  ProductImage[]
@@ -1257,7 +1257,7 @@ model Inventory {
   branch        Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
   quantity      Int      @default(0)
   /// Last weighted unit cost at this location. Does not change the selling price.
-  unitCost      Decimal?
+  unitCost      Int?
   minStockLevel Int      @default(5)
   lots          InventoryLot[]
 
@@ -1286,13 +1286,13 @@ model Appointment {
   address         String?
   areaId          String?
   area            DeliveryArea?     @relation(fields: [areaId], references: [id], onDelete: SetNull)
-  homeFee         Decimal           @default(0)
-  amount          Decimal           @default(0)
+  homeFee         Int               @default(0)
+  amount          Int               @default(0)
   holdExpiresAt   DateTime?
   gatewayPaymentId String?
   paymentReference String?
   /// Captured online payment (refunds are Payment rows of kind REFUND).
-  amountPaid      Decimal           @default(0)
+  amountPaid      Int               @default(0)
   paidAt          DateTime?
   /// A payment that staff must resolve (late, wrong amount, refund due).
   paymentReview   Boolean           @default(false)
@@ -1349,7 +1349,7 @@ model Sale {
   paymentReference String?
   webStatus        WebOrderStatus?
   fulfillment      FulfillmentKind?
-  deliveryFee      Decimal         @default(0)
+  deliveryFee      Int             @default(0)
   deliveryAreaId   String?
   deliveryArea     DeliveryArea?   @relation(fields: [deliveryAreaId], references: [id], onDelete: SetNull)
   deliveryWindowId String?
@@ -1368,11 +1368,11 @@ model Sale {
   paymentReviewReason String?
   /// Short human reference customers and staff quote (NFR-22).
   reference        String?  @unique @default(dbgenerated("nc_ref('NC-ORD-'::text, 'nc_order_ref_seq'::regclass)"))
-  promotionDiscount Decimal        @default(0)
+  promotionDiscount Int            @default(0)
   clientMutationId String?         @unique
-  total            Decimal
-  discountAmount   Decimal         @default(0)
-  taxAmount        Decimal         @default(0)
+  total            Int
+  discountAmount   Int             @default(0)
+  taxAmount        Int             @default(0)
   /// VAT percent applied on this sale (snapshot)
   taxPercent       Decimal?
   paymentMethod    PaymentMethod
@@ -1381,17 +1381,17 @@ model Sale {
   cashSession      CashSession?    @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
   couponId         String?
   coupon           Coupon?         @relation(fields: [couponId], references: [id], onDelete: SetNull)
-  couponDiscountAmount Decimal     @default(0)
+  couponDiscountAmount Int         @default(0)
   loyaltyPointsRedeemed Int        @default(0)
-  loyaltyDiscountAmount Decimal    @default(0)
+  loyaltyDiscountAmount Int        @default(0)
   loyaltyPointsEarned   Int?
   loyaltyAwardStatus    LoyaltyAwardStatus @default(NONE)
   /// صافي المبلغ المؤهل لاحتساب النقاط (بعد خصم الفاتورة والكوبون، قبل استبدال النقاط)
-  loyaltyEligibleBase   Decimal?
+  loyaltyEligibleBase   Int?
   /// ما دُفع فعلياً في هذه العملية (نقد/بطاقة/…)
-  amountPaid       Decimal         @default(0)
+  amountPaid       Int             @default(0)
   /// المتبقي على ذمّة الزبون لهذه الفاتورة
-  amountDue        Decimal         @default(0)
+  amountDue        Int             @default(0)
   invoiceNumber    String?
   invoiceStatus    InvoiceStatus   @default(ISSUED)
   dueDate          DateTime?
@@ -1422,7 +1422,7 @@ model HeldCart {
   label     String?
   payload   Json
   lineCount Int      @default(0)
-  subtotal  Decimal  @default(0)
+  subtotal  Int      @default(0)
   createdAt DateTime @default(now())
 
   @@index([branchId, userId])
@@ -1438,12 +1438,12 @@ model CashSession {
   closedBy           User?     @relation("CashSessionClosedBy", fields: [closedByUserId], references: [id])
   openedAt           DateTime  @default(now())
   closedAt           DateTime?
-  openingFloat       Decimal   @default(0)
-  closingCountedCash Decimal?
-  expectedCash       Decimal?
-  cashVariance       Decimal?
+  openingFloat       Int       @default(0)
+  closingCountedCash Int?
+  expectedCash       Int?
+  cashVariance       Int?
   /// Card taken in the session, net of card refunds. Set at close.
-  cardTotal          Decimal?
+  cardTotal          Int?
   note               String?
   sales              Sale[]
   refunds            Refund[]
@@ -1472,7 +1472,7 @@ model Refund {
   saleId           String?
   sale             Sale?        @relation(fields: [saleId], references: [id], onDelete: SetNull)
   clientMutationId String?      @unique
-  total            Decimal
+  total            Int
   note             String?
   gatewayRefundId  String?
   /// How the money went back (cash, card, Fawran, link). Empty on old rows.
@@ -1501,10 +1501,10 @@ model RefundItem {
   productId String
   product   Product @relation(fields: [productId], references: [id])
   quantity  Int
-  unitPrice Decimal
-  subtotal  Decimal
+  unitPrice Int
+  subtotal  Int
   /// Cost reversed when the goods are returned. Empty when the refund is money only.
-  costAmount Decimal?
+  costAmount Int?
   /// Sale line this refund line comes from. Empty on old rows.
   saleItemId String?
   variantId  String?
@@ -1533,8 +1533,8 @@ model PurchaseItem {
   productId  String
   product    Product  @relation(fields: [productId], references: [id])
   quantity   Int
-  unitCost   Decimal
-  subtotal   Decimal
+  unitCost   Int
+  subtotal   Int
   expiryDate DateTime?
 }
 
@@ -1570,7 +1570,7 @@ model PurchaseDraftItem {
   productId String
   product   Product       @relation(fields: [productId], references: [id])
   quantity  Int
-  unitCost  Decimal?
+  unitCost  Int?
   /// Why this line was suggested (severity / dailySales snapshot)
   reason    String?
   createdAt DateTime      @default(now())
@@ -1615,12 +1615,12 @@ model PromoDraftItem {
   product         Product    @relation(fields: [productId], references: [id])
   /// PERCENT_OFF | SET_PRICE | BUNDLE
   action          String     @default("PERCENT_OFF")
-  currentPrice    Decimal?
-  cost            Decimal?
-  suggestedPrice  Decimal?
+  currentPrice    Int?
+  cost            Int?
+  suggestedPrice  Int?
   discountPercent Decimal?
   /// Snapshot of price before apply (for audit / future revert)
-  previousPrice   Decimal?
+  previousPrice   Int?
   buyQty          Int?
   freeQty         Int?
   pairedProductId String?
@@ -1640,12 +1640,12 @@ model SaleItem {
   variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
   /// Pieces, or grams when the product is sold by weight.
   quantity  Int
-  unitPrice Decimal
-  subtotal  Decimal
-  discountAmount Decimal @default(0)
+  unitPrice Int
+  subtotal  Int
+  discountAmount Int     @default(0)
   /// Location unit cost at the time of the sale. Does not change the selling price.
-  unitCost  Decimal?
-  costAmount Decimal?
+  unitCost  Int?
+  costAmount Int?
   /// الإضافات المختارة للسطر [{key,label,priceDelta}]
   modifiers Json?
   lotUsages SaleItemLot[]
@@ -1666,7 +1666,7 @@ model InventoryLot {
   expiryDate       DateTime?
   quantityReceived Int
   quantityOnHand   Int
-  unitCost         Decimal?
+  unitCost         Int?
   note             String?
   saleItemLots     SaleItemLot[]
   createdAt        DateTime      @default(now())
@@ -1759,7 +1759,7 @@ model ProductVariant {
   barcode             String?
   label               String
   labelEn             String?
-  price               Decimal
+  price               Int
   isActive            Boolean   @default(true)
   packWeight          Decimal?
   preferredSupplierId String?
@@ -1784,7 +1784,7 @@ model VariantStock {
   branchId      String
   branch        Branch         @relation(fields: [branchId], references: [id], onDelete: Cascade)
   quantity      Int            @default(0)
-  unitCost      Decimal?
+  unitCost      Int?
   minStockLevel Int            @default(5)
 
   @@unique([variantId, branchId])
@@ -1822,7 +1822,7 @@ model PurchaseOrderLine {
   variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
   quantity         Int
   quantityReceived Int            @default(0)
-  unitCost         Decimal
+  unitCost         Int
 
   @@index([orderId])
 }
@@ -1835,8 +1835,8 @@ model SupplierBill {
   supplier       Supplier           @relation(fields: [supplierId], references: [id])
   purchaseOrderId String?
   purchaseOrder  PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id], onDelete: SetNull)
-  amount         Decimal
-  amountPaid     Decimal            @default(0)
+  amount         Int
+  amountPaid     Int                @default(0)
   status         SupplierBillStatus @default(OPEN)
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
@@ -1849,7 +1849,7 @@ model SupplierPayment {
   id        String            @id @default(cuid())
   billId    String
   bill      SupplierBill      @relation(fields: [billId], references: [id], onDelete: Cascade)
-  amount    Decimal
+  amount    Int
   method    SupplierPayMethod
   paidAt    DateTime          @default(now())
   userId    String
@@ -1911,7 +1911,7 @@ model DeliveryArea {
   name           String
   nameEn         String?
   city           String?
-  fee            Decimal      @default(0)
+  fee            Int          @default(0)
   isActive       Boolean      @default(true)
   sales          Sale[]
   appointments   Appointment[]
@@ -2013,7 +2013,7 @@ model RelocationRequest {
   destination    String
   petSummary     String?
   status         RelocationStatus @default(SUBMITTED)
-  quoteAmount    Decimal?
+  quoteAmount    Int?
   quoteNote      String?
   /// Hidden from the customer.
   staffNotes     String?
@@ -2021,7 +2021,7 @@ model RelocationRequest {
   paymentMethod  String?
   gatewayPaymentId String?
   paidAt         DateTime?
-  amountPaid     Decimal          @default(0)
+  amountPaid     Int              @default(0)
   paymentReview  Boolean          @default(false)
   paymentReviewReason String?
   /// Short human reference customers and staff quote (NFR-22).
@@ -2068,7 +2068,7 @@ model Promotion {
   kind           PromotionKind
   code           String?
   percent        Decimal?
-  amount         Decimal?
+  amount         Int?
   productId      String?
   product        Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
   categoryId     String?
@@ -2076,8 +2076,8 @@ model Promotion {
   buyQty         Int?
   getQty         Int?
   bundleProductIds Json?
-  bundlePrice    Decimal?
-  minOrderAmount Decimal?
+  bundlePrice    Int?
+  minOrderAmount Int?
   startsAt       DateTime      @default(now())
   endsAt         DateTime?
   active         Boolean       @default(true)
@@ -2122,7 +2122,7 @@ model Payment {
   method              String
   /// CAPTURED, REVIEW (staff must resolve), REJECTED (refunded after review), PENDING (refund in flight).
   status              String             @default("CAPTURED")
-  amount              Decimal
+  amount              Int
   currency            String             @default("QAR")
   reference           String?
   gatewayPaymentId    String?
