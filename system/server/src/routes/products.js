@@ -19,7 +19,7 @@ import {
 } from "../lib/productBarcode.js";
 import { syncProductExtras } from "../lib/catalogExtras.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { IMAGE_MIMES, sniffFileType, stripImageMetadata } from "../lib/fileCheck.js";
+import { normalizeImage } from "../lib/imageNormalize.js";
 import { setStockCount } from "../lib/stockLedger.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
@@ -458,16 +458,17 @@ router.post("/upload-image", requireModule("products", ["create", "edit"]),
           errorEn: "Image must be 2 MB or smaller",
         });
       }
-      // NFR-18: the bytes must really be a JPEG, PNG or WebP image (declared type is not trusted).
-      const kind = sniffFileType(req.file.buffer);
-      if (!kind || !IMAGE_MIMES.includes(kind.mime)) {
-        return res.status(400).json({
-          error: "الملف ليس صورة JPEG أو PNG أو WebP صالحة",
-          errorAr: "الملف ليس صورة JPEG أو PNG أو WebP صالحة",
-          errorEn: "The file is not a valid JPEG, PNG or WebP image",
-        });
+      // NFR-18: the bytes must really be a JPEG, PNG or WebP image (declared type is not trusted);
+      // it is decoded, auto-oriented, stripped of all metadata, resized and re-encoded.
+      let normalized;
+      try {
+        normalized = await normalizeImage(req.file.buffer);
+      } catch (err) {
+        if (err.status !== 400) throw err;
+        return res.status(400).json({ error: err.errorAr || err.message, errorAr: err.errorAr, errorEn: err.errorEn || err.message });
       }
-      const imageBytes = stripImageMetadata(req.file.buffer, kind.mime);
+      const imageBytes = normalized.buffer;
+      const kind = { mime: normalized.mime };
       const productIdRaw =
         req.body?.productId != null && String(req.body.productId).trim()
           ? String(req.body.productId).trim()
@@ -485,7 +486,7 @@ router.post("/upload-image", requireModule("products", ["create", "edit"]),
         data: {
           organizationId: req.user.organizationId,
           productId,
-          fileName: String(req.file.originalname || "image").slice(0, 180),
+          fileName: `${String(req.file.originalname || "image").replace(/\.[^.]*$/, "").slice(0, 170) || "image"}.webp`,
           mimeType: kind.mime,
           size: imageBytes.length,
           data: imageBytes,
