@@ -907,7 +907,7 @@ export default function POS() {
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
             {todayAppointments.slice(0, 6).map((row) => (
               <li key={row.id} style={{ fontSize: 13 }}>
-                {new Date(row.startAt).toLocaleTimeString(locale === "en" ? "en-GB" : "ar-QA", { hour: "2-digit", minute: "2-digit" })}
+                {new Date(row.startAt).toLocaleTimeString(locale === "en" ? "en-GB" : "ar-QA", { timeZone: "Asia/Qatar", hour: "2-digit", minute: "2-digit" })}
                 {" · "}
                 {row.customer?.name || "—"}
                 {row.petName ? ` · ${row.petName}` : ""}

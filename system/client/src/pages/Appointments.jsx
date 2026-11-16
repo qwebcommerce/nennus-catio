@@ -2,6 +2,17 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { fromQatarInput, qatarTime, qatarToday, toQatarInput } from "../utils/qatarTime.js";
+
+/** Mirrors the server's allowed booking status changes (FR-53, FR-54). */
+const NEXT = {
+  PENDING_PAYMENT: ["CANCELLED"],
+  BOOKED: ["IN_PROGRESS", "NO_SHOW", "CANCELLED"],
+  CONFIRMED: ["IN_PROGRESS", "NO_SHOW", "CANCELLED"],
+  CHECKED_IN: ["IN_PROGRESS", "NO_SHOW", "CANCELLED"],
+  IN_PROGRESS: ["DONE", "CANCELLED"],
+};
+const MOVABLE = ["PENDING_PAYMENT", "BOOKED", "CONFIRMED"];
 
 const inp = {
   padding: 12,
@@ -11,21 +22,19 @@ const inp = {
   color: "var(--text)",
 };
 
+/** Booking times are entered and shown in Qatar time (NFR-04). */
 function toInputDateTimeLocal(d) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
+  return toQatarInput(d);
 }
 
 export default function Appointments() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
   const showPetFields = true;
   const [customers, setCustomers] = useState([]);
   const [services, setServices] = useState([]);
   const [list, setList] = useState([]);
-  const [day, setDay] = useState(new Date().toISOString().slice(0, 10));
+  const [day, setDay] = useState(qatarToday());
   const [msg, setMsg] = useState("");
   const [form, setForm] = useState(() => {
     const start = new Date();
@@ -103,9 +112,8 @@ export default function Appointments() {
     setForm((f) => {
       const svc = services.find((s) => s.id === serviceId);
       if (!svc) return { ...f, serviceId };
-      const start = new Date(f.startAt);
-      const end = new Date(start);
-      end.setMinutes(end.getMinutes() + Number(svc.durationMin || 60));
+      const start = new Date(fromQatarInput(f.startAt) || Date.now());
+      const end = new Date(start.getTime() + Number(svc.durationMin || 60) * 60 * 1000);
       return { ...f, serviceId, endAt: toInputDateTimeLocal(end) };
     });
   };
@@ -123,8 +131,8 @@ export default function Appointments() {
           serviceId: form.serviceId || undefined,
           petName: form.petName || undefined,
           petType: form.petType,
-          startAt: new Date(form.startAt).toISOString(),
-          endAt: new Date(form.endAt).toISOString(),
+          startAt: fromQatarInput(form.startAt),
+          endAt: fromQatarInput(form.endAt),
           notes: form.notes || undefined,
         },
       });
@@ -133,6 +141,21 @@ export default function Appointments() {
     } catch (x) {
       setMsg(x.message || t("appointments.msgCreateFail"));
     }
+  };
+
+  const fail = (x) => setMsg(x.message);
+  const resolve = (id, accept) =>
+    api(`/api/appointments/${id}/resolve-payment`, { method: "POST", body: { accept } }).then(loadAppointments).catch(fail);
+  const paidLeft = (a) => {
+    const rows = a.payments || [];
+    const inn = rows.filter((p) => p.kind === "PAYMENT" && ["CAPTURED", "REJECTED"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
+    const out = rows.filter((p) => p.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
+    return Math.round((inn - out) * 100) / 100;
+  };
+  const refund = (a) => {
+    const amount = window.prompt(t("shop.refundAmount"), String(paidLeft(a).toFixed(2)));
+    if (!amount) return;
+    api(`/api/appointments/${a.id}/refund`, { method: "POST", body: { amount: Number(amount) } }).then(loadAppointments).catch(fail);
   };
 
   const setStatus = async (id, status) => {
@@ -260,36 +283,64 @@ export default function Appointments() {
               {list.map((a) => (
                 <tr key={a.id}>
                   <td style={td}>
-                    {new Date(a.startAt).toLocaleTimeString()} - {new Date(a.endAt).toLocaleTimeString()}
+                    {qatarTime(a.startAt, locale)} - {qatarTime(a.endAt, locale)}
+                    <div style={{ color: "var(--muted)" }}>{a.reference}</div>
                   </td>
                   <td style={td}>
                     {a.customer?.name || t("appointments.walkIn")} {a.petName ? `• ${a.petName}` : ""}
                   </td>
                   <td style={td}>{a.service?.name || "—"}</td>
-                  <td style={td}>{a.status}</td>
+                  <td style={td}>
+                    {a.status}
+                    {Number(a.amountPaid) > 0 ? <div style={{ color: "var(--muted)" }}>{t("shop.paid")} {Number(a.amountPaid).toFixed(2)}</div> : null}
+                    {a.paymentReview ? (
+                      <div style={{ color: "var(--danger, #b42318)" }}>
+                        <strong>{t(`shop.reviewReason.${a.paymentReviewReason || "AMOUNT_MISMATCH"}`)}</strong>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <button className="btn-touch" type="button" onClick={() => resolve(a.id, true)}>{t("shop.keepPayment")}</button>
+                          <button className="btn-touch" type="button" onClick={() => resolve(a.id, false)}>{t("shop.refundPayment")}</button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={td}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "IN_PROGRESS")}>
-                        {t("shop.inProgress")}
-                      </button>
-                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "DONE")}>
-                        {t("appointments.done")}
-                      </button>
-                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "NO_SHOW")}>
-                        {t("shop.noShow")}
-                      </button>
-                      <button className="btn-touch" type="button" onClick={() => {
-                        const next = window.prompt(t("shop.moveBooking"), a.startAt.slice(0, 16));
-                        if (!next) return;
-                        const start = new Date(next);
-                        const duration = new Date(a.endAt).getTime() - new Date(a.startAt).getTime();
-                        api(`/api/appointments/${a.id}`, { method: "PATCH", body: { startAt: start.toISOString(), endAt: new Date(start.getTime() + duration).toISOString() } }).then(loadAppointments).catch((x) => setMsg(x.message));
-                      }}>
-                        {t("shop.move")}
-                      </button>
-                      <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "CANCELLED")}>
-                        {t("appointments.cancel")}
-                      </button>
+                      {(NEXT[a.status] || []).includes("IN_PROGRESS") ? (
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "IN_PROGRESS")}>
+                          {t("shop.inProgress")}
+                        </button>
+                      ) : null}
+                      {(NEXT[a.status] || []).includes("DONE") ? (
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "DONE")}>
+                          {t("appointments.done")}
+                        </button>
+                      ) : null}
+                      {(NEXT[a.status] || []).includes("NO_SHOW") ? (
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "NO_SHOW")}>
+                          {t("shop.noShow")}
+                        </button>
+                      ) : null}
+                      {MOVABLE.includes(a.status) ? (
+                        <button className="btn-touch" type="button" onClick={() => {
+                          const next = window.prompt(`${t("shop.moveBooking")} (${t("shop.qatarTime")})`, toQatarInput(a.startAt));
+                          if (!next) return;
+                          const start = fromQatarInput(next.trim().slice(0, 16));
+                          if (!start) return;
+                          api(`/api/appointments/${a.id}`, { method: "PATCH", body: { startAt: start } }).then(loadAppointments).catch((x) => setMsg(x.message));
+                        }}>
+                          {t("shop.move")}
+                        </button>
+                      ) : null}
+                      {(NEXT[a.status] || []).includes("CANCELLED") ? (
+                        <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "CANCELLED")}>
+                          {t("appointments.cancel")}
+                        </button>
+                      ) : null}
+                      {paidLeft(a) > 0 ? (
+                        <button className="btn-touch" type="button" onClick={() => refund(a)}>
+                          {t("shop.refund")}
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>

@@ -239,12 +239,12 @@ router.get("/:id/record", async (req, res) => {
       relocationRequests: {
         orderBy: { createdAt: "desc" },
         take: 20,
-        select: { id: true, destination: true, status: true, quoteAmount: true, createdAt: true },
+        select: { id: true, reference: true, destination: true, status: true, quoteAmount: true, createdAt: true },
       },
       sales: {
         orderBy: { createdAt: "desc" },
         take: 20,
-        select: { id: true, total: true, createdAt: true, orderChannel: true, webStatus: true, invoiceNumber: true },
+        select: { id: true, reference: true, total: true, createdAt: true, orderChannel: true, webStatus: true, invoiceNumber: true },
       },
     },
   });

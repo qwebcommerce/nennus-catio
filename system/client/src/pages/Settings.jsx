@@ -47,6 +47,7 @@ export default function Settings() {
   const [websiteBranchId, setWebsiteBranchId] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [homeVisitFee, setHomeVisitFee] = useState("0");
+  const [bookingCancelHours, setBookingCancelHours] = useState("24");
   const [profile, setProfile] = useState({ phone: "", publicEmail: "", publicAddress: "", hoursText: "", hoursTextEn: "", notifyEmail: "", alertOrder: true, alertBooking: true, alertRelocation: true, alertLowStock: false });
 
   useEffect(() => {
@@ -58,6 +59,7 @@ export default function Settings() {
           setWebsiteBranchId(s?.websiteBranchId || "");
           setWhatsappNumber(s?.whatsappNumber || "");
           setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
+          setBookingCancelHours(s?.bookingCancelHours != null ? String(s.bookingCancelHours) : "24");
           setProfile({
             phone: s?.phone || "",
             publicEmail: s?.publicEmail || "",
@@ -200,6 +202,10 @@ export default function Settings() {
             <span>{t("shop.homeFee")}</span>
             <input type="number" min="0" step="0.01" value={homeVisitFee} onChange={(e) => setHomeVisitFee(e.target.value)} />
           </label>
+          <label>
+            <span>{t("shop.bookingCancelHours")}</span>
+            <input type="number" min="0" max="336" step="1" value={bookingCancelHours} onChange={(e) => setBookingCancelHours(e.target.value)} />
+          </label>
           {["phone", "publicEmail", "publicAddress", "hoursText", "hoursTextEn", "notifyEmail"].map((key) => (
             <label key={key}>
               <span>{t(`shop.${key}`)}</span>
@@ -219,10 +225,11 @@ export default function Settings() {
               try {
                 const saved = await api("/api/org-settings", {
                   method: "PATCH",
-                  body: { whatsappNumber, homeVisitFee: Number(homeVisitFee), ...profile },
+                  body: { whatsappNumber, homeVisitFee: Number(homeVisitFee), bookingCancelHours: Number(bookingCancelHours), ...profile },
                 });
                 setWhatsappNumber(saved.whatsappNumber || "");
                 setHomeVisitFee(String(saved.homeVisitFee ?? 0));
+                setBookingCancelHours(String(saved.bookingCancelHours ?? 24));
                 showToast(t("common.save"), "success");
               } catch (err) {
                 showToast(err.message, "error");

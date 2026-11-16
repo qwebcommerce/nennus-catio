@@ -5,7 +5,9 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { customerSession, endCustomerSession, startCustomerSession } from "../lib/customerSession.js";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
-import { commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
+import { assertStockForHolds, commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
+import { LOCK_TX, needsReview, settleGatewayPayment, statusError } from "../lib/payments.js";
+import { minutesOf, qatarNowMinutes, qatarToday } from "../lib/groomingSlots.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { mailCustomer, mailStaff, sendMail } from "../lib/mailer.js";
 
@@ -117,10 +119,10 @@ function weekdayOf(iso) {
   return date ? date.getUTCDay() : null;
 }
 
-async function seatsUsed(windowId, isoDate) {
+async function seatsUsed(windowId, isoDate, db = prisma) {
   const deliveryDate = civilDate(isoDate);
   if (!deliveryDate) return 0;
-  return prisma.sale.count({
+  return db.sale.count({
     where: {
       deliveryWindowId: windowId,
       deliveryDate,
@@ -145,21 +147,26 @@ router.get("/meta", async (req, res) => {
     prisma.deliveryArea.findMany({ where: { organizationId: org.id, isActive: true }, orderBy: { name: "asc" } }),
     prisma.deliveryWindow.findMany({ where: { organizationId: org.id, isActive: true }, orderBy: { startTime: "asc" } }),
   ]);
-  const seatRows = branch
-    ? await prisma.stockHold.groupBy({
-        by: ["windowId"],
-        where: {
-          organizationId: org.id,
-          windowId: { not: null },
-          OR: [
-            { status: "COMMITTED" },
-            { status: "HELD", expiresAt: { gt: new Date() } },
-          ],
-        },
-        _count: { _all: true },
-      })
-    : [];
-  const taken = new Map(seatRows.map((row) => [row.windowId, row._count._all]));
+  // Seats are per window per date (FR-41). With ?date= every window reports that date;
+  // otherwise each window reports its next date from today (Qatar).
+  const askedDate = civilDate(req.query.date) ? String(req.query.date) : null;
+  const today = qatarToday();
+  const windowDates = new Map();
+  for (const w of windows) {
+    let date = askedDate;
+    if (!date) {
+      const start = civilDate(today);
+      for (let i = 0; i < 7; i += 1) {
+        const d = new Date(start.getTime() + i * 86400000);
+        if (w.weekday == null || d.getUTCDay() === w.weekday) {
+          date = d.toISOString().slice(0, 10);
+          break;
+        }
+      }
+    }
+    const runs = date && (w.weekday == null || weekdayOf(date) === w.weekday);
+    windowDates.set(w.id, { date, used: runs && branch ? await seatsUsed(w.id, date) : null, runs });
+  }
   res.json({
     location: branch ? { id: branch.id, name: branch.name, nameEn: branch.nameEn } : null,
     petTypes,
@@ -183,7 +190,8 @@ router.get("/meta", async (req, res) => {
       weekday: w.weekday,
       startTime: w.startTime,
       endTime: w.endTime,
-      seatsLeft: Math.max(0, w.seats - (taken.get(w.id) || 0)),
+      date: windowDates.get(w.id)?.date || null,
+      seatsLeft: windowDates.get(w.id)?.runs ? Math.max(0, w.seats - (windowDates.get(w.id)?.used || 0)) : 0,
     })),
   });
 });
@@ -584,6 +592,7 @@ router.get("/orders/:id", async (req, res) => {
 function publicOrder(sale) {
   return {
     id: sale.id,
+    reference: sale.reference,
     status: sale.webStatus,
     fulfillment: sale.fulfillment,
     total: Number(sale.total),
@@ -620,13 +629,29 @@ router.post("/orders/:id/cancel", async (req, res) => {
         err.status = 400;
         throw err;
       }
-      await restoreCommittedHolds(tx, row.id);
-      return tx.sale.update({
-        where: { id: row.id },
-        data: { webStatus: "CANCELLED", invoiceStatus: "CANCELLED" },
+      // Guarded: only one of a customer cancel, a staff change or a retry wins.
+      const moved = await tx.sale.updateMany({
+        where: { id: row.id, webStatus: "CONFIRMED" },
+        data: {
+          webStatus: "CANCELLED",
+          invoiceStatus: "CANCELLED",
+          // A paid order cancelled by the customer is flagged so staff refund it (FR-38, FR-77).
+          ...(Number(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
+        },
       });
+      if (!moved.count) {
+        const err = new Error("This order can only be cancelled before it is being prepared");
+        err.status = 400;
+        throw err;
+      }
+      await restoreCommittedHolds(tx, row.id);
+      return tx.sale.findUnique({ where: { id: row.id } });
     });
-    res.json({ id: sale.id, status: sale.webStatus });
+    if (Number(sale.amountPaid) > 0) {
+      const org = await shopOrg();
+      if (org) await mailStaff(org.id, "alertOrder", `Website order ${sale.reference || sale.id} was cancelled by the customer. A refund of ${Number(sale.amountPaid).toFixed(2)} QAR is due.`);
+    }
+    res.json({ id: sale.id, reference: sale.reference, status: sale.webStatus });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not cancel" });
   }
@@ -706,6 +731,13 @@ router.post("/checkout", async (req, res) => {
           where: { id: String(body.areaId), organizationId: org.id, isActive: true },
         });
       }
+      // The delivery fee comes from the area on the server, so an area is required (FR-34, FR-40, NFR-08).
+      if (!area) return res.status(400).json({ error: "Choose a delivery area" });
+      const today = qatarToday();
+      const dateIso = String(body.deliveryDate);
+      if (dateIso < today) return res.status(400).json({ error: "The delivery date is in the past" });
+      const furthest = new Date(civilDate(today).getTime() + 90 * 86400000).toISOString().slice(0, 10);
+      if (dateIso > furthest) return res.status(400).json({ error: "Choose a delivery date within the next 90 days" });
       if (body.windowId) {
         windowRow = await prisma.deliveryWindow.findFirst({
           where: { id: String(body.windowId), organizationId: org.id, isActive: true },
@@ -715,6 +747,12 @@ router.post("/checkout", async (req, res) => {
       const day = weekdayOf(body.deliveryDate);
       if (windowRow.weekday != null && windowRow.weekday !== day) {
         return res.status(400).json({ error: "That window is not on the chosen day" });
+      }
+      if (String(body.deliveryDate) === qatarToday()) {
+        const startMin = minutesOf(windowRow.startTime);
+        if (startMin == null || startMin <= qatarNowMinutes()) {
+          return res.status(400).json({ error: "That delivery window has already started today" });
+        }
       }
     }
 
@@ -810,6 +848,7 @@ router.post("/checkout", async (req, res) => {
     if (goods.lessThan(0)) goods = new Prisma.Decimal(0);
 
     if (windowRow) {
+      // Early answer only; the locked check inside the hold transaction is the one that counts.
       const used = await seatsUsed(windowRow.id, body.deliveryDate);
       if (used >= windowRow.seats) return res.status(400).json({ error: "That delivery window is full" });
     }
@@ -832,7 +871,25 @@ router.post("/checkout", async (req, res) => {
       select: { id: true },
     });
     if (!staff) return res.status(500).json({ error: "Shop checkout needs a staff user on the account" });
+    const stockLines = prepared.filter((line) => line.product.takesStock !== false);
     const sale = await prisma.$transaction(async (tx) => {
+      // FR-41 / NFR-06: lock the window row, then count its seats for that date.
+      if (windowRow) {
+        await tx.$queryRaw`SELECT id FROM "DeliveryWindow" WHERE id = ${windowRow.id} FOR UPDATE`;
+        const used = await seatsUsed(windowRow.id, body.deliveryDate, tx);
+        if (used >= windowRow.seats) throw statusError("That delivery window is full", 400);
+      }
+      // FR-36 / NFR-06: lock the stock balance rows and count live holds inside this transaction.
+      await assertStockForHolds(
+        tx,
+        branch.id,
+        stockLines.map((line) => ({
+          productId: line.product.id,
+          variantId: line.variant?.id || null,
+          units: line.units,
+          label: line.variant?.label || line.product.nameEn || line.product.name,
+        })),
+      );
       const created = await tx.sale.create({
         data: {
           branchId: branch.id,
@@ -873,7 +930,6 @@ router.post("/checkout", async (req, res) => {
           },
         },
       });
-      const stockLines = prepared.filter((line) => line.product.takesStock !== false);
       for (let i = 0; i < stockLines.length; i += 1) {
         const line = stockLines[i];
         await tx.stockHold.create({
@@ -906,7 +962,7 @@ router.post("/checkout", async (req, res) => {
         });
       }
       return created;
-    });
+    }, LOCK_TX);
 
     const payment = await createSkipcashPayment({
       Uid: crypto.randomUUID(),
@@ -932,7 +988,7 @@ router.post("/checkout", async (req, res) => {
       where: { id: sale.id },
       data: { gatewayPaymentId: payment.id, paymentReference: payment.id },
     });
-    res.status(201).json({ orderId: sale.id, payUrl: payment.payUrl, total: Number(total) });
+    res.status(201).json({ orderId: sale.id, reference: sale.reference, payUrl: payment.payUrl, total: Number(total) });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Checkout failed" });
   }
@@ -960,80 +1016,132 @@ router.post("/payments/skipcash", async (req, res) => {
   }
   const custom = String(body.Custom1 || "").trim();
   const statusId = Number(body.StatusId);
-  if (custom.startsWith("till:")) return res.status(200).json({ ok: true });
-  if (custom.startsWith("booking:")) {
-    const booking = await prisma.appointment.findFirst({ where: { id: custom.slice(8) } });
-    if (!booking || booking.status === "CONFIRMED" || booking.status === "CANCELLED") return res.status(200).json({ ok: true });
-    if (statusId === 2 && booking.status === "PENDING_PAYMENT") {
-      await prisma.appointment.update({
-        where: { id: booking.id },
-        data: { status: "CONFIRMED", paymentReference: String(body.PaymentId || booking.paymentReference || "") },
-      });
-      if (booking.customerId) {
-        const buyer = await prisma.customer.findUnique({ where: { id: booking.customerId } });
-        await mailCustomer(buyer, "booking", `Booking ${booking.id} is confirmed.`);
-        await mailStaff(booking.organizationId, "alertBooking", `Grooming booking ${booking.id} is paid.`);
-      }
-    } else if ([3, 4, 5].includes(statusId) && booking.status === "PENDING_PAYMENT") {
-      await prisma.appointment.update({ where: { id: booking.id }, data: { status: "CANCELLED" } });
-    }
-    return res.status(200).json({ ok: true });
-  }
-  if (custom.startsWith("relocation:")) {
-    const request = await prisma.relocationRequest.findFirst({ where: { id: custom.slice(11) } });
-    if (!request || request.status === "PAID" || request.status === "CANCELLED") return res.status(200).json({ ok: true });
-    if (statusId === 2 && request.status === "QUOTE_SENT") {
-      const history = Array.isArray(request.history) ? request.history : [];
-      await prisma.relocationRequest.update({
-        where: { id: request.id },
-        data: {
-          status: "PAID",
-          paymentMethod: "ONLINE",
-          paidAt: new Date(),
-          history: [...history, { at: new Date().toISOString(), status: "PAID", note: "ONLINE" }],
-        },
-      });
-    }
-    return res.status(200).json({ ok: true });
-  }
-  const saleId = custom;
-  const sale = saleId
-    ? await prisma.sale.findFirst({ where: { id: saleId, orderChannel: "WEBSITE" } })
-    : null;
-  if (!sale) return res.status(200).json({ ok: true });
-  if (sale.webStatus === "CONFIRMED" || sale.webStatus === "CANCELLED") return res.status(200).json({ ok: true });
+  const paymentRef = String(body.PaymentId || "");
   try {
-    if (statusId === 2) {
-      const paid = Number(body.Amount);
-      if (Number.isFinite(paid) && Math.abs(paid - Number(sale.total)) > 0.05) {
-        await prisma.sale.update({ where: { id: sale.id }, data: { paymentReview: true } });
-        return res.status(200).json({ ok: true, review: true });
-      }
-      await prisma.$transaction(async (tx) => {
-        const current = await tx.sale.findUnique({ where: { id: sale.id } });
-        if (!current || current.webStatus !== "PENDING_PAYMENT") return;
-        await commitSaleHolds(tx, current);
-        await tx.sale.update({
-          where: { id: current.id },
-          data: {
-            webStatus: "CONFIRMED",
-            amountPaid: current.total,
-            amountDue: 0,
-            invoiceStatus: "PAID",
-            paidAt: new Date(),
-            paymentReference: String(body.PaymentId || current.paymentReference || ""),
+    if (custom.startsWith("till:")) return res.status(200).json({ ok: true });
+    if (custom.startsWith("booking:")) {
+      const booking = await prisma.appointment.findFirst({ where: { id: custom.slice(8) } });
+      if (!booking) return res.status(200).json({ ok: true });
+      if (statusId === 2) {
+        // FR-51, FR-76, FR-79: amount must match and the hold must still be live; otherwise staff review.
+        const result = await settleGatewayPayment({
+          parentKind: "appointment",
+          parentId: booking.id,
+          organizationId: booking.organizationId,
+          body,
+          expected: Number(booking.amount),
+          confirm: async (tx, paid) => {
+            const now = new Date();
+            const moved = await tx.appointment.updateMany({
+              where: { id: booking.id, status: "PENDING_PAYMENT", holdExpiresAt: { gt: now } },
+              data: { status: "CONFIRMED", amountPaid: paid, paidAt: now, paymentReference: paymentRef || booking.paymentReference },
+            });
+            if (!moved.count) {
+              const current = await tx.appointment.findUnique({ where: { id: booking.id }, select: { status: true } });
+              throw needsReview(["PENDING_PAYMENT", "CANCELLED"].includes(current?.status) ? "LATE_PAYMENT" : "DUPLICATE_PAYMENT");
+            }
           },
         });
-      });
-      if (sale.customerId) {
-        const buyer = await prisma.customer.findUnique({ where: { id: sale.customerId } });
-        await mailCustomer(buyer, "order", `Order ${sale.id} is confirmed.`);
-        if (buyer) await mailStaff(buyer.organizationId, "alertOrder", `Website order ${sale.id} is paid.`);
+        const buyer = booking.customerId ? await prisma.customer.findUnique({ where: { id: booking.customerId } }) : null;
+        const ref = booking.reference || booking.id;
+        if (result.outcome === "confirmed") {
+          await mailCustomer(buyer, "booking", `Booking ${ref} is confirmed.`);
+          await mailStaff(booking.organizationId, "alertBooking", `Grooming booking ${ref} is paid.`);
+        } else if (result.outcome === "review") {
+          await mailStaff(booking.organizationId, "alertBooking", `Grooming booking ${ref} has a payment that needs review (${result.reason}).`);
+        }
+        return res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
       }
-    } else if ([3, 4, 5].includes(statusId)) {
+      if ([3, 4, 5].includes(statusId)) {
+        await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
+      }
+      return res.status(200).json({ ok: true });
+    }
+    if (custom.startsWith("relocation:")) {
+      const request = await prisma.relocationRequest.findFirst({ where: { id: custom.slice(11) } });
+      if (!request) return res.status(200).json({ ok: true });
+      if (statusId === 2) {
+        const expected = Number(request.quoteAmount || 0);
+        const result = await settleGatewayPayment({
+          parentKind: "relocation",
+          parentId: request.id,
+          organizationId: request.organizationId,
+          body,
+          expected,
+          confirm: async (tx, paid) => {
+            const now = new Date();
+            const moved = await tx.relocationRequest.updateMany({
+              where: { id: request.id, status: "QUOTE_SENT", quoteAmount: new Prisma.Decimal(expected.toFixed(2)) },
+              data: { status: "PAID", paymentMethod: "ONLINE", paidAt: now, amountPaid: paid },
+            });
+            if (!moved.count) {
+              const current = await tx.relocationRequest.findUnique({ where: { id: request.id }, select: { status: true } });
+              if (current?.status === "QUOTE_SENT") throw needsReview("AMOUNT_MISMATCH");
+              throw needsReview(["PAID", "IN_PROGRESS", "COMPLETED"].includes(current?.status) ? "DUPLICATE_PAYMENT" : "LATE_PAYMENT");
+            }
+            const fresh = await tx.relocationRequest.findUnique({ where: { id: request.id }, select: { history: true } });
+            const history = Array.isArray(fresh?.history) ? fresh.history : [];
+            await tx.relocationRequest.update({
+              where: { id: request.id },
+              data: { history: [...history, { at: now.toISOString(), status: "PAID", note: "ONLINE" }] },
+            });
+          },
+        });
+        if (result.outcome === "review") {
+          await mailStaff(request.organizationId, "alertRelocation", `Relocation ${request.reference || request.id} has a payment that needs review (${result.reason}).`);
+        }
+        return res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
+      }
+      return res.status(200).json({ ok: true });
+    }
+    const sale = custom ? await prisma.sale.findFirst({ where: { id: custom, orderChannel: "WEBSITE" } }) : null;
+    if (!sale) return res.status(200).json({ ok: true });
+    if (statusId === 2) {
+      const org = await prisma.branch.findUnique({ where: { id: sale.branchId }, select: { organizationId: true } });
+      const result = await settleGatewayPayment({
+        parentKind: "sale",
+        parentId: sale.id,
+        organizationId: org.organizationId,
+        body,
+        expected: Number(sale.total),
+        confirm: async (tx) => {
+          const now = new Date();
+          // Guarded: only a live, unpaid order confirms; a late payment goes to staff (FR-79).
+          const moved = await tx.sale.updateMany({
+            where: { id: sale.id, webStatus: "PENDING_PAYMENT", holdExpiresAt: { gt: now } },
+            data: {
+              webStatus: "CONFIRMED",
+              amountPaid: sale.total,
+              amountDue: 0,
+              invoiceStatus: "PAID",
+              paidAt: now,
+              paymentReference: paymentRef || sale.paymentReference || "",
+            },
+          });
+          if (!moved.count) {
+            const current = await tx.sale.findUnique({ where: { id: sale.id }, select: { webStatus: true } });
+            throw needsReview(["PENDING_PAYMENT", "CANCELLED"].includes(current?.webStatus) ? "LATE_PAYMENT" : "DUPLICATE_PAYMENT");
+          }
+          await commitSaleHolds(tx, sale);
+        },
+      });
+      const buyer = sale.customerId ? await prisma.customer.findUnique({ where: { id: sale.customerId } }) : null;
+      const ref = sale.reference || sale.id;
+      if (result.outcome === "confirmed") {
+        await mailCustomer(buyer, "order", `Order ${ref} is confirmed.`);
+        await mailStaff(org.organizationId, "alertOrder", `Website order ${ref} is paid.`);
+      } else if (result.outcome === "review") {
+        await mailStaff(org.organizationId, "alertOrder", `Website order ${ref} has a payment that needs review (${result.reason}).`);
+      }
+      return res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
+    }
+    if ([3, 4, 5].includes(statusId)) {
       await prisma.$transaction(async (tx) => {
-        await releaseSaleHolds(tx, sale.id);
-        await tx.sale.update({ where: { id: sale.id }, data: { webStatus: "CANCELLED" } });
+        const moved = await tx.sale.updateMany({
+          where: { id: sale.id, webStatus: "PENDING_PAYMENT" },
+          data: { webStatus: "CANCELLED" },
+        });
+        if (moved.count) await releaseSaleHolds(tx, sale.id);
       });
     }
     res.status(200).json({ ok: true });

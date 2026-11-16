@@ -7,6 +7,18 @@ import { customerSession } from "../lib/customerSession.js";
 import { DOCUMENT_MIMES, contentDisposition, sniffFileType } from "../lib/fileCheck.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
+import { writeAudit } from "../lib/auditLog.js";
+import {
+  LOCK_TX,
+  acceptReviewPayments,
+  cents,
+  lockParent,
+  paymentTotals,
+  recordStaffPayment,
+  refundParent,
+  rejectReviewPayments,
+  statusError,
+} from "../lib/payments.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
@@ -78,6 +90,7 @@ function sendDocument(res, doc) {
 function publicRequest(row) {
   return {
     id: row.id,
+    reference: row.reference,
     destination: row.destination,
     petSummary: row.petSummary,
     status: row.status,
@@ -185,7 +198,7 @@ relocationShop.post("/", async (req, res) => {
       },
       include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
     });
-    await mailStaff(req.shopOrg.id, "alertRelocation", `Relocation request ${row.id} was submitted.`);
+    await mailStaff(req.shopOrg.id, "alertRelocation", `Relocation request ${row.reference || row.id} was submitted.`);
     res.status(201).json(publicRequest(row));
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not submit the request" });
@@ -287,6 +300,7 @@ relocationStaff.get("/", async (req, res) => {
       customer: { select: { id: true, name: true, email: true, phone: true } },
       pets: { include: { pet: true } },
       documents: { select: { id: true, fileName: true, mime: true, createdAt: true } },
+      payments: { orderBy: { createdAt: "asc" } },
     },
     orderBy: { createdAt: "desc" },
     take: 100,
@@ -304,15 +318,62 @@ relocationStaff.post("/:id/status", async (req, res) => {
     return res.status(400).json({ error: "That status change is not allowed" });
   }
   if (next === "QUOTE_SENT") return res.status(400).json({ error: "Send a quote with an amount" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
-    data: {
-      status: next,
-      history: pushHistory(row.history, next, String(req.body?.note || "").trim()),
-    },
+  // FR-64: a paid request is cancelled only with a refund decision: FULL_REFUND or NO_REFUND (with a reason).
+  const decision = String(req.body?.refundDecision || "").toUpperCase();
+  const note = String(req.body?.note || "").trim();
+  let refunded = 0;
+  if (next === "CANCELLED") {
+    const totals = await paymentTotals(prisma, "relocation", row.id);
+    if (totals.remaining > 0) {
+      if (!["FULL_REFUND", "NO_REFUND"].includes(decision)) {
+        return res.status(400).json({
+          error: "This request is paid. Choose to refund it in full or to keep the payment before cancelling.",
+          code: "REFUND_DECISION_REQUIRED",
+          remaining: totals.remaining,
+        });
+      }
+      if (decision === "NO_REFUND" && !note) {
+        return res.status(400).json({ error: "Give a reason for keeping the payment" });
+      }
+      if (decision === "FULL_REFUND") {
+        try {
+          await refundParent({
+            parentKind: "relocation",
+            parentId: row.id,
+            organizationId: row.organizationId,
+            amount: totals.remaining,
+            userId: req.user.sub,
+            method: totals.rows.some((p) => p.kind === "PAYMENT" && p.method === "ONLINE" && p.status === "CAPTURED") ? "ONLINE" : row.paymentMethod,
+            note: "Refund on cancel",
+          });
+          refunded = totals.remaining;
+        } catch (e) {
+          return res.status(e.status || 400).json({ error: e.message });
+        }
+      }
+    }
+  }
+  // Guarded transition so two staff actions cannot both apply.
+  const updated = await prisma.$transaction(async (tx) => {
+    const moved = await tx.relocationRequest.updateMany({ where: { id: row.id, status: row.status }, data: { status: next } });
+    if (!moved.count) throw statusError("The request changed. Refresh and try again.", 409);
+    const fresh = await tx.relocationRequest.findUnique({ where: { id: row.id } });
+    const historyNote = [note, refunded ? `Refunded ${refunded.toFixed(2)} QAR` : ""].filter(Boolean).join(" · ");
+    return tx.relocationRequest.update({
+      where: { id: row.id },
+      data: { history: pushHistory(fresh.history, next, historyNote) },
+    });
+  }).catch((e) => e);
+  if (updated instanceof Error) return res.status(updated.status || 400).json({ error: updated.message });
+  await writeAudit({
+    userId: req.user.sub,
+    action: "RELOCATION_STATUS",
+    entityType: "RelocationRequest",
+    entityId: row.id,
+    summary: `${row.reference || row.id}: ${row.status} -> ${next}${decision ? ` (${decision}${note ? `: ${note}` : ""})` : ""}`,
   });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `Relocation ${updated.id} is now ${updated.status}.`);
+  await mailCustomer(buyer, "relocation", `Relocation ${updated.reference || updated.id} is now ${updated.status}.`);
   res.json(updated);
 });
 
@@ -335,30 +396,132 @@ relocationStaff.post("/:id/quote", async (req, res) => {
       history: pushHistory(row.history, "QUOTE_SENT", req.body?.note ? String(req.body.note).trim() : ""),
     },
   });
+  await writeAudit({ userId: req.user.sub, action: "RELOCATION_QUOTE", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${amount.toFixed(2)}` });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `A quote of ${amount.toFixed(2)} QAR is ready.`);
+  await mailCustomer(buyer, "relocation", `A quote of ${amount.toFixed(2)} QAR is ready for relocation ${updated.reference || updated.id}.`);
   res.json(updated);
 });
 
+/**
+ * FR-64: staff record a cash or bank payment. Writes a Payment row (amount, method,
+ * reference, staff user) and an audit row; the QUOTE_SENT -> PAID change is guarded.
+ */
 relocationStaff.post("/:id/pay", async (req, res) => {
   const method = String(req.body?.method || "").toUpperCase();
   if (!["CASH", "BANK"].includes(method)) return res.status(400).json({ error: "Record cash or a bank transfer" });
+  const reference = String(req.body?.reference || "").trim();
+  if (method === "BANK" && !reference) return res.status(400).json({ error: "Enter the bank transfer reference" });
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
-  if (!row || row.status !== "QUOTE_SENT") return res.status(400).json({ error: "There is no quote to mark paid" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
-    data: {
-      status: "PAID",
-      paymentMethod: method,
-      paidAt: new Date(),
-      history: pushHistory(row.history, "PAID", method),
-    },
+  if (!row || row.status !== "QUOTE_SENT" || row.quoteAmount == null) return res.status(400).json({ error: "There is no quote to mark paid" });
+  const amount = req.body?.amount == null || req.body.amount === "" ? Number(row.quoteAmount) : Number(req.body.amount);
+  if (!Number.isFinite(amount) || cents(amount) !== cents(row.quoteAmount)) {
+    return res.status(400).json({ error: `The payment must be the quoted ${Number(row.quoteAmount).toFixed(2)} QAR` });
+  }
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      await lockParent(tx, "relocation", row.id);
+      const moved = await tx.relocationRequest.updateMany({
+        where: { id: row.id, status: "QUOTE_SENT", quoteAmount: row.quoteAmount },
+        data: { status: "PAID", paymentMethod: method, paidAt: new Date(), amountPaid: amount },
+      });
+      if (!moved.count) throw statusError("The request changed. Refresh and try again.", 409);
+      const payment = await recordStaffPayment(tx, {
+        parentKind: "relocation",
+        parentId: row.id,
+        organizationId: row.organizationId,
+        amount,
+        method,
+        reference,
+        userId: req.user.sub,
+        note: req.body?.note,
+      });
+      const fresh = await tx.relocationRequest.findUnique({ where: { id: row.id } });
+      const updated = await tx.relocationRequest.update({
+        where: { id: row.id },
+        data: { history: pushHistory(fresh.history, "PAID", method) },
+      });
+      return { updated, payment };
+    }, LOCK_TX);
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
+  }
+  await writeAudit({
+    userId: req.user.sub,
+    action: "RELOCATION_PAYMENT",
+    entityType: "Payment",
+    entityId: result.payment.id,
+    summary: `${row.reference || row.id} ${amount.toFixed(2)} ${method}${reference ? ` ref ${reference}` : ""}`,
   });
-  const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", `Relocation ${updated.id} is marked paid.`);
-  res.json(updated);
+  const buyer = await prisma.customer.findUnique({ where: { id: result.updated.customerId } });
+  await mailCustomer(buyer, "relocation", `Relocation ${result.updated.reference || result.updated.id} is marked paid.`);
+  res.json({ ...result.updated, payment: result.payment });
+});
+
+/** FR-77: refund a relocation payment in part or in full (gateway for online, recorded for cash/bank). */
+relocationStaff.post("/:id/refund", requireModule("relocation", "refund"), async (req, res) => {
+  const row = await prisma.relocationRequest.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId },
+    include: { customer: true },
+  });
+  if (!row) return res.status(404).json({ error: "Request not found" });
+  try {
+    const refund = await refundParent({
+      parentKind: "relocation",
+      parentId: row.id,
+      organizationId: row.organizationId,
+      amount: req.body?.amount,
+      userId: req.user.sub,
+      method: req.body?.method || (row.paymentMethod === "ONLINE" ? "ONLINE" : row.paymentMethod),
+      note: req.body?.note,
+    });
+    await writeAudit({ userId: req.user.sub, action: "RELOCATION_REFUND", entityType: "Payment", entityId: refund.id, summary: `${row.reference || row.id} ${Number(refund.amount).toFixed(2)} ${refund.method}` });
+    await mailCustomer(row.customer, "refund", `A refund of ${Number(refund.amount).toFixed(2)} QAR was sent for relocation ${row.reference || row.id}.`);
+    res.status(201).json(refund);
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
+/** FR-79: accept (mark paid) or refund an online payment that arrived late or for the wrong amount. */
+relocationStaff.post("/:id/resolve-payment", async (req, res) => {
+  const row = await prisma.relocationRequest.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId, paymentReview: true },
+  });
+  if (!row) return res.status(404).json({ error: "No payment is waiting for review" });
+  const accept = Boolean(req.body?.accept);
+  try {
+    if (accept) {
+      await prisma.$transaction(async (tx) => {
+        await lockParent(tx, "relocation", row.id);
+        const current = await tx.relocationRequest.findUnique({ where: { id: row.id } });
+        if (current.status !== "QUOTE_SENT") throw statusError("Only a request waiting for payment can accept it. Refund it instead.", 400);
+        const accepted = await acceptReviewPayments(tx, "relocation", row.id);
+        if (accepted <= 0) throw statusError("No payment is waiting for review", 404);
+        await tx.relocationRequest.update({
+          where: { id: row.id },
+          data: {
+            status: "PAID",
+            paymentMethod: "ONLINE",
+            paidAt: new Date(),
+            amountPaid: accepted,
+            paymentReview: false,
+            paymentReviewReason: null,
+            history: pushHistory(current.history, "PAID", "ONLINE"),
+          },
+        });
+      }, LOCK_TX);
+    } else {
+      await rejectReviewPayments({ parentKind: "relocation", parentId: row.id, userId: req.user.sub });
+      await prisma.relocationRequest.update({ where: { id: row.id }, data: { paymentReview: false, paymentReviewReason: null } });
+    }
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message });
+  }
+  await writeAudit({ userId: req.user.sub, action: "PAYMENT_REVIEW", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${row.paymentReviewReason}: ${accept ? "accepted" : "refunded"}` });
+  res.json({ id: row.id, reference: row.reference, accepted: accept });
 });
 
 relocationStaff.post("/:id/notes", async (req, res) => {

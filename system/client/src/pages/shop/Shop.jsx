@@ -482,6 +482,7 @@ export function ShopOrders() {
         {one ? (
           <>
             <h1>{one.status}</h1>
+            <div>{t("shop.reference")}: {one.reference}</div>
             <div>{money(one.total)} QAR · {one.fulfillment}</div>
             {(one.items || []).map((item, index) => (
               <div key={index}>{locale === "en" ? item.nameEn || item.name : item.name} · {item.sellBy === "WEIGHT" ? `${item.quantity / 1000} kg` : item.quantity}</div>
@@ -496,7 +497,7 @@ export function ShopOrders() {
   return (
     <div className="nc-shell" style={{ padding: 28 }}>
       <h1>{t("shop.orders")}</h1>
-      {rows.map((row) => <div key={row.id}><Link to={`/shop/orders/${row.id}`}>{row.status} · {money(row.total)} QAR</Link></div>)}
+      {rows.map((row) => <div key={row.id}><Link to={`/shop/orders/${row.id}`}>{row.reference} · {row.status} · {money(row.total)} QAR</Link></div>)}
       {msg ? <div>{msg}</div> : null}
     </div>
   );

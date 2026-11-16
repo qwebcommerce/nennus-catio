@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
-import { commitSaleHolds, releaseSaleHolds, restoreCommittedHolds } from "../lib/webOrder.js";
+import { recommitReleasedHolds, releaseSaleHolds, restoreCommittedHolds } from "../lib/webOrder.js";
+import { LOCK_TX, acceptReviewPayments, cents, lockParent, rejectReviewPayments, statusError } from "../lib/payments.js";
 import { refundSkipcashPayment } from "../lib/skipcash.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { mailCustomer } from "../lib/mailer.js";
@@ -14,17 +15,22 @@ router.use(requireModule("orders", "view"));
 const NEXT = {
   CONFIRMED: ["PREPARING", "CANCELLED"],
   PREPARING: ["OUT_FOR_DELIVERY", "READY_FOR_PICKUP", "CANCELLED"],
-  OUT_FOR_DELIVERY: ["DELIVERED"],
-  READY_FOR_PICKUP: ["COLLECTED"],
+  // FR-38 / FR-39: staff can still cancel once the order has left or is waiting at the counter.
+  OUT_FOR_DELIVERY: ["DELIVERED", "CANCELLED"],
+  READY_FOR_PICKUP: ["COLLECTED", "CANCELLED"],
 };
 
 router.get("/", async (req, res) => {
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.test(String(req.query.day || "")) ? String(req.query.day) : "";
+  const q = String(req.query.q || "").trim();
+  const review = req.query.review === "1";
   const rows = await prisma.sale.findMany({
     where: {
       orderChannel: "WEBSITE",
       branch: { organizationId: req.user.organizationId },
       ...(day ? { deliveryDate: new Date(`${day}T00:00:00.000Z`), fulfillment: "DELIVERY" } : {}),
+      ...(q ? { OR: [{ reference: { contains: q, mode: "insensitive" } }, { id: q }] } : {}),
+      ...(review ? { paymentReview: true } : {}),
     },
     orderBy: { createdAt: "desc" },
     take: 100,
@@ -33,6 +39,8 @@ router.get("/", async (req, res) => {
       items: { include: { product: { select: { name: true, nameEn: true, sellBy: true } }, variant: true } },
       deliveryWindow: true,
       deliveryArea: true,
+      refunds: { select: { id: true, total: true, createdAt: true } },
+      payments: { select: { id: true, kind: true, method: true, status: true, amount: true, reviewReason: true, createdAt: true } },
     },
   });
   res.json(rows);
@@ -79,72 +87,143 @@ router.post("/:id/dispatch", requireModule("orders", "edit"), async (req, res) =
   res.json({ id: updated.id, fleetwizReference: updated.fleetwizReference, fleetwizStatus: updated.fleetwizStatus });
 });
 
+/**
+ * FR-79: staff resolve a payment that could not confirm the order automatically
+ * (wrong amount, late payment, stock changed, duplicate, or a refund due after a customer cancel).
+ * accept=true keeps the money and confirms the order (taking stock again if the hold was released);
+ * accept=false refunds the reviewed payment(s) through the gateway.
+ */
 router.post("/:id/resolve-payment", requireModule("orders", "edit"), async (req, res) => {
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, orderChannel: "WEBSITE", paymentReview: true, branch: { organizationId: req.user.organizationId } },
+    include: { refunds: true },
   });
-  if (!sale || sale.webStatus !== "PENDING_PAYMENT") return res.status(404).json({ error: "No payment is waiting for review" });
-  if (req.body?.accept) {
-    await prisma.$transaction(async (tx) => {
-      await commitSaleHolds(tx, sale);
-      await tx.sale.update({
-        where: { id: sale.id },
-        data: { webStatus: "CONFIRMED", paymentReview: false, amountPaid: sale.total, amountDue: 0, invoiceStatus: "PAID", paidAt: new Date() },
+  if (!sale) return res.status(404).json({ error: "No payment is waiting for review" });
+  const accept = Boolean(req.body?.accept);
+  try {
+    if (sale.paymentReviewReason === "REFUND_DUE") {
+      // Customer cancelled a paid order: refund what is left, or keep it (staff decision, audited).
+      if (!accept) {
+        const already = sale.refunds.reduce((sum, row) => sum + cents(row.total), 0);
+        const left = (cents(sale.amountPaid) - already) / 100;
+        if (left > 0) await refundOrder({ sale, amount: left, userId: req.user.sub, note: "Refund after customer cancel" });
+      }
+      await prisma.sale.update({ where: { id: sale.id }, data: { paymentReview: false, paymentReviewReason: null } });
+    } else if (accept) {
+      await prisma.$transaction(async (tx) => {
+        await lockParent(tx, "sale", sale.id);
+        const current = await tx.sale.findUnique({ where: { id: sale.id } });
+        if (!["PENDING_PAYMENT", "CANCELLED"].includes(current.webStatus)) {
+          throw statusError("This order is already confirmed. Refund the extra payment instead.", 400);
+        }
+        const accepted = await acceptReviewPayments(tx, "sale", sale.id);
+        if (accepted <= 0) throw statusError("No payment is waiting for review", 404);
+        // Takes each HELD or released hold exactly once; stock never goes below zero.
+        await recommitReleasedHolds(tx, current);
+        await tx.sale.update({
+          where: { id: sale.id },
+          data: {
+            webStatus: "CONFIRMED",
+            paymentReview: false,
+            paymentReviewReason: null,
+            amountPaid: accepted,
+            amountDue: Math.max(0, Number(current.total) - accepted),
+            invoiceStatus: "PAID",
+            paidAt: new Date(),
+          },
+        });
+      }, LOCK_TX);
+    } else {
+      await rejectReviewPayments({ parentKind: "sale", parentId: sale.id, userId: req.user.sub });
+      await prisma.$transaction(async (tx) => {
+        const moved = await tx.sale.updateMany({ where: { id: sale.id, webStatus: "PENDING_PAYMENT" }, data: { webStatus: "CANCELLED" } });
+        if (moved.count) await releaseSaleHolds(tx, sale.id);
+        await tx.sale.update({ where: { id: sale.id }, data: { paymentReview: false, paymentReviewReason: null } });
       });
-    });
-  } else {
-    await prisma.$transaction(async (tx) => {
-      await releaseSaleHolds(tx, sale.id);
-      await tx.sale.update({ where: { id: sale.id }, data: { webStatus: "CANCELLED", paymentReview: false } });
-    });
+    }
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message || "Could not resolve the payment" });
   }
-  await writeAudit({ userId: req.user.sub, action: "PAYMENT_REVIEW", entityType: "Sale", entityId: sale.id, summary: req.body?.accept ? "accepted" : "rejected" });
-  res.json({ id: sale.id, accepted: Boolean(req.body?.accept) });
+  await writeAudit({ userId: req.user.sub, action: "PAYMENT_REVIEW", entityType: "Sale", entityId: sale.id, summary: `${sale.paymentReviewReason || "REVIEW"}: ${accept ? "accepted" : "refunded"}` });
+  res.json({ id: sale.id, reference: sale.reference, accepted: accept });
 });
+
+/**
+ * FR-77: refunds can never add up to more than was captured. The order row is locked while
+ * the remaining amount is checked and the refund row is written; the gateway is called after
+ * the lock is released and the row is removed again if the gateway refuses.
+ */
+async function refundOrder({ sale, amount, userId, restock, note }) {
+  const refund = await prisma.$transaction(async (tx) => {
+    await lockParent(tx, "sale", sale.id);
+    const fresh = await tx.sale.findUnique({ where: { id: sale.id }, include: { refunds: true, items: true } });
+    const already = fresh.refunds.reduce((sum, row) => sum + cents(row.total), 0);
+    const remaining = cents(fresh.amountPaid) - already;
+    if (!Number.isFinite(amount) || amount <= 0 || cents(amount) > remaining) {
+      throw statusError(`Refund amount is not valid. ${(Math.max(0, remaining) / 100).toFixed(2)} QAR is left to refund.`, 400);
+    }
+    const full = cents(amount) === remaining;
+    return tx.refund.create({
+      data: {
+        branchId: fresh.branchId,
+        userId,
+        saleId: fresh.id,
+        total: new Prisma.Decimal(amount.toFixed(2)),
+        note: note || "SkipCash refund",
+        ...(restock && full
+          ? {
+              items: {
+                create: fresh.items.map((item) => ({
+                  productId: item.productId,
+                  quantity: item.quantity,
+                  unitPrice: item.unitPrice,
+                  subtotal: item.subtotal,
+                  ...(item.costAmount != null ? { costAmount: item.costAmount } : {}),
+                })),
+              },
+            }
+          : {}),
+      },
+      include: { items: true },
+    });
+  }, LOCK_TX);
+  let gateway;
+  try {
+    gateway = await refundSkipcashPayment({ id: sale.gatewayPaymentId, amount });
+  } catch (e) {
+    await prisma.refundItem.deleteMany({ where: { refundId: refund.id } });
+    await prisma.refund.delete({ where: { id: refund.id } });
+    throw statusError(e.message || "SkipCash did not refund the payment", e.status || 502);
+  }
+  const done = await prisma.refund.update({ where: { id: refund.id }, data: { gatewayRefundId: gateway.id } });
+  if (restock && refund.items.length) {
+    await prisma.$transaction((tx) => restoreCommittedHolds(tx, sale.id));
+  }
+  return done;
+}
 
 router.post("/:id/refund", requireModule("orders", "refund"), async (req, res) => {
   const amount = Number(req.body?.amount);
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, orderChannel: "WEBSITE", branch: { organizationId: req.user.organizationId } },
-    include: { refunds: true, customer: true, items: true },
+    include: { customer: true },
   });
-  if (!sale?.gatewayPaymentId || sale.webStatus === "PENDING_PAYMENT" || sale.webStatus === "CANCELLED") {
+  // A paid order stays refundable after a cancel (FR-38, FR-77): what matters is money captured.
+  if (!sale?.gatewayPaymentId || !(Number(sale.amountPaid) > 0)) {
     return res.status(400).json({ error: "This order has no confirmed card payment" });
   }
-  const already = sale.refunds.reduce((sum, refund) => sum + Number(refund.total), 0);
-  const remaining = Number(sale.total) - already;
-  if (!Number.isFinite(amount) || amount <= 0 || amount > remaining + 0.01) {
-    return res.status(400).json({ error: "Refund amount is not valid" });
+  let refund;
+  try {
+    refund = await refundOrder({ sale, amount, userId: req.user.sub, restock: Boolean(req.body?.restock) });
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.message || "Refund failed" });
   }
-  const gateway = await refundSkipcashPayment({ id: sale.gatewayPaymentId, amount });
-  const refund = await prisma.refund.create({
-    data: {
-      branchId: sale.branchId,
-      userId: req.user.sub,
-      saleId: sale.id,
-      total: new Prisma.Decimal(amount.toFixed(2)),
-      gatewayRefundId: gateway.id,
-      note: "SkipCash refund",
-      ...(req.body?.restock && Math.abs(amount - remaining) < 0.05
-        ? {
-            items: {
-              create: sale.items.map((item) => ({
-                productId: item.productId,
-                quantity: item.quantity,
-                unitPrice: item.unitPrice,
-                subtotal: item.subtotal,
-                ...(item.costAmount != null ? { costAmount: item.costAmount } : {}),
-              })),
-            },
-          }
-        : {}),
-    },
-  });
-  if (req.body?.restock && Math.abs(amount - remaining) < 0.05) {
-    await prisma.$transaction((tx) => restoreCommittedHolds(tx, sale.id));
+  const refunds = await prisma.refund.findMany({ where: { saleId: sale.id }, select: { total: true } });
+  if (refunds.reduce((sum, row) => sum + cents(row.total), 0) >= cents(sale.amountPaid)) {
+    await prisma.sale.updateMany({ where: { id: sale.id, paymentReviewReason: "REFUND_DUE" }, data: { paymentReview: false, paymentReviewReason: null } });
   }
-  await writeAudit({ userId: req.user.sub, action: "ONLINE_REFUND", entityType: "Refund", entityId: refund.id, summary: amount.toFixed(2) });
-  await mailCustomer(sale.customer, "refund", `A refund of ${amount.toFixed(2)} QAR was sent for order ${sale.id}.`);
+  await writeAudit({ userId: req.user.sub, action: "ONLINE_REFUND", entityType: "Refund", entityId: refund.id, summary: `${sale.reference || sale.id} ${amount.toFixed(2)}` });
+  await mailCustomer(sale.customer, "refund", `A refund of ${amount.toFixed(2)} QAR was sent for order ${sale.reference || sale.id}.`);
   res.status(201).json(refund);
 });
 
@@ -176,14 +255,22 @@ router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => 
         err.status = 400;
         throw err;
       }
-      if (next === "CANCELLED") await restoreCommittedHolds(tx, row.id);
-      return tx.sale.update({
-        where: { id: row.id },
+      // Guarded transition: of several parallel changes (or instances) only one applies.
+      const moved = await tx.sale.updateMany({
+        where: { id: row.id, webStatus: row.webStatus },
         data: {
           webStatus: next,
           ...(next === "CANCELLED" ? { invoiceStatus: "CANCELLED" } : {}),
+          ...(next === "CANCELLED" && Number(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
         },
       });
+      if (!moved.count) {
+        const err = new Error("The order changed. Refresh and try again.");
+        err.status = 409;
+        throw err;
+      }
+      if (next === "CANCELLED") await restoreCommittedHolds(tx, row.id);
+      return tx.sale.findUnique({ where: { id: row.id } });
     });
     await writeAudit({
       userId: req.user.sub,
@@ -194,7 +281,7 @@ router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => 
     });
     if (sale.customerId) {
       const buyer = await prisma.customer.findUnique({ where: { id: sale.customerId } });
-      await mailCustomer(buyer, "order", `Order ${sale.id} is now ${sale.webStatus}.`);
+      await mailCustomer(buyer, "order", `Order ${sale.reference || sale.id} is now ${sale.webStatus}.`);
     }
     res.json({ id: sale.id, status: sale.webStatus });
   } catch (e) {

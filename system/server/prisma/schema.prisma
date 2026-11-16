@@ -56,6 +56,8 @@ model Organization {
   whatsappNumber String?
   /// Added to a grooming booking when the customer chooses a home visit.
   homeVisitFee Decimal @default(0)
+  /// A customer may cancel a grooming booking up to this many hours before it starts.
+  bookingCancelHours Int @default(24)
   phone           String?
   publicEmail     String?
   publicAddress   String?
@@ -1263,6 +1265,14 @@ model Appointment {
   holdExpiresAt   DateTime?
   gatewayPaymentId String?
   paymentReference String?
+  /// Captured online payment (refunds are Payment rows of kind REFUND).
+  amountPaid      Decimal           @default(0)
+  paidAt          DateTime?
+  /// A payment that staff must resolve (late, wrong amount, refund due).
+  paymentReview   Boolean           @default(false)
+  paymentReviewReason String?
+  /// Short human reference customers and staff quote (NFR-22).
+  reference       String?  @unique @default(dbgenerated("nc_ref('NC-GRM-'::text, 'nc_booking_ref_seq'::regclass)"))
   notes           String?
   status          AppointmentStatus @default(BOOKED)
   startAt         DateTime
@@ -1275,6 +1285,7 @@ model Appointment {
   updatedAt       DateTime          @updatedAt
   reminders       AppointmentReminder[]
   commissionEntries CommissionEntry[]
+  payments        Payment[]
 
   @@index([organizationId, branchId, startAt])
   @@index([organizationId, groomerId, startAt])
@@ -1327,6 +1338,10 @@ model Sale {
   fleetwizStatus   String?
   /// Gateway amount did not match the order. Staff decide.
   paymentReview    Boolean         @default(false)
+  /// Why the payment needs staff: AMOUNT_MISMATCH, LATE_PAYMENT, STOCK_CHANGED, DUPLICATE_PAYMENT.
+  paymentReviewReason String?
+  /// Short human reference customers and staff quote (NFR-22).
+  reference        String?  @unique @default(dbgenerated("nc_ref('NC-ORD-'::text, 'nc_order_ref_seq'::regclass)"))
   promotionDiscount Decimal        @default(0)
   clientMutationId String?         @unique
   total            Decimal
@@ -1367,6 +1382,7 @@ model Sale {
   loyaltyLedgers   LoyaltyLedger[]
   customerAccountLedgers CustomerAccountLedger[]
   stockHolds       StockHold[]
+  payments         Payment[]
 
   @@unique([invoiceNumber])
 }
@@ -1961,10 +1977,16 @@ model RelocationRequest {
   paymentMethod  String?
   gatewayPaymentId String?
   paidAt         DateTime?
+  amountPaid     Decimal          @default(0)
+  paymentReview  Boolean          @default(false)
+  paymentReviewReason String?
+  /// Short human reference customers and staff quote (NFR-22).
+  reference      String?  @unique @default(dbgenerated("nc_ref('NC-REL-'::text, 'nc_relocation_ref_seq'::regclass)"))
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   pets           RelocationPet[]
   documents      RelocationDocument[]
+  payments       Payment[]
 
   @@index([organizationId, status])
   @@index([customerId])
@@ -2034,4 +2056,37 @@ model Vehicle {
   updatedAt      DateTime     @updatedAt
 
   @@index([organizationId, isActive])
+}
+
+/// Money received or returned for exactly one order, booking or relocation quote ("One payment parent").
+model Payment {
+  id                  String             @id @default(cuid())
+  organizationId      String
+  saleId              String?
+  sale                Sale?              @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  appointmentId       String?
+  appointment         Appointment?       @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  relocationRequestId String?
+  relocationRequest   RelocationRequest? @relation(fields: [relocationRequestId], references: [id], onDelete: Restrict)
+  /// PAYMENT or REFUND.
+  kind                String             @default("PAYMENT")
+  /// ONLINE, CASH or BANK.
+  method              String
+  /// CAPTURED, REVIEW (staff must resolve), REJECTED (refunded after review), PENDING (refund in flight).
+  status              String             @default("CAPTURED")
+  amount              Decimal
+  currency            String             @default("QAR")
+  reference           String?
+  gatewayPaymentId    String?
+  gatewayRefundId     String?
+  reviewReason        String?
+  /// Staff user who recorded it (null for gateway notifications).
+  userId              String?
+  note                String?
+  createdAt           DateTime           @default(now())
+
+  @@index([saleId])
+  @@index([appointmentId])
+  @@index([relocationRequestId])
+  @@index([organizationId, status])
 }
