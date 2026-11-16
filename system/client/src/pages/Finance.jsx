@@ -9,7 +9,7 @@ function money(n) {
   return Number(n || 0).toFixed(2);
 }
 
-const CHANNELS = ["IN_STORE", "VAN", "WEBSITE"];
+const CHANNELS = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION"];
 const EXPORTS = ["transactions", "profit", "stockvalue", "bills", "payments", "expenses", "cashups", "orders", "bookings", "customers", "products"];
 
 function Row({ label, value, strong, indent }) {
@@ -127,15 +127,25 @@ export default function Finance() {
             <Row indent label={t("fd.cashTaken")} value={mi?.cashSales} />
             <Row indent label={t("fd.cardTaken")} value={mi?.cardSales} />
             <Row indent label={t("fd.bankTaken")} value={mi?.bankSales} />
-            <Row indent label={t("fd.collections")} value={mi?.accountCollections} />
+            <Row indent label={t("fd.fawranTaken")} value={mi?.fawranSales} />
+            <Row indent label={t("fd.groomingIn")} value={mi?.grooming} />
             <Row indent label={t("fd.relocationIn")} value={mi?.relocation} />
+            <Row indent label={t("fd.collections")} value={mi?.accountCollections} />
+            {["cash", "card", "bank", "fawran"].map((key) => (
+              <Row key={`in-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mi?.[key]} />
+            ))}
             <Row label={t("shop.moneyOut")} value={summary.moneyOut} strong />
             <Row indent label={t("fd.refundsCash")} value={mo?.refundsCash} />
-            <Row indent label={t("fd.refundsCard")} value={mo?.refundsCardOrBank} />
+            <Row indent label={t("fd.refundsCard")} value={mo?.refundsCard} />
+            <Row indent label={t("fd.refundsBank")} value={mo?.refundsBank} />
+            <Row indent label={t("fd.refundsFawran")} value={mo?.refundsFawran} />
             <Row indent label={t("fd.supplierCash")} value={mo?.supplierPaymentsCash} />
             <Row indent label={t("fd.supplierBank")} value={mo?.supplierPaymentsBank} />
             <Row indent label={t("fd.expensesCash")} value={mo?.expensesCash} />
             <Row indent label={t("fd.expensesBank")} value={mo?.expensesBank} />
+            {["cash", "card", "bank", "fawran"].map((key) => (
+              <Row key={`out-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mo?.[key]} />
+            ))}
             <Row label={t("fd.net")} value={summary.net} strong />
             {channel ? <p className="fd-muted">{t("fd.channelNote")}</p> : null}
           </section>
@@ -156,7 +166,7 @@ export default function Finance() {
             <span className="sr-only">{t("fd.type")}</span>
             <select value={type} onChange={(e) => setType(e.target.value)} aria-label={t("fd.type")}>
               <option value="">{t("fd.allTypes")}</option>
-              <option value="sale">{statusLabel("txType", "SALE", locale)}</option>
+              <option value="sale">{`${statusLabel("txType", "SALE", locale)} / ${statusLabel("txType", "PAYMENT", locale)}`}</option>
               <option value="refund">{statusLabel("txType", "REFUND", locale)}</option>
             </select>
           </label>
@@ -204,6 +214,7 @@ export default function Finance() {
                 </tbody>
               </table>
             </div>
+            <p className="fd-muted">{t("fd.serviceNote")}</p>
             {list.truncated ? <p className="fd-muted">{t("fd.truncated")}</p> : null}
           </>
         ) : null}

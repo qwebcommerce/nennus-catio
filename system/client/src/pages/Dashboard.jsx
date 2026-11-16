@@ -177,10 +177,10 @@ export default function Dashboard() {
               <div className="dash-section-label">{t("dashboard.overview")}</div>
 
               <div className="dash-mini-kpis">
-                {["IN_STORE", "VAN", "WEBSITE"].map((key) => (
+                {["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION"].map((key) => (
                   <div key={key} className="dash-mini-kpi">
                     <strong>{cur(summary.channelsToday?.[key]?.total || 0)}</strong>
-                    <span>{t(key === "VAN" ? "shop.channelVan" : key === "WEBSITE" ? "shop.channelWeb" : "shop.channelStore")} · {summary.channelsToday?.[key]?.count || 0}</span>
+                    <span>{t({ VAN: "shop.channelVan", WEBSITE: "shop.channelWeb", GROOMING: "shop.channelGrooming", RELOCATION: "shop.channelRelocation" }[key] || "shop.channelStore")} · {summary.channelsToday?.[key]?.count || 0}</span>
                   </div>
                 ))}
                 <div className="dash-mini-kpi"><strong>{summary.waitingOrders || 0}</strong><span>{t("shop.waiting")}</span></div>

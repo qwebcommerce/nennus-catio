@@ -4,7 +4,7 @@ import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js"
 import { listLowStock } from "../lib/lowStock.js";
 import { dec, money, sumDec } from "../lib/money.js";
 import { qatarDayStart, qatarDayKey, qatarMonthStart, qatarRange, qatarToday } from "../lib/qatarTime.js";
-import { COUNTED_SALE } from "../lib/financeData.js";
+import { COUNTED_SALE, loadServicePayments } from "../lib/financeData.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -65,6 +65,17 @@ router.get("/summary", async (req, res) => {
     _sum: { total: true },
     _count: true,
   });
+  // FR-81: grooming and relocation payments taken today (gateway or staff-recorded, not under review).
+  const servicePayments = await loadServicePayments(
+    req.user.organizationId,
+    { from: today.start, to: today.end },
+    { branchId: branchId ? String(branchId) : "" },
+  );
+  const serviceToday = {};
+  for (const key of ["GROOMING", "RELOCATION"]) {
+    const income = servicePayments.filter((row) => row.channel === key && row.kind === "PAYMENT");
+    serviceToday[key] = { total: money(sumDec(income, (row) => row.amount)), count: income.length };
+  }
   const waitingOrders = await prisma.sale.count({
     where: {
       ...branchFilter,
@@ -107,7 +118,10 @@ router.get("/summary", async (req, res) => {
     estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? money(revenueMonth.minus(costMonth)).toFixed(2) : null,
     lowStockAlerts: lowStockItems.length,
     lowStockItems,
-    channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: money(row._sum.total), count: row._count }])),
+    channelsToday: {
+      ...Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: money(row._sum.total), count: row._count }])),
+      ...serviceToday,
+    },
     waitingOrders,
     todayGrooming,
   });

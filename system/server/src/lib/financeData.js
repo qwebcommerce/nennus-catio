@@ -2,7 +2,20 @@ import { Prisma } from "./prisma-client-bundle.js";
 import { prisma } from "./prisma.js";
 import { dec, money, sumDec } from "./money.js";
 
-export const CHANNELS = ["IN_STORE", "VAN", "WEBSITE"];
+/** Shop sales channels (Sale rows). */
+export const SALE_CHANNELS = ["IN_STORE", "VAN", "WEBSITE"];
+/** Service income that is paid through Payment rows (lib/payments.js), not Sale rows. */
+export const SERVICE_CHANNELS = ["GROOMING", "RELOCATION"];
+export const CHANNELS = [...SALE_CHANNELS, ...SERVICE_CHANNELS];
+const TENDERS = ["cash", "card", "bank", "fawran"];
+
+function emptyTenders() {
+  return { cash: dec(0), card: dec(0), bank: dec(0), fawran: dec(0) };
+}
+
+function tenderSum(t) {
+  return t.cash.plus(t.card).plus(t.bank).plus(t.fawran);
+}
 
 /** A sale counts in finance once it is a real sale: not cancelled, not waiting for payment. */
 export const COUNTED_SALE = {
@@ -30,12 +43,13 @@ function refundChannel(refund) {
   return refund.branch?.kind === "VAN" ? "VAN" : "IN_STORE";
 }
 
-/** How a tender is grouped for money in / out. */
+/** How a tender is grouped for money in / out: cash, card / gateway, bank (and links), Fawran. */
 function tenderGroup(method) {
   const m = String(method || "").toUpperCase();
   if (m === "CASH" || m === "ON_DELIVERY") return "cash";
   if (m === "CARD" || m === "ONLINE") return "card";
-  if (m === "FAWRAN" || m === "PAYMENT_LINK" || m === "BANK") return "bank";
+  if (m === "FAWRAN") return "fawran";
+  if (m === "PAYMENT_LINK" || m === "BANK") return "bank";
   return null;
 }
 
@@ -52,7 +66,7 @@ function parseSplits(splits) {
 
 /** Money actually taken for a sale, split by tender group. On-account amounts are not money in. */
 export function takenByTender(sale) {
-  const out = { cash: dec(0), card: dec(0), bank: dec(0) };
+  const out = emptyTenders();
   if (sale.paymentMethod === "SPLIT") {
     for (const row of parseSplits(sale.paymentSplits) || []) {
       const group = tenderGroup(row?.method);
@@ -67,7 +81,7 @@ export function takenByTender(sale) {
 
 /** Splits a refund over the tenders of its sale, in proportion. */
 function refundByTender(refund) {
-  const out = { cash: dec(0), card: dec(0), bank: dec(0) };
+  const out = emptyTenders();
   const total = dec(refund.total);
   const sale = refund.sale;
   if (!sale) {
@@ -75,14 +89,15 @@ function refundByTender(refund) {
     return out;
   }
   const taken = takenByTender(sale);
-  const takenTotal = taken.cash.plus(taken.card).plus(taken.bank);
+  const takenTotal = tenderSum(taken);
   if (takenTotal.lte(0)) {
     out.card = total;
     return out;
   }
   out.cash = total.mul(taken.cash).div(takenTotal).toDecimalPlaces(2);
   out.bank = total.mul(taken.bank).div(takenTotal).toDecimalPlaces(2);
-  out.card = total.minus(out.cash).minus(out.bank);
+  out.fawran = total.mul(taken.fawran).div(takenTotal).toDecimalPlaces(2);
+  out.card = total.minus(out.cash).minus(out.bank).minus(out.fawran);
   return out;
 }
 
@@ -103,7 +118,8 @@ const SALE_SELECT = {
 };
 
 /** Sales in [from, to) that count, with optional channel / location. */
-export function loadSales(orgId, { from, to }, { channel, branchId } = {}, extra = {}) {
+export async function loadSales(orgId, { from, to }, { channel, branchId } = {}, extra = {}) {
+  if (channel && !SALE_CHANNELS.includes(channel)) return [];
   return prisma.sale.findMany({
     where: {
       branch: { organizationId: orgId },
@@ -122,6 +138,7 @@ export function loadSales(orgId, { from, to }, { channel, branchId } = {}, extra
  * A refund with no sale is put on the location's channel.
  */
 export async function loadRefunds(orgId, { from, to }, { channel, branchId } = {}, extra = {}) {
+  if (channel && !SALE_CHANNELS.includes(channel)) return [];
   const rows = await prisma.refund.findMany({
     where: {
       branch: { organizationId: orgId },
@@ -161,25 +178,74 @@ export async function loadRefunds(orgId, { from, to }, { channel, branchId } = {
     .filter((refund) => !channel || refund.channel === channel);
 }
 
+/** Payment statuses that count as money in: CAPTURED, or REJECTED (it came in and went back out through its refund row). */
+const COUNTED_SERVICE_PAYMENT = ["CAPTURED", "REJECTED"];
+
+/**
+ * Grooming booking and relocation quote money (Payment rows from lib/payments.js: gateway
+ * payments and staff-recorded cash / bank payments) dated in [from, to). A payment under
+ * REVIEW (or being rejected) is left out until staff resolve it. Refunds count once captured,
+ * on the refund's own date. Relocation has no location, so a location filter leaves it out.
+ */
+export async function loadServicePayments(orgId, { from, to }, { channel, branchId } = {}) {
+  if (channel && !SERVICE_CHANNELS.includes(channel)) return [];
+  const parents = [];
+  if (!channel || channel === "GROOMING") parents.push({ appointmentId: { not: null }, ...(branchId ? { appointment: { branchId } } : {}) });
+  if ((!channel || channel === "RELOCATION") && !branchId) parents.push({ relocationRequestId: { not: null } });
+  if (!parents.length) return [];
+  const rows = await prisma.payment.findMany({
+    where: {
+      organizationId: orgId,
+      createdAt: { gte: from, lt: to },
+      OR: [
+        { kind: "PAYMENT", status: { in: COUNTED_SERVICE_PAYMENT } },
+        { kind: "REFUND", status: "CAPTURED" },
+      ],
+      AND: [{ OR: parents }],
+    },
+    select: {
+      id: true,
+      kind: true,
+      method: true,
+      status: true,
+      amount: true,
+      reference: true,
+      createdAt: true,
+      appointmentId: true,
+      relocationRequestId: true,
+      appointment: {
+        select: {
+          reference: true,
+          branchId: true,
+          branch: { select: { id: true, name: true, nameEn: true } },
+          customer: { select: { name: true } },
+        },
+      },
+      relocationRequest: { select: { reference: true, customer: { select: { name: true } } } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.map((row) => ({ ...row, channel: row.appointmentId ? "GROOMING" : "RELOCATION" }));
+}
+
 /** Profit and loss plus money in / out for the range. All sums are exact decimals. */
 export async function financeSummary(orgId, dates, filters = {}) {
-  const [sales, refunds] = await Promise.all([
+  const [sales, refunds, servicePayments] = await Promise.all([
     loadSales(orgId, dates, filters, { items: { select: { costAmount: true } } }),
     loadRefunds(orgId, dates, filters, { items: { select: { costAmount: true } } }),
+    loadServicePayments(orgId, dates, filters),
   ]);
   const byChannel = Object.fromEntries(CHANNELS.map((key) => [key, { revenue: dec(0), refunds: dec(0), cogs: dec(0), orders: 0, refundCount: 0 }]));
-  const taken = { cash: dec(0), card: dec(0), bank: dec(0) };
+  const taken = emptyTenders();
   for (const sale of sales) {
     const row = byChannel[sale.orderChannel] || byChannel.IN_STORE;
     row.revenue = row.revenue.plus(dec(sale.total));
     row.cogs = row.cogs.plus(sumDec(sale.items, (item) => item.costAmount));
     row.orders += 1;
     const t = takenByTender(sale);
-    taken.cash = taken.cash.plus(t.cash);
-    taken.card = taken.card.plus(t.card);
-    taken.bank = taken.bank.plus(t.bank);
+    for (const key of TENDERS) taken[key] = taken[key].plus(t[key]);
   }
-  const refundOut = { cash: dec(0), card: dec(0), bank: dec(0) };
+  const refundOut = emptyTenders();
   for (const refund of refunds) {
     const row = byChannel[refund.channel] || byChannel.IN_STORE;
     row.refunds = row.refunds.plus(dec(refund.total));
@@ -187,14 +253,30 @@ export async function financeSummary(orgId, dates, filters = {}) {
     row.cogs = row.cogs.minus(sumDec(refund.items, (item) => item.costAmount));
     row.refundCount += 1;
     const t = refundByTender(refund);
-    refundOut.cash = refundOut.cash.plus(t.cash);
-    refundOut.card = refundOut.card.plus(t.card);
-    refundOut.bank = refundOut.bank.plus(t.bank);
+    for (const key of TENDERS) refundOut[key] = refundOut[key].plus(t[key]);
+  }
+  // Grooming and relocation: each captured payment is income, each captured refund goes out.
+  const serviceIn = { GROOMING: emptyTenders(), RELOCATION: emptyTenders() };
+  const serviceOut = { GROOMING: emptyTenders(), RELOCATION: emptyTenders() };
+  for (const payment of servicePayments) {
+    const row = byChannel[payment.channel];
+    const group = tenderGroup(payment.method) || "card";
+    const amount = dec(payment.amount);
+    if (payment.kind === "REFUND") {
+      row.refunds = row.refunds.plus(amount);
+      row.refundCount += 1;
+      serviceOut[payment.channel][group] = serviceOut[payment.channel][group].plus(amount);
+      refundOut[group] = refundOut[group].plus(amount);
+    } else {
+      row.revenue = row.revenue.plus(amount);
+      row.orders += 1;
+      serviceIn[payment.channel][group] = serviceIn[payment.channel][group].plus(amount);
+    }
   }
 
   const range = { gte: dates.from, lt: dates.to };
-  // Expenses, supplier payments, collections and relocation are business-wide (no channel).
-  const [expenseRows, supplierRows, collections, relocation] = await Promise.all([
+  // Expenses, supplier payments and collections are business-wide (no channel).
+  const [expenseRows, supplierRows, collections] = await Promise.all([
     prisma.expense.groupBy({
       by: ["paidFrom"],
       where: { organizationId: orgId, expenseDate: range },
@@ -215,29 +297,20 @@ export async function financeSummary(orgId, dates, filters = {}) {
       },
       _sum: { amount: true },
     }),
-    prisma.relocationRequest.groupBy({
-      by: ["paymentMethod"],
-      where: { organizationId: orgId, paidAt: range, status: { in: ["PAID", "IN_PROGRESS", "COMPLETED"] } },
-      _sum: { quoteAmount: true },
-    }),
   ]);
   const expenses = { CASH: dec(0), BANK: dec(0) };
   for (const row of expenseRows) expenses[row.paidFrom === "CASH" ? "CASH" : "BANK"] = expenses[row.paidFrom === "CASH" ? "CASH" : "BANK"].plus(dec(row._sum.amount));
   const supplier = { CASH: dec(0), BANK: dec(0) };
   for (const row of supplierRows) supplier[row.method === "CASH" ? "CASH" : "BANK"] = supplier[row.method === "CASH" ? "CASH" : "BANK"].plus(dec(row._sum.amount));
-  const collected = { cash: dec(0), card: dec(0), bank: dec(0) };
+  const collected = emptyTenders();
   for (const row of collections) {
     const group = tenderGroup(row.paymentMethod) || "cash";
     // Payments are stored as negative ledger amounts.
     collected[group] = collected[group].plus(dec(row._sum.amount).abs());
   }
-  const relocationIn = { cash: dec(0), card: dec(0), bank: dec(0) };
-  for (const row of relocation) {
-    const group = tenderGroup(row.paymentMethod) || "card";
-    relocationIn[group] = relocationIn[group].plus(dec(row._sum.quoteAmount));
-  }
-  // Channel-filtered views show only sales money; business-wide figures need no channel filter.
+  // Channel-filtered views show only that channel's money; business-wide figures need no channel filter.
   const businessWide = !filters.channel;
+  const wide = (value) => (businessWide ? value : dec(0));
 
   const channels = Object.fromEntries(Object.entries(byChannel).map(([key, row]) => [key, {
     revenue: money(row.revenue),
@@ -250,16 +323,21 @@ export async function financeSummary(orgId, dates, filters = {}) {
   const revenue = sumDec(Object.values(byChannel), (row) => row.revenue);
   const refundTotal = sumDec(Object.values(byChannel), (row) => row.refunds);
   const cogs = sumDec(Object.values(byChannel), (row) => row.cogs);
-  const expenseTotal = businessWide ? expenses.CASH.plus(expenses.BANK) : dec(0);
-  const supplierTotal = businessWide ? supplier.CASH.plus(supplier.BANK) : dec(0);
+  const expenseTotal = wide(expenses.CASH.plus(expenses.BANK));
+  const supplierTotal = wide(supplier.CASH.plus(supplier.BANK));
 
-  const inCash = taken.cash.plus(businessWide ? collected.cash.plus(relocationIn.cash) : 0);
-  const inCard = taken.card.plus(businessWide ? collected.card.plus(relocationIn.card) : 0);
-  const inBank = taken.bank.plus(businessWide ? collected.bank.plus(relocationIn.bank) : 0);
-  const outCash = refundOut.cash.plus(businessWide ? expenses.CASH.plus(supplier.CASH) : 0);
-  const outBank = refundOut.card.plus(refundOut.bank).plus(businessWide ? expenses.BANK.plus(supplier.BANK) : 0);
-  const moneyIn = inCash.plus(inCard).plus(inBank);
-  const moneyOut = outCash.plus(outBank);
+  const moneyInBy = {};
+  for (const key of TENDERS) {
+    moneyInBy[key] = taken[key].plus(serviceIn.GROOMING[key]).plus(serviceIn.RELOCATION[key]).plus(wide(collected[key]));
+  }
+  const moneyOutBy = { ...refundOut };
+  moneyOutBy.cash = moneyOutBy.cash.plus(wide(expenses.CASH.plus(supplier.CASH)));
+  moneyOutBy.bank = moneyOutBy.bank.plus(wide(expenses.BANK.plus(supplier.BANK)));
+  const moneyIn = tenderSum(moneyInBy);
+  const moneyOut = tenderSum(moneyOutBy);
+  const groomingIn = tenderSum(serviceIn.GROOMING);
+  const relocationIn = tenderSum(serviceIn.RELOCATION);
+  const refundsNonCash = refundOut.card.plus(refundOut.bank).plus(refundOut.fawran);
 
   return {
     from: dates.from,
@@ -270,10 +348,11 @@ export async function financeSummary(orgId, dates, filters = {}) {
     cogs: money(cogs),
     grossProfit: money(revenue.minus(refundTotal).minus(cogs)),
     expenses: money(expenseTotal),
-    expensesBySource: { CASH: money(businessWide ? expenses.CASH : 0), BANK: money(businessWide ? expenses.BANK : 0) },
+    expensesBySource: { CASH: money(wide(expenses.CASH)), BANK: money(wide(expenses.BANK)) },
     supplierPayments: money(supplierTotal),
-    supplierPaymentsBySource: { CASH: money(businessWide ? supplier.CASH : 0), BANK: money(businessWide ? supplier.BANK : 0) },
-    relocationPaid: money(businessWide ? relocationIn.cash.plus(relocationIn.card).plus(relocationIn.bank) : 0),
+    supplierPaymentsBySource: { CASH: money(wide(supplier.CASH)), BANK: money(wide(supplier.BANK)) },
+    relocationPaid: money(relocationIn),
+    groomingPaid: money(groomingIn),
     netProfit: money(revenue.minus(refundTotal).minus(cogs).minus(expenseTotal)),
     moneyIn: money(moneyIn),
     moneyOut: money(moneyOut),
@@ -281,21 +360,31 @@ export async function financeSummary(orgId, dates, filters = {}) {
       cashSales: money(taken.cash),
       cardSales: money(taken.card),
       bankSales: money(taken.bank),
-      accountCollections: money(businessWide ? collected.cash.plus(collected.card).plus(collected.bank) : 0),
-      relocation: money(businessWide ? relocationIn.cash.plus(relocationIn.card).plus(relocationIn.bank) : 0),
-      cash: money(inCash),
-      card: money(inCard),
-      bank: money(inBank),
+      fawranSales: money(taken.fawran),
+      accountCollections: money(wide(tenderSum(collected))),
+      grooming: money(groomingIn),
+      relocation: money(relocationIn),
+      cash: money(moneyInBy.cash),
+      card: money(moneyInBy.card),
+      bank: money(moneyInBy.bank),
+      fawran: money(moneyInBy.fawran),
     },
     moneyOutDetail: {
       refundsCash: money(refundOut.cash),
-      refundsCardOrBank: money(refundOut.card.plus(refundOut.bank)),
-      supplierPaymentsCash: money(businessWide ? supplier.CASH : 0),
-      supplierPaymentsBank: money(businessWide ? supplier.BANK : 0),
-      expensesCash: money(businessWide ? expenses.CASH : 0),
-      expensesBank: money(businessWide ? expenses.BANK : 0),
-      cash: money(outCash),
-      bank: money(outBank),
+      refundsCard: money(refundOut.card),
+      refundsBank: money(refundOut.bank),
+      refundsFawran: money(refundOut.fawran),
+      refundsCardOrBank: money(refundsNonCash),
+      refundsGrooming: money(tenderSum(serviceOut.GROOMING)),
+      refundsRelocation: money(tenderSum(serviceOut.RELOCATION)),
+      supplierPaymentsCash: money(wide(supplier.CASH)),
+      supplierPaymentsBank: money(wide(supplier.BANK)),
+      expensesCash: money(wide(expenses.CASH)),
+      expensesBank: money(wide(expenses.BANK)),
+      cash: money(moneyOutBy.cash),
+      card: money(moneyOutBy.card),
+      bank: money(moneyOutBy.bank),
+      fawran: money(moneyOutBy.fawran),
     },
     net: money(moneyIn.minus(moneyOut)),
   };
@@ -363,12 +452,17 @@ export async function stockValueRows(orgId, branchId = "") {
   };
 }
 
-/** Sales and refunds as one list for finance (FR-103), newest first. */
+/**
+ * Sales and refunds as one list for finance (FR-103), newest first, with grooming booking
+ * and relocation payments (type PAYMENT) and their refunds on the GROOMING / RELOCATION channels.
+ */
 export async function financeTransactions(orgId, dates, filters = {}) {
-  const [sales, refunds] = await Promise.all([
+  const [sales, refunds, servicePayments] = await Promise.all([
     filters.type === "refund" ? [] : loadSales(orgId, dates, filters),
     filters.type === "sale" ? [] : loadRefunds(orgId, dates, filters),
+    loadServicePayments(orgId, dates, filters),
   ]);
+  const services = servicePayments.filter((row) => (filters.type === "sale" ? row.kind === "PAYMENT" : filters.type === "refund" ? row.kind === "REFUND" : true));
   const rows = [
     ...sales.map((sale) => ({
       type: "SALE",
@@ -399,17 +493,38 @@ export async function financeTransactions(orgId, dates, filters = {}) {
       status: "REFUNDED",
       amount: dec(refund.total).negated(),
     })),
+    ...services.map((payment) => {
+      const parent = payment.appointment || payment.relocationRequest;
+      const parentId = payment.appointmentId || payment.relocationRequestId;
+      return {
+        type: payment.kind === "REFUND" ? "REFUND" : "PAYMENT",
+        id: payment.id,
+        reference: parent?.reference || parentId.slice(-8).toUpperCase(),
+        ...(payment.appointmentId ? { appointmentId: payment.appointmentId } : { relocationRequestId: payment.relocationRequestId }),
+        date: payment.createdAt,
+        channel: payment.channel,
+        branchId: payment.appointment?.branchId || "",
+        location: payment.appointment?.branch?.name || "",
+        locationEn: payment.appointment?.branch?.nameEn || payment.appointment?.branch?.name || "",
+        customer: parent?.customer?.name || "",
+        paymentMethod: payment.method,
+        status: payment.kind === "REFUND" ? "REFUNDED" : payment.status === "REJECTED" ? "REJECTED" : "PAID",
+        amount: payment.kind === "REFUND" ? dec(payment.amount).negated() : dec(payment.amount),
+      };
+    }),
   ].sort((a, b) => b.date - a.date);
-  const salesTotal = sumDec(rows.filter((row) => row.type === "SALE"), (row) => row.amount);
-  const refundsTotal = sumDec(rows.filter((row) => row.type === "REFUND"), (row) => row.amount).negated();
+  const income = rows.filter((row) => row.type !== "REFUND");
+  const outgoing = rows.filter((row) => row.type === "REFUND");
+  const salesTotal = sumDec(income, (row) => row.amount);
+  const refundsTotal = sumDec(outgoing, (row) => row.amount).negated();
   return {
     rows: rows.map((row) => ({ ...row, amount: money(row.amount) })),
     totals: {
       sales: money(salesTotal),
       refunds: money(refundsTotal),
       net: money(salesTotal.minus(refundsTotal)),
-      saleCount: sales.length,
-      refundCount: refunds.length,
+      saleCount: income.length,
+      refundCount: outgoing.length,
     },
   };
 }

@@ -47,6 +47,8 @@ const LABELS = {
     IN_STORE: ["In-store", "المتجر"],
     VAN: ["Van", "الفان"],
     WEBSITE: ["Website", "الموقع"],
+    GROOMING: ["Grooming", "التجميل"],
+    RELOCATION: ["Relocation", "نقل الحيوانات"],
   },
   fulfillment: {
     DELIVERY: ["Delivery", "توصيل"],
@@ -66,6 +68,7 @@ const LABELS = {
   txType: {
     SALE: ["Sale", "بيع"],
     REFUND: ["Refund", "استرجاع"],
+    PAYMENT: ["Payment", "دفعة"],
   },
 };
 
