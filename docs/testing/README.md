@@ -96,4 +96,16 @@ written into the converted columns with the wrong scale. Check first that no sin
 21,474,836.47 QAR (queries in `NFR-03-money.md`).
 
 Production settings needed: `CRON_SECRET`, `RESEND_API_KEY`, `SHOP_FROM_EMAIL`, `APP_PUBLIC_URL`,
-`NODE_ENV=production`. The email retry cron runs once a day (Vercel Hobby); emails are also sent immediately when queued.
+`NODE_ENV=production`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (server only, never a `VITE_` variable).
+The daily cron sends due emails (Vercel Hobby; emails are also sent immediately when queued) and removes direct
+document uploads that were not confirmed within 24 hours.
+
+**File storage (agreement 8.1 / 8.3):** with `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set, product images go to the
+public bucket `product-images` and relocation documents to the private bucket `relocation-documents` (both created on
+first use; nothing to set up in the Supabase dashboard). A document download keeps the signed 5-minute API link and the
+permission/ownership check, then redirects to a Supabase signed URL valid 60 seconds (forced download). Shop customers
+upload documents up to 10 MB straight to the bucket; the API checks each file (PDF/JPEG/PNG bytes, size) before it is
+attached. Every build runs `scripts/move-files-to-storage.mjs` after the migrations: it copies images and documents still
+in the database into the buckets and rewrites product image URLs; it never deletes the database copies (a later cleanup,
+after the owner confirms the files in the dashboard). An image whose bytes are not a real image is left in the database.
+Without the two variables everything stays in the database as before (local development).
