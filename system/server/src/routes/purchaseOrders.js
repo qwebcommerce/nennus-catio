@@ -2,6 +2,7 @@ import { Router } from "express";
 import { writeAudit } from "../lib/auditLog.js";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
+import { assertVersion, clientVersion, staleEditError } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { receivePurchaseOrderTx } from "../lib/purchaseReceive.js";
@@ -89,17 +90,30 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
   res.status(201).json(order);
 });
 
+/** A guarded status step that matched nothing: a newer version means the client's copy was stale. */
+async function refuseIfStale(id, version) {
+  if (version == null) return;
+  const cur = await prisma.purchaseOrder.findUnique({ where: { id }, select: { version: true } });
+  if (cur && cur.version !== version) throw staleEditError(cur.version);
+}
+
 router.post("/:id/send", requireModule("purchasing", "edit"), async (req, res) => {
   const order = await prisma.purchaseOrder.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!order) return res.status(404).json({ error: "Order not found" });
+  // Status step: guarded on status; the version (NFR-13) is checked when the client sends it.
+  const version = clientVersion(req);
+  assertVersion(order, version);
   if (order.status !== "DRAFT") return res.status(400).json({ error: "Only a draft can be sent" });
   const moved = await prisma.purchaseOrder.updateMany({
-    where: { id: order.id, status: "DRAFT" },
-    data: { status: "SENT" },
+    where: { id: order.id, status: "DRAFT", ...(version != null ? { version } : {}) },
+    data: { status: "SENT", version: { increment: 1 } },
   });
-  if (moved.count !== 1) return res.status(400).json({ error: "Only a draft can be sent" });
+  if (moved.count !== 1) {
+    await refuseIfStale(order.id, version);
+    return res.status(400).json({ error: "Only a draft can be sent" });
+  }
   res.json(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include }));
 });
 
@@ -108,12 +122,15 @@ router.post("/:id/cancel", requireModule("purchasing", "edit"), async (req, res)
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!order) return res.status(404).json({ error: "Order not found" });
+  const version = clientVersion(req);
+  assertVersion(order, version);
   // Only a draft or a sent order with nothing received can be cancelled (checked again in the update).
   const moved = await prisma.purchaseOrder.updateMany({
-    where: { id: order.id, status: { in: ["DRAFT", "SENT"] } },
-    data: { status: "CANCELLED" },
+    where: { id: order.id, status: { in: ["DRAFT", "SENT"] }, ...(version != null ? { version } : {}) },
+    data: { status: "CANCELLED", version: { increment: 1 } },
   });
   if (moved.count !== 1) {
+    await refuseIfStale(order.id, version);
     return res.status(400).json({
       error: order.status === "CANCELLED" ? "The order is already cancelled" : "A received order cannot be cancelled",
     });

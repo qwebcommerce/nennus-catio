@@ -6,6 +6,7 @@ import { findBranchInOrg } from "../lib/orgScope.js";
 import { claimSlot, qatarDateTime, qatarDayBounds, qatarParts, qatarToday, slotTaken } from "../lib/groomingSlots.js";
 import { LOCK_TX, acceptReviewPayments, lockParent, paymentTotals, refundParent, rejectReviewPayments, statusError } from "../lib/payments.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, clientVersion, isStaleEditError, requireVersion, staleEditError } from "../lib/recordVersion.js";
 import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
@@ -327,15 +328,25 @@ router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
       data.endAt = endAt;
     }
     if (b.notes !== undefined) data.notes = b.notes ? String(b.notes).trim() : null;
+    // NFR-13: moving or editing notes is a form edit and must name the version it was loaded at;
+    // a bare status step keeps its status guard (the version is still checked when sent).
+    const version = move || b.notes !== undefined ? requireVersion(req) : clientVersion(req);
+    assertVersion(existing, version);
     const row = await prisma.$transaction(async (tx) => {
       // Moves respect hours and capacity, checked under the schedule lock (FR-53, NFR-06).
       if (move) await claimSlot(tx, { organizationId: req.user.organizationId, ...move, excludeId: existing.id, grid: null });
       // Guarded: the change applies only if nobody changed the status in between.
       const updated = await tx.appointment.updateMany({
-        where: { id: existing.id, status: existing.status },
-        data,
+        where: { id: existing.id, status: existing.status, ...(version != null ? { version } : {}) },
+        data: { ...data, version: { increment: 1 } },
       });
-      if (!updated.count) throw statusError("The booking changed. Refresh and try again.", 409);
+      if (!updated.count) {
+        if (version != null) {
+          const cur = await tx.appointment.findUnique({ where: { id: existing.id }, select: { version: true } });
+          throw staleEditError(cur?.version);
+        }
+        throw statusError("The booking changed. Refresh and try again.", 409);
+      }
       return tx.appointment.findUnique({ where: { id: existing.id } });
     }, LOCK_TX);
     if (next || move) {
@@ -359,6 +370,7 @@ router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
     }
     res.json(row);
   } catch (e) {
+    if (isStaleEditError(e)) throw e;
     res.status(e.status || 400).json({
       error: e.errorAr || (e instanceof Error ? e.message : "تعذر تعديل الموعد"),
       ...(e.errorEn ? { errorEn: e.errorEn } : { errorEn: e.message }),

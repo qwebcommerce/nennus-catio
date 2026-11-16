@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, isStaleEditError, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 
 const router = Router();
@@ -27,6 +28,7 @@ const CUSTOMER_STAFF_SELECT = {
   tags: true,
   createdAt: true,
   updatedAt: true,
+  version: true,
 };
 
 function roundMoney(n) {
@@ -122,6 +124,7 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
 
 router.patch("/:id", requireModule("customers", "edit"), async (req, res) => {
   const { name, phone, email, notes, address, accountBalance } = req.body || {};
+  const version = requireVersion(req);
   const data = {};
   if (name != null) {
     const n = String(name).trim();
@@ -160,11 +163,13 @@ router.patch("/:id", requireModule("customers", "edit"), async (req, res) => {
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "العميل غير موجود" });
+  assertVersion(existing, version);
 
   try {
     const row = await prisma.$transaction(async (tx) => {
-      const updated = await tx.customer.update({
-        where: { id: existing.id },
+      const updated = await versionedUpdate(tx, "customer", {
+        id: existing.id,
+        version,
         data,
         select: CUSTOMER_STAFF_SELECT,
       });
@@ -221,6 +226,7 @@ router.patch("/:id", requireModule("customers", "edit"), async (req, res) => {
         code: "EMAIL_TAKEN",
       });
     }
+    if (isStaleEditError(e)) throw e;
     res.status(404).json({ error: "العميل غير موجود" });
   }
 });
@@ -250,6 +256,7 @@ router.get("/:id/record", async (req, res) => {
   });
   if (!customer) return res.status(404).json({ error: "العميل غير موجود" });
   res.json({
+    version: customer.version,
     tags: customer.tags || "",
     notes: customer.notes || "",
     pets: customer.pets,

@@ -32,6 +32,8 @@ enum BusinessVertical {
 /// مستأجر SaaS — عزل منطقي داخل نفس قاعدة PostgreSQL
 model Organization {
   id        String   @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   name      String
   /// للدخول عند تعدد المؤسسات: نفس البريد + slug
   slug      String?  @unique
@@ -243,6 +245,8 @@ enum ExpenseCategory {
 /// مصروف مسجّل (يومية / شهرية — حسب تاريخ الانتماء)
 model Expense {
   id               String          @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId   String
   organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   category         ExpenseCategory
@@ -617,6 +621,8 @@ enum CustomerLedgerEntryType {
 
 model Customer {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -770,6 +776,8 @@ model Brand {
 
 model Category {
   id             String        @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   supabaseId     String?
@@ -787,6 +795,8 @@ model Category {
 
 model Subcategory {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   categoryId     String
@@ -806,6 +816,8 @@ model Subcategory {
 /// قائمة رموز SKU القابلة للاختيار عند إنشاء/تعديل المنتج
 model CatalogSku {
   id             String        @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   code           String
@@ -822,6 +834,8 @@ model CatalogSku {
 
 model Branch {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -862,6 +876,8 @@ model Branch {
 
 model Supplier {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -1097,6 +1113,8 @@ model DeliveryStop {
 
 model GroomingService {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   branchId       String?
@@ -1118,6 +1136,8 @@ model GroomingService {
 
 model User {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   email          String
@@ -1157,6 +1177,8 @@ model User {
 
 model Product {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -1244,6 +1266,8 @@ model Inventory {
 
 model Appointment {
   id              String            @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId  String
   organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   branchId        String?
@@ -1698,6 +1722,8 @@ model SyncSettings {
 
 model CatalogPetType {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -1723,6 +1749,8 @@ model ProductPetType {
 
 model ProductVariant {
   id                  String    @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId      String
   organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   productId           String
@@ -1765,6 +1793,8 @@ model VariantStock {
 
 model PurchaseOrder {
   id             String              @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   supplierId     String
@@ -1874,6 +1904,8 @@ model StockHold {
 
 model DeliveryArea {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -1888,6 +1920,8 @@ model DeliveryArea {
 
 model DeliveryWindow {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   label          String
@@ -1905,6 +1939,8 @@ model DeliveryWindow {
 
 model CustomerPet {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customerId     String
@@ -1924,6 +1960,8 @@ model CustomerPet {
 
 model CustomerAddress {
   id         String   @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   customerId String
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
   label      String?
@@ -1940,6 +1978,8 @@ model CustomerAddress {
 
 model GroomingSchedule {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// 0 = Sunday … 6 = Saturday.
@@ -1964,6 +2004,8 @@ model GroomingPackagePet {
 
 model RelocationRequest {
   id             String           @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customerId     String
@@ -2017,6 +2059,8 @@ model RelocationDocument {
 
 model Promotion {
   id             String        @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
@@ -2046,6 +2090,8 @@ model Promotion {
 
 model Vehicle {
   id             String       @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version Int @default(1)
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String

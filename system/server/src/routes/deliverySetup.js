@@ -3,6 +3,7 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { minutesOf } from "../lib/groomingSlots.js";
 
 const router = Router();
@@ -80,11 +81,13 @@ router.post("/areas", requireModule("delivery", "create"), async (req, res) => {
 });
 
 router.patch("/areas/:id", requireModule("delivery", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.deliveryArea.findFirst({ where: { id: req.params.id, organizationId: req.user.organizationId } });
   if (!existing) return res.status(404).json({ error: "Area not found" });
+  assertVersion(existing, version);
   const { data, error } = readArea(req.body || {}, true);
   if (error) return bad(res, error);
-  const row = await prisma.deliveryArea.update({ where: { id: existing.id }, data });
+  const row = await versionedUpdate(prisma, "deliveryArea", { id: existing.id, version, data });
   await writeAudit({ userId: req.user.sub, action: "DELIVERY_AREA_UPDATE", entityType: "DeliveryArea", entityId: row.id, summary: `${row.name} ${row.fee} ${row.isActive ? "active" : "inactive"}` });
   res.json(row);
 });
@@ -115,11 +118,13 @@ router.post("/windows", requireModule("delivery", "create"), async (req, res) =>
 });
 
 router.patch("/windows/:id", requireModule("delivery", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.deliveryWindow.findFirst({ where: { id: req.params.id, organizationId: req.user.organizationId } });
   if (!existing) return res.status(404).json({ error: "Window not found" });
+  assertVersion(existing, version);
   const { data, error } = readWindow(req.body || {}, true, existing);
   if (error) return bad(res, error);
-  const row = await prisma.deliveryWindow.update({ where: { id: existing.id }, data });
+  const row = await versionedUpdate(prisma, "deliveryWindow", { id: existing.id, version, data });
   await writeAudit({ userId: req.user.sub, action: "DELIVERY_WINDOW_UPDATE", entityType: "DeliveryWindow", entityId: row.id, summary: `${row.label} ${row.startTime}-${row.endTime} x${row.seats} ${row.isActive ? "active" : "inactive"}` });
   res.json(row);
 });

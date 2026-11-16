@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireOwner } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import {
   DEFAULT_CASHIER_PERMISSIONS,
   DEFAULT_MANAGER_PERMISSIONS,
@@ -24,6 +25,7 @@ router.get("/", async (req, res) => {
   });
   if (!org) return res.status(404).json({ error: "Organization not found" });
   res.json({
+    version: org.version,
     matrices: orgPermissionMatrices(org),
     modules: {
       MANAGER: resolveModulePermissions(org, "MANAGER"),
@@ -48,10 +50,12 @@ router.get("/", async (req, res) => {
  */
 router.put("/", async (req, res) => {
   const body = req.body || {};
+  const version = requireVersion(req);
   const org = await prisma.organization.findUnique({
     where: { id: req.user.organizationId },
   });
   if (!org) return res.status(404).json({ error: "Organization not found" });
+  assertVersion(org, version);
 
   // Legacy key maps are derived from the module matrix; only `modules` is stored.
   const data = {};
@@ -76,7 +80,7 @@ router.put("/", async (req, res) => {
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const row = await tx.organization.update({ where: { id: org.id }, data });
+    const row = await versionedUpdate(tx, "organization", { id: org.id, version, data });
     await writeAudit(
       {
         userId: req.user.sub,
@@ -101,6 +105,7 @@ router.put("/", async (req, res) => {
 
   res.json({
     ok: true,
+    version: updated.version,
     matrices: orgPermissionMatrices(updated),
     modules: {
       MANAGER: resolveModulePermissions(updated, "MANAGER"),

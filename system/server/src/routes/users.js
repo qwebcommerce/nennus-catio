@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { findOrganizationOwnerId, isOrganizationOwner } from "../lib/orgOwner.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule, requireOwner } from "../middleware/auth.js";
 
 const router = Router();
@@ -25,6 +26,7 @@ const userSelect = {
   branchId: true,
   branch: { select: { name: true, nameEn: true } },
   createdAt: true,
+  version: true,
 };
 
 function err(res, status, ar, en, extra = {}) {
@@ -142,8 +144,10 @@ async function loadTarget(req, res) {
 
 router.patch("/:id", async (req, res) => {
   const { name, nameEn, role, branchId, password, active } = req.body || {};
+  const version = requireVersion(req);
   const target = await loadTarget(req, res);
   if (!target) return;
+  assertVersion(target, version);
 
   if (branchId !== undefined && branchId) {
     const b = await findBranchInOrg(prisma, req.user.organizationId, branchId);
@@ -178,7 +182,7 @@ router.patch("/:id", async (req, res) => {
   if (!Object.keys(data).length) return err(res, 400, "لا توجد تغييرات", "Nothing to update");
 
   const user = await prisma.$transaction(async (tx) => {
-    const row = await tx.user.update({ where: { id: target.id }, data, select: userSelect });
+    const row = await versionedUpdate(tx, "user", { id: target.id, version, data, select: userSelect });
     const changes = {};
     if (data.role && data.role !== target.role) changes.role = { from: target.role, to: data.role };
     if (data.branchId !== undefined && data.branchId !== target.branchId) changes.branchId = { from: target.branchId, to: data.branchId };

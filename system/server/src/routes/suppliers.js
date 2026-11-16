@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -33,6 +34,7 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
 });
 
 router.patch("/:id", requireModule("purchasing", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const { name, phone, note, email, address, isActive } = req.body || {};
   const data = {};
   if (name != null) {
@@ -49,15 +51,9 @@ router.patch("/:id", requireModule("purchasing", "edit"), async (req, res) => {
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "غير موجود" });
-  try {
-    const row = await prisma.supplier.update({
-      where: { id: existing.id },
-      data,
-    });
-    res.json(row);
-  } catch {
-    res.status(404).json({ error: "غير موجود" });
-  }
+  assertVersion(existing, version);
+  const row = await versionedUpdate(prisma, "supplier", { id: existing.id, version, data });
+  res.json(row);
 });
 
 router.delete("/:id", requireModule("purchasing", "delete"), async (req, res) => {
