@@ -24,6 +24,15 @@ import { productExtrasData, syncProductExtras, syncProductLinks } from "../lib/c
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { normalizeImage } from "../lib/imageNormalize.js";
+import {
+  PRODUCT_IMAGES_BUCKET,
+  objectKey,
+  productImageKeyFromUrl,
+  publicObjectUrl,
+  removeObjects,
+  storageEnabled,
+  uploadObject,
+} from "../lib/storage.js";
 import { setStockCount } from "../lib/stockLedger.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
@@ -75,6 +84,36 @@ function formDirhams(value, emptyAs) {
   if (value == null || String(value).trim() === "") return emptyAs;
   const n = toDirhams(value);
   return n == null ? undefined : n;
+}
+
+/** Every image URL a product row shows: main image, then gallery. */
+function productImageUrls(product) {
+  if (!product) return [];
+  const gallery = Array.isArray(product.gallery) ? product.gallery : [];
+  return [product.imageUrl, ...gallery].filter((u) => typeof u === "string" && u.trim());
+}
+
+/**
+ * Removes bucket objects that a product no longer shows (replaced / removed / product deleted),
+ * unless another product of the organisation still uses the same URL. Only keys under the
+ * organisation's own prefix are touched.
+ */
+async function removeUnusedProductImages(orgId, before, after) {
+  if (!storageEnabled()) return;
+  const keep = new Set(productImageUrls(after));
+  const gone = productImageUrls(before).filter((url) => !keep.has(url));
+  const keys = [];
+  for (const url of new Set(gone)) {
+    const key = productImageKeyFromUrl(url);
+    if (!key || !key.startsWith(`${orgId}/`)) continue;
+    const stillUsed = await prisma.$queryRaw`
+      SELECT 1 FROM "Product"
+      WHERE "organizationId" = ${orgId}
+        AND ("imageUrl" = ${url} OR ("gallery" IS NOT NULL AND jsonb_typeof("gallery") = 'array' AND "gallery" @> ${JSON.stringify([url])}::jsonb))
+      LIMIT 1`;
+    if (!stillUsed.length) keys.push(key);
+  }
+  await removeObjects(PRODUCT_IMAGES_BUCKET, keys);
 }
 
 async function linkProductImage(orgId, productId, imageUrl) {
@@ -453,7 +492,7 @@ router.get("/", async (req, res) => {
   res.json(products.map(withResolvedImageUrl));
 });
 
-/** Upload product image into the database (max 2 MB) → returns path for imageUrl */
+/** Upload a product image (max 2 MB): Supabase Storage public URL when configured, else a DB-backed API path. */
 router.post("/upload-image", requireModule("products", ["create", "edit"]),
   (req, res, next) => {
     uploadImage.single("file")(req, res, (err) => {
@@ -506,6 +545,18 @@ router.post("/upload-image", requireModule("products", ["create", "edit"]),
         if (!p) return res.status(400).json({ error: "Invalid productId" });
         productId = p.id;
       }
+      // Agreement 8.1: with Supabase Storage configured the WebP goes to the public bucket and the
+      // product keeps its public URL; without it the bytes stay in the database as before.
+      if (storageEnabled()) {
+        const key = objectKey(req.user.organizationId, normalized.ext);
+        await uploadObject(PRODUCT_IMAGES_BUCKET, key, imageBytes, normalized.mime);
+        return res.status(201).json({
+          url: publicObjectUrl(PRODUCT_IMAGES_BUCKET, key),
+          id: null,
+          size: imageBytes.length,
+          mimeType: normalized.mime,
+        });
+      }
       const created = await prisma.productImage.create({
         data: {
           organizationId: req.user.organizationId,
@@ -525,7 +576,7 @@ router.post("/upload-image", requireModule("products", ["create", "edit"]),
         mimeType: created.mimeType,
       });
     } catch (e) {
-      if (e?.status) return res.status(e.status).json({ error: e.message });
+      if (e?.status) return res.status(e.status).json({ error: e.errorAr || e.message, errorAr: e.errorAr, errorEn: e.errorEn || e.message });
       next(e);
     }
   }
@@ -1088,6 +1139,7 @@ router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
     if (update.imageUrl !== undefined) {
       await linkProductImage(req.user.organizationId, p.id, update.imageUrl);
     }
+    await removeUnusedProductImages(req.user.organizationId, existing, p);
     const onlyActive =
       Object.keys(update).length === 1 && update.isActive !== undefined;
     await writeAudit({
@@ -1150,6 +1202,7 @@ router.delete("/:id", requireModule("products", "delete"), async (req, res) => {
       await deleteStoredProductImages(tx, req.user.organizationId, existing);
       await tx.product.delete({ where: { id: existing.id } });
     });
+    await removeUnusedProductImages(req.user.organizationId, existing, null);
     await writeAudit({
       userId: req.user.sub,
       action: "PRODUCT_DELETE",

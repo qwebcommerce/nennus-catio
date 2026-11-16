@@ -202,6 +202,12 @@ export function ShopRelocation() {
   const [files, setFiles] = useState([]);
   const [msg, setMsg] = useState("");
   const [signedIn, setSignedIn] = useState(true);
+  const [busy, setBusy] = useState(false);
+  // With Supabase Storage on, files go straight from the browser to the private bucket (up to 10 MB each).
+  const [directUpload, setDirectUpload] = useState(false);
+  useEffect(() => {
+    shopApi("/api/shop/meta").then((m) => setDirectUpload(Boolean(m?.directDocumentUpload))).catch(() => setDirectUpload(false));
+  }, []);
   const onErr = (e) => {
     if (e?.status === 401) setSignedIn(false);
     else setMsg(e.message);
@@ -241,15 +247,44 @@ export function ShopRelocation() {
     }
     return docs;
   };
+  /** Direct upload: signed upload URL from the API, PUT to storage, then the API checks the file. */
+  const uploadFiles = async (list) => {
+    const docs = [];
+    for (const file of list) {
+      const ticket = await shopApi("/api/shop/relocation/uploads", {
+        method: "POST",
+        body: { fileName: file.name, mime: file.type || "application/octet-stream", size: file.size },
+      });
+      const put = await fetch(ticket.signedUrl, {
+        method: "PUT",
+        headers: { "content-type": file.type || "application/octet-stream", "x-upsert": "false" },
+        body: file,
+      });
+      if (!put.ok) {
+        // Let the API see the failed upload so it cleans it up, then report.
+        await shopApi(`/api/shop/relocation/uploads/${ticket.uploadId}/confirm`, { method: "POST" }).catch(() => {});
+        throw new Error(file.size > ticket.maxBytes ? t("shop.docTooLarge") : t("shop.docUploadFailed"));
+      }
+      const checked = await shopApi(`/api/shop/relocation/uploads/${ticket.uploadId}/confirm`, { method: "POST" });
+      docs.push({ uploadId: checked.uploadId });
+    }
+    return docs;
+  };
   const submit = async (e) => {
     e.preventDefault();
+    setMsg("");
+    setBusy(true);
     try {
-      await shopApi("/api/shop/relocation", { method: "POST", body: { ...form, documents: await readFiles(files) } });
+      const documents = directUpload ? await uploadFiles(files) : await readFiles(files);
+      await shopApi("/api/shop/relocation", { method: "POST", body: { ...form, documents } });
       setForm({ destination: "", petSummary: "" });
       setFiles([]);
+      e.target.reset?.();
       load();
     } catch (err) {
       setMsg(err.message);
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -281,8 +316,8 @@ export function ShopRelocation() {
           <form className="site-flow__card" onSubmit={submit}>
             <label className="site-flow__field"><span>{t("shop.destination")}</span><input required value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} /></label>
             <label className="site-flow__field"><span>{t("shop.pets")}</span><textarea required value={form.petSummary} onChange={(e) => setForm({ ...form, petSummary: e.target.value })} /></label>
-            <label className="site-flow__field"><span>{t("shop.documents")}</span><input required type="file" multiple accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={(e) => setFiles([...e.target.files])} /><small>{t("shop.docTypes")}</small></label>
-            <button className="button button--primary" type="submit">{t("common.add")}</button>
+            <label className="site-flow__field"><span>{t("shop.documents")}</span><input required type="file" multiple accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" onChange={(e) => setFiles([...e.target.files])} /><small>{t(directUpload ? "shop.docTypesLarge" : "shop.docTypes")}</small></label>
+            <button className="button button--primary" type="submit" disabled={busy}>{t("common.add")}</button>
           </form>
           <div className="site-flow__list">
             {rows.map((row) => <Link key={row.id} to={`/shop/relocation/${row.id}`}><span>{row.reference} · {row.destination}</span><span>{statusLabel("relocation", row.status, locale)}</span></Link>)}

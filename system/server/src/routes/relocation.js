@@ -6,6 +6,17 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { customerSession } from "../lib/customerSession.js";
 import { DOCUMENT_MIMES, contentDisposition, sniffFileType } from "../lib/fileCheck.js";
+import {
+  DOCUMENT_MAX_BYTES,
+  RELOCATION_DOCUMENTS_BUCKET,
+  downloadObject,
+  objectKey,
+  removeObjects,
+  signedDownloadUrl,
+  signedUploadUrl,
+  storageEnabled,
+  uploadObject,
+} from "../lib/storage.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { checkGatewayPayment, lookupOnReturn } from "../lib/paymentLookup.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
@@ -77,7 +88,18 @@ function linkValid(docId, principal, exp, sig) {
   return want.length === got.length && crypto.timingSafeEqual(want, got);
 }
 
-function sendDocument(res, doc) {
+/**
+ * Agreement 8.3: a document in the private bucket is answered with a 302 to a Supabase signed URL
+ * valid 60 seconds, forced to download under its file name. Database documents stream as before.
+ */
+async function sendDocument(res, doc) {
+  // A moved document still has its database copy until the owner's cleanup: serve that if storage is off.
+  if (doc.storagePath && (storageEnabled() || !doc.content)) {
+    const url = await signedDownloadUrl(RELOCATION_DOCUMENTS_BUCKET, doc.storagePath, downloadName(doc));
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    return res.redirect(302, url);
+  }
   const kind = sniffFileType(Buffer.from(doc.content));
   const mime = kind && DOCUMENT_MIMES.includes(kind.mime) ? kind.mime : "application/octet-stream";
   res.setHeader("Content-Type", mime);
@@ -88,6 +110,19 @@ function sendDocument(res, doc) {
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   res.send(Buffer.from(doc.content));
 }
+
+/** File name for the download (the stored name, with the extension of the real file type). */
+function downloadName(doc) {
+  return cleanFileName(doc.fileName, DOC_EXT[doc.mime]);
+}
+
+function cleanFileName(raw, ext) {
+  let fileName = String(raw || "document").replace(/[\r\n"\\/]/g, "_").slice(0, 120) || "document";
+  if (ext && !fileName.toLowerCase().endsWith(`.${ext}`)) fileName = `${fileName.replace(/\.[^.]*$/, "")}.${ext}`;
+  return fileName;
+}
+
+const DOC_EXT = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png" };
 
 function publicRequest(row) {
   return {
@@ -120,31 +155,89 @@ function pushHistory(current, status, note) {
   return [...history, { at: new Date().toISOString(), status, note: note || "" }];
 }
 
-async function readDocuments(raw) {
-  if (!Array.isArray(raw) || !raw.length) return [];
-  if (raw.length > 3) {
-    const err = new Error("Attach up to three documents");
-    err.status = 400;
-    throw err;
-  }
-  return raw.map((doc) => {
-    const bytes = Buffer.from(String(doc?.dataBase64 || ""), "base64");
-    if (!bytes.length || bytes.length > 1_200_000) {
-      const err = new Error("Each document must be under 1.2 MB");
-      err.status = 400;
-      throw err;
+function docError(message, status = 400) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+/**
+ * Documents sent with a request: either base64 in the JSON body (up to 1.2 MB each), or
+ * `{ uploadId }` of a direct upload to Supabase Storage that was already confirmed (checked).
+ * Returns the RelocationDocument rows to create, the uploads they consume and the objects
+ * written here (removed again if the request is not saved).
+ */
+async function readDocuments(raw, { organizationId, customerId }) {
+  if (!Array.isArray(raw) || !raw.length) return { rows: [], uploadIds: [], written: [] };
+  if (raw.length > 3) throw docError("Attach up to three documents");
+  const rows = [];
+  const uploadIds = [];
+  const inline = [];
+  for (const doc of raw) {
+    if (doc?.uploadId) {
+      uploadIds.push(String(doc.uploadId));
+      continue;
     }
+    const bytes = Buffer.from(String(doc?.dataBase64 || ""), "base64");
+    if (!bytes.length || bytes.length > 1_200_000) throw docError("Each document must be under 1.2 MB");
     // NFR-18: only PDF, JPEG or PNG, decided from the file's bytes (not the declared type).
     const kind = sniffFileType(bytes);
-    if (!kind || !DOCUMENT_MIMES.includes(kind.mime)) {
-      const err = new Error("Documents must be PDF, JPEG or PNG files");
-      err.status = 400;
-      throw err;
+    if (!kind || !DOCUMENT_MIMES.includes(kind.mime)) throw docError("Documents must be PDF, JPEG or PNG files");
+    inline.push({ fileName: cleanFileName(doc?.fileName, kind.ext), mime: kind.mime, bytes, ext: kind.ext });
+  }
+  if (uploadIds.length) {
+    if (new Set(uploadIds).size !== uploadIds.length) throw docError("Each document can be attached once");
+    const uploads = await prisma.relocationUpload.findMany({
+      where: { id: { in: uploadIds }, customerId, organizationId, verifiedAt: { not: null } },
+    });
+    if (uploads.length !== uploadIds.length) throw docError("Upload the documents again (an upload was not found or not checked)");
+    for (const up of uploads) rows.push({ fileName: up.fileName, mime: up.mime, size: up.size, storagePath: up.storagePath });
+  }
+  const written = [];
+  try {
+    for (const doc of inline) {
+      if (storageEnabled()) {
+        const key = objectKey(organizationId, doc.ext);
+        await uploadObject(RELOCATION_DOCUMENTS_BUCKET, key, doc.bytes, doc.mime);
+        written.push(key);
+        rows.push({ fileName: doc.fileName, mime: doc.mime, size: doc.bytes.length, storagePath: key });
+      } else {
+        rows.push({ fileName: doc.fileName, mime: doc.mime, size: doc.bytes.length, content: doc.bytes });
+      }
     }
-    let fileName = String(doc?.fileName || "document").replace(/[\r\n"\\/]/g, "_").slice(0, 120) || "document";
-    if (!fileName.toLowerCase().endsWith(`.${kind.ext}`)) fileName = `${fileName.replace(/\.[^.]*$/, "")}.${kind.ext}`;
-    return { fileName, mime: kind.mime, content: bytes };
+  } catch (e) {
+    await removeObjects(RELOCATION_DOCUMENTS_BUCKET, written);
+    throw e;
+  }
+  return { rows, uploadIds, written };
+}
+
+/** Inside the transaction that creates the documents: each confirmed upload is used once. */
+async function consumeUploads(tx, uploadIds, customerId) {
+  if (!uploadIds.length) return;
+  const used = await tx.relocationUpload.deleteMany({
+    where: { id: { in: uploadIds }, customerId, verifiedAt: { not: null } },
   });
+  if (used.count !== uploadIds.length) throw docError("Upload the documents again (an upload was already used)", 409);
+}
+
+/** Daily cron: direct uploads never confirmed or attached within 24 h are deleted with their objects. */
+export async function cleanupStaleUploads({ olderThanMs = 24 * 60 * 60 * 1000, batch = 200 } = {}) {
+  const cutoff = new Date(Date.now() - olderThanMs);
+  let removed = 0;
+  for (;;) {
+    const stale = await prisma.relocationUpload.findMany({
+      where: { createdAt: { lt: cutoff } },
+      orderBy: { createdAt: "asc" },
+      take: batch,
+    });
+    if (!stale.length) break;
+    if (storageEnabled()) await removeObjects(RELOCATION_DOCUMENTS_BUCKET, stale.map((u) => u.storagePath));
+    const done = await prisma.relocationUpload.deleteMany({ where: { id: { in: stale.map((u) => u.id) }, createdAt: { lt: cutoff } } });
+    removed += done.count;
+    if (stale.length < batch) break;
+  }
+  return { removed };
 }
 
 export const relocationShop = Router();
@@ -187,20 +280,31 @@ relocationShop.post("/", async (req, res) => {
       ? await prisma.customerPet.findMany({ where: { id: { in: petIds }, customerId: req.customer.id } })
       : [];
     if (petIds.length && pets.length !== petIds.length) return res.status(400).json({ error: "Choose pets from your account" });
-    const documents = await readDocuments(req.body?.documents);
-    if (!documents.length) return res.status(400).json({ error: "Attach the relocation documents" });
-    const row = await prisma.relocationRequest.create({
-      data: {
-        organizationId: req.shopOrg.id,
-        customerId: req.customer.id,
-        destination,
-        petSummary: petSummary || null,
-        history: pushHistory([], "SUBMITTED", ""),
-        pets: { create: pets.map((pet) => ({ petId: pet.id })) },
-        documents: { create: documents },
-      },
-      include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
-    });
+    if (!Array.isArray(req.body?.documents) || !req.body.documents.length) {
+      return res.status(400).json({ error: "Attach the relocation documents" });
+    }
+    const documents = await readDocuments(req.body.documents, { organizationId: req.shopOrg.id, customerId: req.customer.id });
+    let row;
+    try {
+      row = await prisma.$transaction(async (tx) => {
+        await consumeUploads(tx, documents.uploadIds, req.customer.id);
+        return tx.relocationRequest.create({
+          data: {
+            organizationId: req.shopOrg.id,
+            customerId: req.customer.id,
+            destination,
+            petSummary: petSummary || null,
+            history: pushHistory([], "SUBMITTED", ""),
+            pets: { create: pets.map((pet) => ({ petId: pet.id })) },
+            documents: { create: documents.rows },
+          },
+          include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
+        });
+      });
+    } catch (e) {
+      await removeObjects(RELOCATION_DOCUMENTS_BUCKET, documents.written);
+      throw e;
+    }
     await mailStaff(req.shopOrg.id, "alertRelocation", { reference: row.reference || row.id.slice(-8).toUpperCase() });
     res.status(201).json(publicRequest(row));
   } catch (e) {
@@ -230,18 +334,105 @@ relocationShop.post("/:id/documents", async (req, res) => {
   if (row.status !== "DOCUMENTS_REQUESTED" && row.status !== "SUBMITTED") {
     return res.status(400).json({ error: "Documents are not being requested" });
   }
-  const documents = await readDocuments(req.body?.documents);
-  if (!documents.length) return res.status(400).json({ error: "Attach a document" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
-    data: {
-      status: "DOCUMENTS_RECEIVED",
-      history: pushHistory(row.history, "DOCUMENTS_RECEIVED", ""),
-      documents: { create: documents },
-    },
-    include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
-  });
+  if (!Array.isArray(req.body?.documents) || !req.body.documents.length) return res.status(400).json({ error: "Attach a document" });
+  let documents;
+  let updated;
+  try {
+    documents = await readDocuments(req.body.documents, { organizationId: row.organizationId, customerId: req.customer.id });
+    updated = await prisma.$transaction(async (tx) => {
+      await consumeUploads(tx, documents.uploadIds, req.customer.id);
+      return tx.relocationRequest.update({
+        where: { id: row.id },
+        data: {
+          status: "DOCUMENTS_RECEIVED",
+          history: pushHistory(row.history, "DOCUMENTS_RECEIVED", ""),
+          documents: { create: documents.rows },
+        },
+        include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
+      });
+    });
+  } catch (e) {
+    await removeObjects(RELOCATION_DOCUMENTS_BUCKET, documents?.written);
+    return res.status(e.status || 400).json({ error: e.message || "Could not add the documents" });
+  }
   res.json(publicRequest(updated));
+});
+
+/**
+ * Direct browser upload (agreement 8.1), only when Supabase Storage is configured:
+ * 1. POST /uploads {fileName, mime, size} -> a signed upload URL for a key the server chose;
+ * 2. the browser PUTs the file to Supabase;
+ * 3. POST /uploads/:uploadId/confirm -> the server downloads the object and checks its bytes
+ *    (PDF/JPEG/PNG) and size (max 10 MB); a bad file is deleted and refused with 400;
+ * 4. the confirmed upload is attached with documents: [{ uploadId }] on POST / or POST /:id/documents,
+ *    which is when its RelocationDocument row is created.
+ */
+const MAX_OPEN_UPLOADS = 12;
+
+relocationShop.post("/uploads", async (req, res) => {
+  if (!storageEnabled()) {
+    return res.status(400).json({ error: "Direct upload is not available. Attach the file to the form.", code: "STORAGE_DISABLED" });
+  }
+  const mime = String(req.body?.mime || "").toLowerCase().split(";")[0].trim();
+  const ext = DOC_EXT[mime];
+  if (!ext) return res.status(400).json({ error: "Documents must be PDF, JPEG or PNG files" });
+  const size = Number(req.body?.size);
+  if (!Number.isFinite(size) || size <= 0) return res.status(400).json({ error: "Choose a file" });
+  if (size > DOCUMENT_MAX_BYTES) return res.status(400).json({ error: "Each document must be 10 MB or smaller", code: "FILE_TOO_LARGE" });
+  const open = await prisma.relocationUpload.count({
+    where: { customerId: req.customer.id, createdAt: { gt: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+  });
+  if (open >= MAX_OPEN_UPLOADS) return res.status(429).json({ error: "Too many uploads waiting. Submit the request or try again tomorrow." });
+  const storagePath = objectKey(req.shopOrg.id, ext);
+  const upload = await prisma.relocationUpload.create({
+    data: {
+      organizationId: req.shopOrg.id,
+      customerId: req.customer.id,
+      storagePath,
+      fileName: cleanFileName(req.body?.fileName, ext),
+      mime,
+    },
+  });
+  try {
+    const signed = await signedUploadUrl(RELOCATION_DOCUMENTS_BUCKET, storagePath);
+    res.status(201).json({ uploadId: upload.id, signedUrl: signed.signedUrl, maxBytes: DOCUMENT_MAX_BYTES });
+  } catch (e) {
+    await prisma.relocationUpload.delete({ where: { id: upload.id } }).catch(() => {});
+    res.status(e.status || 502).json({ error: e.message });
+  }
+});
+
+relocationShop.post("/uploads/:uploadId/confirm", async (req, res) => {
+  if (!storageEnabled()) return res.status(400).json({ error: "Direct upload is not available", code: "STORAGE_DISABLED" });
+  const upload = await prisma.relocationUpload.findFirst({
+    where: { id: req.params.uploadId, customerId: req.customer.id, organizationId: req.shopOrg.id },
+  });
+  if (!upload) return res.status(404).json({ error: "Upload not found" });
+  if (upload.verifiedAt) return res.json({ uploadId: upload.id, fileName: upload.fileName, mime: upload.mime, size: upload.size });
+  const refuse = async (message, code) => {
+    await removeObjects(RELOCATION_DOCUMENTS_BUCKET, [upload.storagePath]);
+    await prisma.relocationUpload.deleteMany({ where: { id: upload.id, verifiedAt: null } });
+    return res.status(400).json({ error: message, code });
+  };
+  let bytes;
+  try {
+    bytes = await downloadObject(RELOCATION_DOCUMENTS_BUCKET, upload.storagePath);
+  } catch (e) {
+    return res.status(e.status || 502).json({ error: e.message });
+  }
+  if (!bytes || !bytes.length) return refuse("The file was not uploaded. Try again.", "UPLOAD_MISSING");
+  if (bytes.length > DOCUMENT_MAX_BYTES) return refuse("Each document must be 10 MB or smaller", "FILE_TOO_LARGE");
+  // NFR-18: the bytes decide the type; it must also be the type the upload was issued for.
+  const kind = sniffFileType(bytes);
+  if (!kind || !DOCUMENT_MIMES.includes(kind.mime) || kind.mime !== upload.mime) {
+    return refuse("Documents must be PDF, JPEG or PNG files", "FILE_TYPE");
+  }
+  const done = await prisma.relocationUpload.updateMany({
+    where: { id: upload.id, verifiedAt: null },
+    data: { verifiedAt: new Date(), size: bytes.length },
+  });
+  if (!done.count) return res.status(409).json({ error: "The upload changed. Try again." });
+  res.json({ uploadId: upload.id, fileName: upload.fileName, mime: upload.mime, size: bytes.length });
 });
 
 /** Issue a 5-minute signed download link for one of the customer's own documents. */
@@ -614,7 +805,7 @@ relocationFiles.get("/:docId", async (req, res, next) => {
     if (!session || `c:${session.sub}` !== p || doc.request.customerId !== session.sub) {
       return res.status(403).json({ error: "Sign in with the account that owns this document" });
     }
-    return sendDocument(res, doc);
+    return await sendDocument(res, doc);
   }
   if (p.startsWith("s:")) {
     return authMiddleware(req, res, async () => {
@@ -625,7 +816,7 @@ relocationFiles.get("/:docId", async (req, res, next) => {
         if (!(await hasModule(req, "relocation", "view"))) {
           return res.status(403).json({ error: "Insufficient permission for this action", code: "FORBIDDEN" });
         }
-        return sendDocument(res, doc);
+        return await sendDocument(res, doc);
       } catch (e) {
         next(e);
       }
