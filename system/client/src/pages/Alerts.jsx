@@ -5,6 +5,7 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { addLocalDismissedKeys, getLocalDismissedKeySet, getLocalReadKeySet } from "../alerts/localRead.js";
+import { formatDateTime } from "../utils/qatarDate.js";
 
 const card = {
   padding: 16,
@@ -264,7 +265,7 @@ export default function Alerts() {
                     <div style={{ fontWeight: 700, fontSize: 15 }}>{formatTitle(it)}</div>
                     <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 4 }}>{formatBody(it)}</div>
                     <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
-                      {new Date(it.at).toLocaleString(locale === "en" ? "en-GB" : "ar-SA")}
+                      {formatDateTime(it.at, locale)}
                     </div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>

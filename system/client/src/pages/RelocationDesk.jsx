@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
+import { formatDateTime } from "../utils/qatarDate.js";
 
 const NEXT = {
   SUBMITTED: ["DOCUMENTS_REQUESTED", "UNDER_REVIEW", "CANCELLED"],
@@ -12,7 +14,7 @@ const NEXT = {
 };
 
 export default function RelocationDesk() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState([]);
   const [quote, setQuote] = useState({});
   const [msg, setMsg] = useState("");
@@ -31,7 +33,8 @@ export default function RelocationDesk() {
       <h1>{t("shop.relocation")}</h1>
       {rows.map((row) => (
         <article key={row.id} className="card" style={{ display: "grid", gap: 6 }}>
-          <strong>{row.customer?.name} · {row.destination} · {row.status}</strong>
+          <strong>{row.customer?.name} · {row.destination} · {statusLabel("relocation", row.status, locale)}</strong>
+          {row.createdAt ? <div>{formatDateTime(row.createdAt, locale)}</div> : null}
           <div>{row.petSummary}</div>
           {(row.pets || []).map((link) => <div key={link.petId}>{link.pet?.name}</div>)}
           {(row.documents || []).map((doc) => (
@@ -52,7 +55,7 @@ export default function RelocationDesk() {
           ) : null}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {(NEXT[row.status] || []).map((status) => (
-              <button key={status} type="button" onClick={() => api(`/api/relocation/${row.id}/status`, { method: "POST", body: { status } }).then(load).catch((e) => setMsg(e.message))}>{status}</button>
+              <button key={status} type="button" onClick={() => api(`/api/relocation/${row.id}/status`, { method: "POST", body: { status } }).then(load).catch((e) => setMsg(e.message))}>{statusLabel("relocation", status, locale)}</button>
             ))}
           </div>
         </article>

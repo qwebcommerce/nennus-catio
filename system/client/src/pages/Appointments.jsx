@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
+import { formatTime } from "../utils/qatarDate.js";
 
 const inp = {
   padding: 12,
@@ -19,7 +21,7 @@ function toInputDateTimeLocal(d) {
 }
 
 export default function Appointments() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
   const showPetFields = true;
   const [customers, setCustomers] = useState([]);
@@ -260,13 +262,13 @@ export default function Appointments() {
               {list.map((a) => (
                 <tr key={a.id}>
                   <td style={td}>
-                    {new Date(a.startAt).toLocaleTimeString()} - {new Date(a.endAt).toLocaleTimeString()}
+                    {formatTime(a.startAt, locale)} - {formatTime(a.endAt, locale)}
                   </td>
                   <td style={td}>
                     {a.customer?.name || t("appointments.walkIn")} {a.petName ? `• ${a.petName}` : ""}
                   </td>
                   <td style={td}>{a.service?.name || "—"}</td>
-                  <td style={td}>{a.status}</td>
+                  <td style={td}>{statusLabel("booking", a.status, locale)}</td>
                   <td style={td}>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <button className="btn-touch" type="button" onClick={() => setStatus(a.id, "IN_PROGRESS")}>

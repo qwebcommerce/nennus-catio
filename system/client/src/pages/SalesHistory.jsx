@@ -9,6 +9,7 @@ import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { buildReceiptPlainText } from "../utils/receiptText.js";
 import { apiErrorMessage } from "../utils/apiError.js";
+import { formatDateTime } from "../utils/qatarDate.js";
 
 const inp = {
   padding: 12,
@@ -215,7 +216,7 @@ export default function SalesHistory() {
                   <React.Fragment key={s.id}>
                     <tr>
                       <td style={td}>
-                        {new Date(s.createdAt).toLocaleString(locale === "en" ? "en-GB" : "ar-SA")}
+                        {formatDateTime(s.createdAt, locale)}
                       </td>
                       <td style={td}>
                         <button

@@ -2,12 +2,13 @@ import React, { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Pencil, Search } from "lucide-react";
 import { matchesPet, money, pickName, productImage, productPrice, useCatalog, useCopy, useShopMeta, waLink } from "./copy.js";
-import { PETS } from "./pets.js";
+import { petGroups } from "./pets.js";
 
 export function SiteHouses() {
   const { locale, text } = useCopy();
   const { products, status } = useCatalog("?houses=1");
-  const { business } = useShopMeta();
+  const { business, meta } = useShopMeta();
+  const pets = petGroups(meta?.petTypes);
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const pet = params.get("pet") || "";
@@ -58,7 +59,7 @@ export function SiteHouses() {
         </div>
       </header>
       <section aria-label={text("Choose a pet type", "اختر نوع الحيوان")} className="house-pet-grid ref-pet-row ref-pet-row--houses">
-        {PETS.map((group) => (
+        {pets.map((group) => (
           <button type="button" key={group.id} className={`ref-pet-circle ${pet === group.id ? "is-selected" : ""}`} aria-pressed={pet === group.id} onClick={() => filter(pet === group.id ? "" : group.id)}>
             <span className="ref-pet-circle__image"><img src={group.image} alt="" /></span>
             <strong>{text(group.en, group.ar)}</strong>
@@ -68,7 +69,7 @@ export function SiteHouses() {
       <section id="house-results" className="house-results" aria-label={text("House models", "تصاميم البيوت")}>
         <div className="house-results__heading">
           <div>
-            <h2>{pet ? text(PETS.find((row) => row.id === pet)?.en || "Pet houses", PETS.find((row) => row.id === pet)?.ar || "بيوت الحيوانات") : text("All pet houses", "جميع البيوت")}</h2>
+            <h2>{pet ? text(pets.find((row) => row.id === pet)?.en || "Pet houses", pets.find((row) => row.id === pet)?.ar || "بيوت الحيوانات") : text("All pet houses", "جميع البيوت")}</h2>
             <p className="small muted" role="status">{status === "ready" ? `${filtered.length} ${text("models", "تصميم")}` : ""}</p>
           </div>
           <label className="search-field">
