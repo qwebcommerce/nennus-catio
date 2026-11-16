@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
+import { qatarDateTime, qatarTime, qatarToday } from "../../utils/qatarTime.js";
 
 const TOKEN_KEY = "nennus.shopToken";
 
@@ -41,7 +42,7 @@ export function ShopGroomingBook() {
   const [slots, setSlots] = useState([]);
   const [form, setForm] = useState({
     date: "", startAt: "", endAt: "", visitKind: "SHOP", name: "", email: "", phone: "",
-    petName: "", breed: "", ageText: "", areaId: "", address: "", code: "",
+    petName: "", breed: "", ageText: "", areaId: "", address: "", note: "", code: "",
   });
   const [msg, setMsg] = useState("");
   useEffect(() => {
@@ -56,7 +57,10 @@ export function ShopGroomingBook() {
     e.preventDefault();
     setMsg("");
     try {
-      const result = await shopApi("/api/shop/grooming/book", { method: "POST", body: { ...form, packageId } });
+      // The server sets the end time from the package; only the start is sent.
+      const body = { ...form, note: form.visitKind === "HOME" ? form.note : "", packageId };
+      delete body.endAt;
+      const result = await shopApi("/api/shop/grooming/book", { method: "POST", body });
       if (result.payUrl) window.location.href = result.payUrl;
     } catch (err) {
       setMsg(err.message);
@@ -77,14 +81,14 @@ export function ShopGroomingBook() {
           <button type="button" className={form.visitKind === "HOME" ? "is-active" : ""} onClick={() => setForm({ ...form, visitKind: "HOME" })}>{t("shop.homeVisit")}</button>
         </div>
         <div className="site-flow__pair">
-          <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
+          <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required min={qatarToday()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
           <label className="site-flow__field"><span>{t("shop.window")}</span>
             <select required value={form.startAt} onChange={(e) => {
               const slot = slots.find((row) => row.startAt === e.target.value);
               setForm({ ...form, startAt: slot?.startAt || "", endAt: slot?.endAt || "" });
             }}>
               <option value="">{t("shop.window")}</option>
-              {slots.map((slot) => <option key={slot.startAt} value={slot.startAt}>{new Date(slot.startAt).toLocaleTimeString()} · {slot.seatsLeft}</option>)}
+              {slots.map((slot) => <option key={slot.startAt} value={slot.startAt}>{qatarTime(slot.startAt, locale)} · {slot.seatsLeft}</option>)}
             </select>
           </label>
         </div>
@@ -97,6 +101,7 @@ export function ShopGroomingBook() {
               </select>
             </label>
             <label className="site-flow__field"><span>{t("shop.address")}</span><textarea required value={form.address} onChange={set("address")} /></label>
+            <label className="site-flow__field"><span>{t("shop.visitNote")}</span><textarea maxLength={1000} value={form.note} onChange={set("note")} /></label>
           </>
         ) : null}
         <div className="site-flow__pair">
@@ -135,12 +140,20 @@ export function ShopBookings() {
       {one ? (
         <article className="card">
           <strong>{locale === "en" ? one.package?.nameEn || one.package?.name : one.package?.name}</strong>
-          <div>{one.status} · {new Date(one.startAt).toLocaleString()}</div>
+          <div>{t("shop.reference")}: {one.reference}</div>
+          <div>{one.status} · {qatarDateTime(one.startAt, locale)} ({t("shop.qatarTime")})</div>
           <div>{Number(one.amount).toFixed(2)} QAR</div>
-          {one.status === "CONFIRMED" ? <button type="button" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button> : null}
+          {one.note ? <div>{t("shop.visitNote")}: {one.note}</div> : null}
+          {one.canCancel ? (
+            <>
+              <div>{t("shop.cancelUntil")} {qatarDateTime(one.cancelUntil, locale)}</div>
+              <button type="button" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button>
+            </>
+          ) : null}
+          {one.status === "CANCELLED" && one.paid ? <div>{t("shop.refundDue")}</div> : null}
         </article>
       ) : rows.map((row) => (
-        <Link key={row.id} to={`/shop/grooming/bookings/${row.id}`}>{row.status} · {new Date(row.startAt).toLocaleString()}</Link>
+        <Link key={row.id} to={`/shop/grooming/bookings/${row.id}`}>{row.reference} · {row.status} · {qatarDateTime(row.startAt, locale)}</Link>
       ))}
       {msg ? <div>{msg}</div> : null}
     </div>
@@ -226,6 +239,7 @@ export function ShopRelocation() {
       {one ? (
         <article className="site-flow__card">
           <h2>{one.destination}</h2>
+          <p className="site-flow__lead">{t("shop.reference")}: {one.reference}</p>
           <div className="site-flow__total"><span>{one.status}</span>{one.quoteAmount != null ? <span>{Number(one.quoteAmount).toFixed(2)} QAR</span> : null}</div>
           {one.quoteNote ? <p className="site-flow__lead">{one.quoteNote}</p> : null}
           <div className="site-flow__list">
@@ -242,7 +256,7 @@ export function ShopRelocation() {
             <button className="button button--primary" type="submit">{t("common.add")}</button>
           </form>
           <div className="site-flow__list">
-            {rows.map((row) => <Link key={row.id} to={`/shop/relocation/${row.id}`}><span>{row.destination}</span><span>{row.status}</span></Link>)}
+            {rows.map((row) => <Link key={row.id} to={`/shop/relocation/${row.id}`}><span>{row.reference} · {row.destination}</span><span>{row.status}</span></Link>)}
           </div>
         </>
       )}

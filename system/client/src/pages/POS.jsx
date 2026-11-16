@@ -317,8 +317,8 @@ export default function POS() {
       return;
     }
     let cancelled = false;
-    const now = new Date();
-    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    // Today's grooming in Qatar time (NFR-04).
+    const day = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
     api(`/api/appointments?branchId=${encodeURIComponent(branchId)}&day=${day}`)
       .then((rows) => {
         if (!cancelled) setTodayAppointments(Array.isArray(rows) ? rows : []);
@@ -827,7 +827,7 @@ export default function POS() {
           <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 }}>
             {todayAppointments.slice(0, 6).map((row) => (
               <li key={row.id} style={{ fontSize: 13 }}>
-                {new Date(row.startAt).toLocaleTimeString(locale === "en" ? "en-GB" : "ar-QA", { hour: "2-digit", minute: "2-digit" })}
+                {new Date(row.startAt).toLocaleTimeString(locale === "en" ? "en-GB" : "ar-QA", { timeZone: "Asia/Qatar", hour: "2-digit", minute: "2-digit" })}
                 {" · "}
                 {row.customer?.name || "—"}
                 {row.service?.name ? ` · ${row.service.name}` : ""}

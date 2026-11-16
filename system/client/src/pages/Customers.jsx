@@ -181,9 +181,9 @@ export default function Customers() {
             <div key={pet.id}>{pet.name} · {pet.breed || "—"} · {pet.ageText || "—"}{pet.notes ? ` · ${pet.notes}` : ""}</div>
           ))}
           {(record?.addresses || []).map((row) => <div key={row.id}>{row.line1} {row.area} {row.city}</div>)}
-          {(record?.sales || []).map((row) => <div key={row.id}>{row.invoiceNumber || row.id.slice(0, 8)} · {row.orderChannel || ""} · {Number(row.total).toFixed(2)}</div>)}
-          {(record?.appointments || []).map((row) => <div key={row.id}>{row.service?.name || t("shop.grooming")} · {row.status}</div>)}
-          {(record?.relocationRequests || []).map((row) => <div key={row.id}>{row.destination} · {row.status}</div>)}
+          {(record?.sales || []).map((row) => <div key={row.id}>{row.reference || row.invoiceNumber || row.id.slice(0, 8)} · {row.orderChannel || ""} · {Number(row.total).toFixed(2)}</div>)}
+          {(record?.appointments || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.service?.name || t("shop.grooming")} · {row.status}</div>)}
+          {(record?.relocationRequests || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.destination} · {row.status}</div>)}
           {recordId && record ? (
             <form onSubmit={async (e) => { e.preventDefault(); await api(`/api/customers/${recordId}`, { method: "PATCH", body: { tags: record.tags || "" } }); setMsg(t("customers.saved")); }} style={{ display: "flex", gap: 8 }}>
               <input placeholder={t("shop.tags")} value={record.tags || ""} onChange={(e) => setRecord({ ...record, tags: e.target.value })} />
