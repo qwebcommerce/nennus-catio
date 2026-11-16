@@ -4,7 +4,6 @@ import { api } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
 
 const CART_KEY = "nennus.shopCart";
-const TOKEN_KEY = "nennus.shopToken";
 
 function readCart() {
   try {
@@ -19,11 +18,9 @@ function writeCart(rows) {
   localStorage.setItem(CART_KEY, JSON.stringify(rows));
 }
 
+/** The customer session is an httpOnly cookie (nc_customer); api() sends credentials. */
 function shopApi(path, options = {}) {
-  const token = localStorage.getItem(TOKEN_KEY);
-  const headers = { ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return api(path, { ...options, headers });
+  return api(path, options);
 }
 
 function money(n) {
@@ -287,7 +284,7 @@ export function ShopCheckout() {
 }
 
 export function ShopAccount() {
-  const { t } = useI18n();
+  const { t, locale, setLocale } = useI18n();
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "" });
   const [me, setMe] = useState(null);
@@ -295,8 +292,12 @@ export function ShopAccount() {
   const [msgOk, setMsgOk] = useState(false);
   const [pet, setPet] = useState({ name: "", breed: "", ageText: "" });
   const [address, setAddress] = useState({ line1: "", area: "", city: "Doha" });
+  const [profile, setProfile] = useState({ name: "", phone: "", locale: "ar" });
   const loadMe = () => shopApi("/api/shop/me").then(setMe).catch(() => setMe(null));
   useEffect(() => { loadMe(); }, []);
+  useEffect(() => {
+    if (me) setProfile({ name: me.name || "", phone: me.phone || "", locale: me.locale || "ar" });
+  }, [me]);
   const submit = async (e) => {
     e.preventDefault();
     setMsg("");
@@ -313,8 +314,7 @@ export function ShopAccount() {
         setMsg(result.resetLink || t("shop.resetSent"));
         return;
       }
-      const result = await api("/api/shop/login", { method: "POST", body: { email: form.email, password: form.password } });
-      localStorage.setItem(TOKEN_KEY, result.token);
+      await api("/api/shop/login", { method: "POST", body: { email: form.email, password: form.password } });
       await loadMe();
     } catch (err) {
       setMsgOk(false);
@@ -336,12 +336,38 @@ export function ShopAccount() {
               <Link to="/pet-houses">{t("shop.houses")}</Link>
               <Link to="/shop/relocation">{t("shop.relocation")}</Link>
             </div>
-            <button className="button button--secondary" type="button" onClick={() => { localStorage.removeItem(TOKEN_KEY); setMe(null); }}>{t("shop.signOut")}</button>
+            <button className="button button--secondary" type="button" onClick={() => { api("/api/shop/logout", { method: "POST" }).catch(() => {}); setMe(null); }}>{t("shop.signOut")}</button>
           </div>
+          <section className="site-flow__card">
+            <h2>{t("shop.profile")}</h2>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                const next = await shopApi("/api/shop/me", { method: "PATCH", body: profile });
+                setMe(next);
+                if (next.locale && next.locale !== locale) setLocale(next.locale);
+                setMsgOk(true);
+                setMsg(t("shop.saved"));
+              } catch (err) {
+                setMsgOk(false);
+                setMsg(err.message);
+              }
+            }}>
+              <label className="site-flow__field"><span>{t("customers.name")}</span><input required value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></label>
+              <label className="site-flow__field"><span>{t("customers.phone")}</span><input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} /></label>
+              <label className="site-flow__field"><span>{t("shop.language")}</span>
+                <select value={profile.locale} onChange={(e) => setProfile({ ...profile, locale: e.target.value })}>
+                  <option value="ar">العربية</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+              <button className="button button--primary" type="submit">{t("common.save")}</button>
+            </form>
+          </section>
           <section className="site-flow__card">
             <h2>{t("shop.pets")}</h2>
             <div className="site-flow__list">
-              {(me.pets || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.name}</span><span>{[row.breed, row.ageText].filter(Boolean).join(" · ")}</span></div>)}
+              {(me.pets || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.name}</span><span>{[row.breed, row.ageText].filter(Boolean).join(" · ")}</span><button type="button" onClick={() => shopApi(`/api/shop/me/pets/${row.id}`, { method: "DELETE" }).then(loadMe).catch((err) => { setMsgOk(false); setMsg(err.message); })}>{t("common.delete")}</button></div>)}
             </div>
             <form onSubmit={async (e) => { e.preventDefault(); await shopApi("/api/shop/me/pets", { method: "POST", body: pet }); setPet({ name: "", breed: "", ageText: "" }); await loadMe(); }}>
               <label className="site-flow__field"><span>{t("shop.petName")}</span><input required value={pet.name} onChange={(e) => setPet({ ...pet, name: e.target.value })} /></label>
@@ -355,7 +381,7 @@ export function ShopAccount() {
           <section className="site-flow__card">
             <h2>{t("shop.addresses")}</h2>
             <div className="site-flow__list">
-              {(me.addresses || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.line1}</span><span>{row.area}</span></div>)}
+              {(me.addresses || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.line1}</span><span>{row.area}</span><button type="button" onClick={() => shopApi(`/api/shop/me/addresses/${row.id}`, { method: "DELETE" }).then(loadMe).catch((err) => { setMsgOk(false); setMsg(err.message); })}>{t("common.delete")}</button></div>)}
             </div>
             <form onSubmit={async (e) => { e.preventDefault(); await shopApi("/api/shop/me/addresses", { method: "POST", body: address }); setAddress({ line1: "", area: "", city: "Doha" }); await loadMe(); }}>
               <label className="site-flow__field"><span>{t("shop.address")}</span><input required value={address.line1} onChange={(e) => setAddress({ ...address, line1: e.target.value })} /></label>
@@ -392,8 +418,7 @@ export function ShopVerify() {
   useEffect(() => {
     const token = params.get("token");
     api("/api/shop/verify", { method: "POST", body: { token } })
-      .then((result) => {
-        localStorage.setItem(TOKEN_KEY, result.token);
+      .then(() => {
         setMsg(t("shop.verified"));
       })
       .catch((e) => setMsg(e.message));
