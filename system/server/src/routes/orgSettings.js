@@ -13,6 +13,7 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view
       where: { id: req.user.organizationId },
       select: {
         id: true,
+        name: true,
         websiteBranchId: true,
         holdMinutes: true,
         whatsappNumber: true,
@@ -31,6 +32,7 @@ router.get("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "view
     });
     if (!org) return res.status(404).json({ error: "Organization not found" });
     res.json({
+      name: org.name || "",
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
       whatsappNumber: org.whatsappNumber || "",
@@ -55,6 +57,13 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
   try {
     const b = req.body || {};
     const data = {};
+    if (b.name !== undefined) {
+      const name = String(b.name || "").trim();
+      if (!name || name.length > 120) {
+        return res.status(400).json({ error: "Enter the business name (up to 120 characters)", errorAr: "أدخل اسم النشاط (حتى 120 حرفاً)", errorEn: "Enter the business name (up to 120 characters)" });
+      }
+      data.name = name;
+    }
     if (b.whatsappNumber !== undefined) {
       const digits = String(b.whatsappNumber || "").replace(/[^\d]/g, "");
       data.whatsappNumber = digits || null;
@@ -95,6 +104,7 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
       data,
       select: {
         id: true,
+        name: true,
         websiteBranchId: true,
         holdMinutes: true,
         whatsappNumber: true,
@@ -119,6 +129,7 @@ router.patch("/", requireRole("ADMIN", "MANAGER"), requireModule("settings", "ed
       summary: `Updated ${Object.keys(data).join(", ")}`,
     });
     res.json({
+      name: org.name || "",
       websiteBranchId: org.websiteBranchId,
       holdMinutes: org.holdMinutes,
       whatsappNumber: org.whatsappNumber || "",
