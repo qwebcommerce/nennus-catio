@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { Router } from "express";
 import { processOutbox } from "../lib/mailer.js";
+import { cleanupStaleUploads } from "./relocation.js";
 
 const router = Router();
 
@@ -15,11 +16,21 @@ function cronAuthorized(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-/** Sends due emails from the outbox (NFR-17). */
+/**
+ * Daily job (Vercel Hobby allows one): sends due emails from the outbox (NFR-17) and removes
+ * direct relocation uploads that were never confirmed/attached within 24 hours.
+ */
 async function emailCron(req, res) {
   if (!cronAuthorized(req)) return res.status(401).json({ error: "Unauthorized" });
   const result = await processOutbox({ limit: Number(req.query.limit) || 50 });
-  res.json({ ok: true, ...result });
+  let uploads;
+  try {
+    uploads = await cleanupStaleUploads();
+  } catch (e) {
+    console.error("[cron] upload cleanup:", e?.message || e);
+    uploads = { error: "cleanup failed" };
+  }
+  res.json({ ok: true, ...result, staleUploads: uploads });
 }
 
 router.get("/email", emailCron);

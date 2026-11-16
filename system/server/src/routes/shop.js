@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { Router } from "express";
+import { storageEnabled } from "../lib/storage.js";
 import bcrypt from "bcryptjs";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
@@ -171,6 +172,8 @@ router.get("/meta", async (req, res) => {
     categories,
     whatsappNumber: org.whatsappNumber || "",
     homeVisitFee: riyals(org.homeVisitFee || 0),
+    // Relocation documents go straight from the browser to Supabase Storage (no keys are exposed).
+    directDocumentUpload: storageEnabled(),
     business: {
       name: org.name,
       phone: org.phone || "",

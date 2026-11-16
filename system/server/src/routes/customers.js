@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { assertVersion, isStaleEditError, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { RELOCATION_DOCUMENTS_BUCKET, removeObjects } from "../lib/storage.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -314,8 +315,14 @@ router.delete("/:id", requireModule("customers", "delete"), async (req, res) => 
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row) return res.status(404).end();
+  // Relocation documents cascade with the customer; their bucket objects are removed afterwards.
+  const stored = await prisma.relocationDocument.findMany({
+    where: { request: { customerId: row.id }, storagePath: { not: null } },
+    select: { storagePath: true },
+  });
   try {
     await prisma.customer.delete({ where: { id: row.id } });
+    await removeObjects(RELOCATION_DOCUMENTS_BUCKET, stored.map((d) => d.storagePath));
     res.status(204).end();
   } catch {
     res.status(400).json({ error: "تعذر الحذف — قد تكون هناك مبيعات مرتبطة" });
