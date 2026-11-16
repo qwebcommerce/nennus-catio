@@ -1392,8 +1392,11 @@ model CashSession {
   closingCountedCash Decimal?
   expectedCash       Decimal?
   cashVariance       Decimal?
+  /// Card taken in the session, net of card refunds. Set at close.
+  cardTotal          Decimal?
   note               String?
   sales              Sale[]
+  refunds            Refund[]
 }
 
 model AuditLog {
@@ -1422,8 +1425,15 @@ model Refund {
   total            Decimal
   note             String?
   gatewayRefundId  String?
+  /// How the money went back (cash, card, Fawran, link). Empty on old rows.
+  method           PaymentMethod?
+  /// Till session the cash left from. Expected cash at close subtracts it.
+  cashSessionId    String?
+  cashSession      CashSession? @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
   createdAt        DateTime     @default(now())
   items            RefundItem[]
+
+  @@index([cashSessionId])
 }
 
 model OfflineInventoryReceipt {
@@ -1445,6 +1455,11 @@ model RefundItem {
   subtotal  Decimal
   /// Cost reversed when the goods are returned. Empty when the refund is money only.
   costAmount Decimal?
+  /// Sale line this refund line comes from. Empty on old rows.
+  saleItemId String?
+  variantId  String?
+
+  @@index([saleItemId])
 }
 
 model Purchase {
