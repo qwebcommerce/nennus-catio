@@ -17,6 +17,7 @@ import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { formatDate, qatarYmd } from "../utils/qatarDate.js";
 
 function toYMD(d) {
   const x = new Date(d);
@@ -58,6 +59,7 @@ export default function Reports() {
     amount: "",
     description: "",
     expenseDate: toYMD(new Date()),
+    paidFrom: "CASH",
   });
   const [editingExpenseId, setEditingExpenseId] = useState(null);
 
@@ -66,8 +68,8 @@ export default function Reports() {
     setMsg("");
     try {
       const q = new URLSearchParams();
-      q.set("from", new Date(from + "T00:00:00").toISOString());
-      q.set("to", new Date(to + "T23:59:59").toISOString());
+      q.set("from", from);
+      q.set("to", to);
       q.set("groupBy", groupBy);
       if (branchId) q.set("branchId", branchId);
       const a = await api(`/api/reports/analytics?${q.toString()}`);
@@ -83,8 +85,9 @@ export default function Reports() {
   const loadExpenses = useCallback(async () => {
     try {
       const q = new URLSearchParams();
-      q.set("from", new Date(from + "T00:00:00").toISOString());
-      q.set("to", new Date(to + "T23:59:59").toISOString());
+      // Plain days: the server reads them as whole Qatar days (inclusive).
+      q.set("from", from);
+      q.set("to", to);
       const rows = await api(`/api/expenses?${q.toString()}`);
       setExpenseList(rows);
     } catch {
@@ -135,13 +138,16 @@ export default function Reports() {
     e.preventDefault();
     setMsg("");
     try {
-      const amt = Number(String(form.amount).replace(",", "."));
-      if (!Number.isFinite(amt) || amt < 0) throw new Error(t("reports.badAmount"));
+      const amountText = String(form.amount).replace(",", ".").trim();
+      const amt = Number(amountText);
+      if (!Number.isFinite(amt) || amt <= 0 || !/^\d+(\.\d{1,2})?$/.test(amountText)) throw new Error(t("reports.badAmount"));
       const body = {
         category: form.category,
-        amount: amt,
+        amount: amountText,
+        paidFrom: form.paidFrom,
         description: form.description.trim() || undefined,
-        expenseDate: new Date(form.expenseDate + "T12:00:00").toISOString(),
+        // Noon in Qatar so the expense always lands on the chosen Qatar day.
+        expenseDate: `${form.expenseDate}T12:00:00+03:00`,
       };
       if (editingExpenseId) {
         await api(`/api/expenses/${editingExpenseId}`, { method: "PATCH", body });
@@ -150,7 +156,7 @@ export default function Reports() {
       } else {
         await api("/api/expenses", { method: "POST", body });
       }
-      setForm((f) => ({ ...f, amount: "", description: "", category: "OTHER", expenseDate: toYMD(new Date()) }));
+      setForm((f) => ({ ...f, amount: "", description: "", category: "OTHER", expenseDate: toYMD(new Date()), paidFrom: "CASH" }));
       await loadExpenses();
       await loadAnalytics();
     } catch (err) {
@@ -164,7 +170,8 @@ export default function Reports() {
       category: row.category || "OTHER",
       amount: String(row.amount ?? ""),
       description: row.description || "",
-      expenseDate: toYMD(row.expenseDate || new Date()),
+      expenseDate: qatarYmd(row.expenseDate || new Date()),
+      paidFrom: row.paidFrom || "CASH",
     });
     setTab("expenses");
   };
@@ -175,7 +182,7 @@ export default function Reports() {
       await api(`/api/expenses/${id}`, { method: "DELETE" });
       if (editingExpenseId === id) {
         setEditingExpenseId(null);
-        setForm({ category: "OTHER", amount: "", description: "", expenseDate: toYMD(new Date()) });
+        setForm({ category: "OTHER", amount: "", description: "", expenseDate: toYMD(new Date()), paidFrom: "CASH" });
       }
       await loadExpenses();
       await loadAnalytics();
@@ -339,6 +346,18 @@ export default function Reports() {
                 />
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("fd.paidFrom")}</span>
+                <select
+                  value={form.paidFrom}
+                  onChange={(e) => setForm({ ...form, paidFrom: e.target.value })}
+                  required
+                  style={{ minHeight: 44, padding: "8px 12px" }}
+                >
+                  <option value="CASH">{t("fd.source.CASH")}</option>
+                  <option value="BANK">{t("fd.source.BANK")}</option>
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("expense.date")}</span>
                 <input type="date" value={form.expenseDate} onChange={(e) => setForm({ ...form, expenseDate: e.target.value })} style={{ minHeight: 44 }} />
               </label>
@@ -357,7 +376,7 @@ export default function Reports() {
                   className="btn-touch"
                   onClick={() => {
                     setEditingExpenseId(null);
-                    setForm({ category: "OTHER", amount: "", description: "", expenseDate: toYMD(new Date()) });
+                    setForm({ category: "OTHER", amount: "", description: "", expenseDate: toYMD(new Date()), paidFrom: "CASH" });
                   }}
                 >
                   {t("common.cancel")}
@@ -373,6 +392,7 @@ export default function Reports() {
                   <th style={{ padding: 8 }}>{t("expense.date")}</th>
                   <th style={{ padding: 8 }}>{t("expense.category")}</th>
                   <th style={{ padding: 8 }}>{t("expense.amount")}</th>
+                  <th style={{ padding: 8 }}>{t("fd.paidFrom")}</th>
                   <th style={{ padding: 8 }}>{t("expense.note")}</th>
                   <th style={{ padding: 8 }} />
                 </tr>
@@ -380,9 +400,10 @@ export default function Reports() {
               <tbody>
                 {expenseList.map((row) => (
                   <tr key={row.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                    <td style={{ padding: 8, whiteSpace: "nowrap" }}>{new Date(row.expenseDate).toLocaleDateString(locale === "en" ? "en-GB" : "ar-SA")}</td>
+                    <td style={{ padding: 8, whiteSpace: "nowrap" }}>{formatDate(row.expenseDate, locale)}</td>
                     <td style={{ padding: 8 }}>{t(`expense.cat.${row.category}`)}</td>
                     <td style={{ padding: 8, fontWeight: 600 }}>{Number(row.amount).toFixed(2)}</td>
+                    <td style={{ padding: 8 }}>{t(`fd.source.${row.paidFrom || "CASH"}`)}</td>
                     <td style={{ padding: 8 }}>{row.description || "—"}</td>
                     <td style={{ padding: 8 }}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

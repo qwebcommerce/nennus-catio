@@ -47,6 +47,7 @@ export default function Settings() {
   const [websiteBranchId, setWebsiteBranchId] = useState("");
   const [whatsappNumber, setWhatsappNumber] = useState("");
   const [homeVisitFee, setHomeVisitFee] = useState("0");
+  const [businessName, setBusinessName] = useState("");
   const [profile, setProfile] = useState({ phone: "", publicEmail: "", publicAddress: "", hoursText: "", hoursTextEn: "", notifyEmail: "", alertOrder: true, alertBooking: true, alertRelocation: true, alertLowStock: false });
 
   useEffect(() => {
@@ -58,6 +59,7 @@ export default function Settings() {
           setWebsiteBranchId(s?.websiteBranchId || "");
           setWhatsappNumber(s?.whatsappNumber || "");
           setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
+          setBusinessName(s?.name || "");
           setProfile({
             phone: s?.phone || "",
             publicEmail: s?.publicEmail || "",
@@ -192,6 +194,10 @@ export default function Settings() {
             ))}
           </select>
           <label>
+            <span>{t("fd.businessName")}</span>
+            <input value={businessName} onChange={(e) => setBusinessName(e.target.value)} maxLength={120} required />
+          </label>
+          <label>
             <span>{t("shop.whatsapp")}</span>
             <input value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="97433130153" />
           </label>
@@ -218,8 +224,9 @@ export default function Settings() {
               try {
                 const saved = await api("/api/org-settings", {
                   method: "PATCH",
-                  body: { whatsappNumber, homeVisitFee: Number(homeVisitFee), ...profile },
+                  body: { name: businessName, whatsappNumber, homeVisitFee: Number(homeVisitFee), ...profile },
                 });
+                setBusinessName(saved.name || businessName);
                 setWhatsappNumber(saved.whatsappNumber || "");
                 setHomeVisitFee(String(saved.homeVisitFee ?? 0));
                 showToast(t("common.save"), "success");

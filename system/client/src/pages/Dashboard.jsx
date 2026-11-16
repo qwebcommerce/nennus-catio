@@ -22,6 +22,7 @@ import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import { printPaperClass } from "../utils/printPaper.js";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
+import { LowStockList } from "../components/LowStockList.jsx";
 
 const tooltipStyle = {
   background: "var(--surface)",
@@ -238,6 +239,8 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
+
+              <LowStockList items={summary.lowStockItems || summary.lowStockList} branchId={branchId} />
 
               <section className="dash-shell-card dash-customers-strip">
                 <div className="dash-strip-head">
