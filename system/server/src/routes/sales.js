@@ -5,32 +5,16 @@ import { findBranchInOrg } from "../lib/orgScope.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { mailStaff } from "../lib/mailer.js";
-import { unitPriceDecimalForSale } from "../lib/productPricing.js";
 import { saleRequiresOpenCashSession } from "../lib/saleCash.js";
 import {
   dbUnavailableMessage,
   isDbUnavailableError,
 } from "../lib/dbErrors.js";
-import {
-  computeEarnPoints,
-  couponDiscountMoney,
-  getOrCreateLoyaltySettings,
-  loyaltyRedeemMoney,
-  normalizeCouponCode,
-  normalizePhone,
-  shouldDeferLoyaltyEarn,
-} from "../lib/loyalty.js";
-import { resolveLineModifiers } from "../lib/productModifiers.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { requireModule } from "../middleware/auth.js";
 import crypto from "crypto";
 import QRCode from "qrcode";
-import {
-  consumeLotsFefo,
-  ensureLotsCoverQuantity,
-} from "../lib/inventoryLots.js";
-import { getOrCreateTaxSettings, resolveSaleTaxPercent } from "../lib/taxPacks.js";
 import { heldQuantity } from "../lib/webOrder.js";
 
 const router = Router();
@@ -125,28 +109,12 @@ router.post("/checkout", async (req, res) => {
     paymentSplits,
     customerId,
     discountAmount: discountRaw,
-    taxPercent: taxPercentRaw,
     clientMutationId: clientMutationIdRaw,
-    deviceId: _deviceId,
-    useWholesalePricing: useWholesaleRaw,
-    saleChannel: saleChannelRaw,
     couponCode: couponCodeRaw,
-    loyaltyPointsToRedeem: loyaltyRedeemRaw,
-    guestPhone: guestPhoneRaw,
-    tableNumber: tableNumberRaw,
     orderNote: orderNoteRaw,
     discountReason: discountReasonRaw,
     paymentReference: paymentReferenceRaw,
   } = req.body || {};
-  const rawCh =
-    saleChannelRaw != null && String(saleChannelRaw).trim()
-      ? String(saleChannelRaw).toUpperCase()
-      : null;
-  let channel = "RETAIL";
-  if (rawCh === "WHOLESALE") channel = "WHOLESALE";
-  else if (rawCh === "RETAIL") channel = "RETAIL";
-  else channel = Boolean(useWholesaleRaw) ? "WHOLESALE" : "RETAIL";
-  const useWholesalePricing = channel === "WHOLESALE";
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
   const tillBranch = await prisma.branch.findFirst({
@@ -244,21 +212,7 @@ router.post("/checkout", async (req, res) => {
       custId = c.id;
     }
 
-    const loyaltySettings = await getOrCreateLoyaltySettings(prisma, orgId);
-    const loyaltyActive =
-      loyaltySettings.enabled &&
-      !(channel === "WHOLESALE" && loyaltySettings.excludeWholesale);
-
-    const couponCode = normalizeCouponCode(couponCodeRaw);
-    const loyaltyRedeemReq = Math.max(
-      0,
-      Math.floor(Number(loyaltyRedeemRaw) || 0)
-    );
-    const guestPhoneNorm = normalizePhone(guestPhoneRaw);
-    const tableNumber =
-      tableNumberRaw != null && String(tableNumberRaw).trim()
-        ? String(tableNumberRaw).trim().slice(0, 40)
-        : null;
+    const couponCode = String(couponCodeRaw || "").trim().toUpperCase().replace(/\s+/g, "") || null;
     const orderNoteBase =
       orderNoteRaw != null && String(orderNoteRaw).trim()
         ? String(orderNoteRaw).trim().slice(0, 500)
@@ -308,12 +262,7 @@ router.post("/checkout", async (req, res) => {
         variantId: variant?.id || null,
       });
       if (onHand - held < qty) throw new Error(`كمية غير كافية: ${variant?.label || product.name}`);
-      const basePrice = variant ? variant.price : unitPriceDecimalForSale(product, useWholesalePricing);
-      const { selected, delta } = resolveLineModifiers(product, line.modifiers || line.modifierKeys);
-      const unitPrice =
-        delta === 0
-          ? basePrice
-          : new Prisma.Decimal(roundMoney(Number(basePrice) + delta).toFixed(2));
+      const unitPrice = variant ? variant.price : new Prisma.Decimal(product.price);
       const subtotal = product.sellBy === "WEIGHT" ? unitPrice.mul(qty).div(1000) : unitPrice.mul(qty);
       total = total.add(subtotal);
       lineData.push({
@@ -327,7 +276,6 @@ router.post("/checkout", async (req, res) => {
         unitCost,
         costAmount: product.sellBy === "WEIGHT" ? (unitCost * qty) / 1000 : unitCost * qty,
         discountAmount: 0,
-        modifiers: selected.length ? selected : null,
       });
     }
 
@@ -365,113 +313,20 @@ router.post("/checkout", async (req, res) => {
       line.discountAmount = promo.lineDiscounts[index] || 0;
     });
 
-    let couponRow = null;
-    let couponDiscountNum = 0;
     if (couponCode && !promo.codeApplied) {
-      couponRow = await prisma.coupon.findFirst({
-        where: { organizationId: orgId, code: couponCode },
-      });
-      if (!couponRow || !couponRow.active) {
-        throw new Error("كوبون غير صالح");
-      }
-      const now = new Date();
-      if (couponRow.validFrom > now) throw new Error("الكوبون غير سارٍ بعد");
-      if (couponRow.validUntil && couponRow.validUntil < now) {
-        throw new Error("انتهت صلاحية الكوبون");
-      }
-      if (
-        couponRow.maxUsesTotal != null &&
-        couponRow.usesCount >= couponRow.maxUsesTotal
-      ) {
-        throw new Error("استُنفدت استخدامات الكوبون");
-      }
-      const ch = couponRow.channel;
-      if (ch === "RETAIL" && channel === "WHOLESALE") {
-        throw new Error("الكوبون لا ينطبق على الجملة");
-      }
-      if (ch === "WHOLESALE" && channel === "RETAIL") {
-        throw new Error("الكوبون لا ينطبق على التجزئة");
-      }
-      const minO = couponRow.minOrderAmount != null ? Number(couponRow.minOrderAmount) : 0;
-      if (afterManualNum < minO) {
-        throw new Error("الحد الأدنى للطلب غير مستوفى للكوبون");
-      }
+      throw new Error("كوبون غير صالح");
     }
 
-    if (couponRow) {
-      couponDiscountNum = couponDiscountMoney(
-        afterManualNum,
-        couponRow,
-        afterManualNum
-      );
-    }
+    let afterPromoNum = roundMoney(afterManualNum - promo.discount);
+    if (afterPromoNum < 0) afterPromoNum = 0;
 
-    let afterCouponNum = roundMoney(afterManualNum - promo.discount - couponDiscountNum);
-    if (afterCouponNum < 0) afterCouponNum = 0;
-
-    if (
-      loyaltyRedeemReq > 0 &&
-      couponRow &&
-      !loyaltySettings.allowCouponWithPoints
-    ) {
-      throw new Error("لا يمكن الجمع بين الكوبون واستبدال النقاط حسب إعدادات المحل");
-    }
-
-    if (loyaltyRedeemReq > 0 && loyaltyActive && loyaltySettings.redemptionEnabled) {
-      if (!custId && !guestPhoneNorm) {
-        throw new Error("اختر عميلاً أو أدخل رقم هاتف لاستبدال النقاط");
-      }
-    }
-
-    if (!custId && guestPhoneNorm) {
-      let gc = await prisma.customer.findFirst({
-        where: { organizationId: orgId, phone: guestPhoneNorm },
-      });
-      if (!gc) {
-        gc = await prisma.customer.create({
-          data: {
-            organizationId: orgId,
-            name: `زائر ${guestPhoneNorm}`,
-            phone: guestPhoneNorm,
-          },
-        });
-      }
-      custId = gc.id;
-    }
-
-    let custRow = custId
+    const custRow = custId
       ? await prisma.customer.findUnique({ where: { id: custId } })
       : null;
 
-    let redeemPointsUsed = 0;
-    let loyaltyDiscountNum = 0;
-    if (
-      loyaltyActive &&
-      loyaltySettings.redemptionEnabled &&
-      custRow &&
-      loyaltyRedeemReq > 0
-    ) {
-      const r = loyaltyRedeemMoney(
-        loyaltyRedeemReq,
-        custRow.loyaltyPoints,
-        loyaltySettings,
-        afterCouponNum
-      );
-      redeemPointsUsed = r.pointsUsed;
-      loyaltyDiscountNum = r.money;
-    }
-
-    const afterLoyaltyNum = roundMoney(afterCouponNum - loyaltyDiscountNum);
-    const afterLoyaltyDec = new Prisma.Decimal(afterLoyaltyNum.toFixed(2));
-
-    const taxSettings = await getOrCreateTaxSettings(prisma, orgId);
-    const tp = resolveSaleTaxPercent(taxPercentRaw, taxSettings);
-    let taxDec = new Prisma.Decimal(0);
-    if (tp > 0) {
-      taxDec = afterLoyaltyDec.mul(new Prisma.Decimal(tp)).div(100);
-    }
-    const grandTotal = afterLoyaltyDec.add(taxDec);
-    const grandNum = roundMoney(Number(grandTotal.toString()));
+    // Qatar has no VAT: sales carry no tax.
+    const grandTotal = new Prisma.Decimal(afterPromoNum.toFixed(2));
+    const grandNum = afterPromoNum;
 
     const splitInfo = normalizePaymentSplits(paymentSplits, grandNum);
     let pm = splitInfo.useSplit ? "SPLIT" : pmSingle;
@@ -559,42 +414,11 @@ router.post("/checkout", async (req, res) => {
         ? openSession.id
         : null;
 
-    const eligibleBase = afterCouponNum;
-    const minEarn = Number(loyaltySettings.minOrderForEarn || 0);
-    let canEarn =
-      loyaltyActive &&
-      custRow &&
-      eligibleBase >= minEarn &&
-      !(loyaltySettings.guestPhoneRequired && !String(custRow.phone || "").trim());
-
-    if (amountDueNum > 0.01) {
-      canEarn = false;
-    }
-
-    const deferEarn =
-      canEarn &&
-      shouldDeferLoyaltyEarn(
-        loyaltySettings,
-        splitInfo.useSplit ? "SPLIT" : pm,
-        splitInfo.useSplit
-      );
-
-    let pointsEarnedPreview = 0;
-    if (canEarn) {
-      const lifeBefore = Number(custRow.lifetimeSpend || 0);
-      pointsEarnedPreview = computeEarnPoints(
-        loyaltySettings,
-        eligibleBase,
-        lifeBefore
-      );
-    }
-
     const saleInclude = {
       items: { include: { product: true } },
       branch: true,
       customer: true,
       user: { select: { id: true, name: true, nameEn: true, role: true, email: true } },
-      coupon: true,
     };
 
     const sale = await prisma.$transaction(async (tx) => {
@@ -606,52 +430,18 @@ router.post("/checkout", async (req, res) => {
         if (!lock) throw new Error("عميل غير موجود");
       }
 
-      if (
-        couponRow &&
-        customerIdFinal &&
-        couponRow.maxUsesPerCustomer != null
-      ) {
-        const used = await tx.sale.count({
-          where: {
-            couponId: couponRow.id,
-            customerId: customerIdFinal,
-          },
-        });
-        if (used >= couponRow.maxUsesPerCustomer) {
-          throw new Error("استُنفدت استخدامات الكوبون لهذا العميل");
-        }
-      }
-
-      if (redeemPointsUsed > 0 && customerIdFinal) {
-        await tx.customer.update({
-          where: { id: customerIdFinal },
-          data: { loyaltyPoints: { decrement: redeemPointsUsed } },
-        });
-      }
-
-      const couponDiscDec = new Prisma.Decimal(couponDiscountNum.toFixed(2));
-      const loyaltyDiscDec = new Prisma.Decimal(loyaltyDiscountNum.toFixed(2));
-
-      let awardStatus = "NONE";
-      let pointsEarnedVal = null;
-      if (canEarn && pointsEarnedPreview > 0) {
-        awardStatus = deferEarn ? "PENDING" : "AWARDED";
-        pointsEarnedVal = pointsEarnedPreview;
-      }
-
       const created = await tx.sale.create({
         data: {
           branchId: bid,
           userId: req.user.sub,
           customerId: customerIdFinal,
-          channel,
           orderChannel,
           ...(paymentReference ? { paymentReference: paymentReference.slice(0, 120) } : {}),
           ...(clientMutationId ? { clientMutationId } : {}),
           total: grandTotal,
           discountAmount: discountDec,
-          taxAmount: taxDec,
-          taxPercent: new Prisma.Decimal(tp.toFixed(2)),
+          taxAmount: new Prisma.Decimal(0),
+          taxPercent: new Prisma.Decimal(0),
           amountPaid: new Prisma.Decimal(amountPaidNum.toFixed(2)),
           amountDue: new Prisma.Decimal(amountDueNum.toFixed(2)),
           invoiceNumber: generateInvoiceNumber(bid),
@@ -662,19 +452,7 @@ router.post("/checkout", async (req, res) => {
           paymentMethod: pm,
           ...(splitInfo.useSplit ? { paymentSplits: splitInfo.normalized } : {}),
           cashSessionId: attachSessionId,
-          couponId: couponRow?.id ?? null,
-          couponDiscountAmount: couponDiscDec,
           promotionDiscount: promo.discountDec,
-          loyaltyPointsRedeemed: redeemPointsUsed,
-          loyaltyDiscountAmount: loyaltyDiscDec,
-          loyaltyPointsEarned:
-            pointsEarnedVal != null ? pointsEarnedVal : null,
-          loyaltyAwardStatus: awardStatus,
-          loyaltyEligibleBase:
-            canEarn && pointsEarnedPreview > 0
-              ? new Prisma.Decimal(eligibleBase.toFixed(2))
-              : null,
-          tableNumber,
           orderNote,
           deliveryAddress,
           items: {
@@ -687,7 +465,6 @@ router.post("/checkout", async (req, res) => {
               discountAmount: new Prisma.Decimal(Number(l.discountAmount || 0).toFixed(2)),
               unitCost: new Prisma.Decimal(Number(l.unitCost || 0).toFixed(4)),
               costAmount: new Prisma.Decimal(Number(l.costAmount || 0).toFixed(4)),
-              ...(l.modifiers ? { modifiers: l.modifiers } : {}),
             })),
           },
         },
@@ -717,87 +494,6 @@ router.post("/checkout", async (req, res) => {
             quantityDelta: -l.quantity,
             reason: "SALE",
             userId: req.user.sub,
-          },
-        });
-      }
-
-      // FEFO lot allocation: consume earliest-expiry lots first for traceability.
-      // If lots drifted behind aggregate stock, auto-cover then consume so refunds can restore.
-      for (const saleItem of created.items) {
-        const needed = Number(saleItem.quantity || 0);
-        if (needed <= 0) continue;
-        if (saleItem.variantId || saleItem.product?.sellBy === "WEIGHT") continue;
-        await ensureLotsCoverQuantity(tx, {
-          orgId,
-          branchId: bid,
-          productId: saleItem.productId,
-          quantity: needed,
-          note: "sale-unlotted-cover",
-        });
-        const taken = await consumeLotsFefo(tx, {
-          orgId,
-          branchId: bid,
-          productId: saleItem.productId,
-          quantity: needed,
-        });
-        if (taken.length > 0) {
-          await tx.saleItemLot.createMany({
-            data: taken.map((t) => ({
-              organizationId: orgId,
-              saleItemId: saleItem.id,
-              inventoryLotId: t.lotId,
-              quantity: t.quantity,
-            })),
-          });
-        }
-      }
-
-      if (couponRow) {
-        await tx.coupon.update({
-          where: { id: couponRow.id },
-          data: { usesCount: { increment: 1 } },
-        });
-      }
-
-      if (redeemPointsUsed > 0 && customerIdFinal) {
-        const bal = await tx.customer.findUnique({
-          where: { id: customerIdFinal },
-        });
-        await tx.loyaltyLedger.create({
-          data: {
-            organizationId: orgId,
-            customerId: customerIdFinal,
-            saleId: created.id,
-            type: "REDEEM",
-            points: -redeemPointsUsed,
-            balanceAfter: bal.loyaltyPoints,
-            note: "استبدال نقاط",
-          },
-        });
-      }
-
-      if (
-        canEarn &&
-        pointsEarnedPreview > 0 &&
-        !deferEarn &&
-        customerIdFinal
-      ) {
-        const updated = await tx.customer.update({
-          where: { id: customerIdFinal },
-          data: {
-            loyaltyPoints: { increment: pointsEarnedPreview },
-            lifetimeSpend: { increment: eligibleBase },
-          },
-        });
-        await tx.loyaltyLedger.create({
-          data: {
-            organizationId: orgId,
-            customerId: customerIdFinal,
-            saleId: created.id,
-            type: "EARN",
-            points: pointsEarnedPreview,
-            balanceAfter: updated.loyaltyPoints,
-            note: "كسب نقاط من بيع",
           },
         });
       }
@@ -835,7 +531,6 @@ router.post("/checkout", async (req, res) => {
         paymentMethod: sale.paymentMethod,
         lines: items.length,
         split: sale.paymentMethod === "SPLIT",
-        channel: sale.channel,
       },
     });
 
@@ -892,97 +587,6 @@ router.post("/checkout", async (req, res) => {
       msg =
         "مخطط قاعدة البيانات غير متوافق (عمود أو جدول ناقص). نفّذ ترحيلات Prisma على الخادم: prisma migrate deploy";
     }
-    return res.status(400).json({ error: msg });
-  }
-});
-
-/** تأكيد استلام الطلب — منح نقاط الولاء المعلّقة (دفع عند الاستلام / توقيت الاستلام) */
-router.post("/:saleId/confirm-delivery", async (req, res) => {
-  const orgId = req.user.organizationId;
-  const saleId = String(req.params.saleId || "").trim();
-  if (!saleId) return res.status(400).json({ error: "معرّف غير صالح" });
-
-  try {
-    const out = await prisma.$transaction(async (tx) => {
-      const sale = await tx.sale.findFirst({
-        where: { id: saleId, branch: { organizationId: orgId } },
-        include: { customer: true, branch: true },
-      });
-      if (!sale) throw new Error("الفاتورة غير موجودة");
-      if (
-        req.user.role !== "ADMIN" &&
-        req.user.branchId &&
-        sale.branchId !== req.user.branchId
-      ) {
-        throw new Error("غير مصرح");
-      }
-      if (sale.loyaltyAwardStatus !== "PENDING") {
-        throw new Error("لا توجد نقاط معلّقة على هذه الفاتورة");
-      }
-      if (!sale.customerId || sale.loyaltyEligibleBase == null) {
-        throw new Error("لا يمكن تأكيد الولاء لهذه الفاتورة");
-      }
-
-      const settings = await getOrCreateLoyaltySettings(tx, orgId);
-      if (!settings.enabled) throw new Error("برنامج الولاء غير مفعّل");
-
-      const eligible = roundMoney(Number(sale.loyaltyEligibleBase));
-      const cust = await tx.customer.findUnique({
-        where: { id: sale.customerId },
-      });
-      if (!cust) throw new Error("عميل غير موجود");
-
-      const lifeBefore = Number(cust.lifetimeSpend);
-      const points = computeEarnPoints(settings, eligible, lifeBefore);
-
-      const updated = await tx.customer.update({
-        where: { id: cust.id },
-        data: {
-          lifetimeSpend: { increment: eligible },
-          ...(points > 0 ? { loyaltyPoints: { increment: points } } : {}),
-        },
-      });
-
-      if (points > 0) {
-        await tx.loyaltyLedger.create({
-          data: {
-            organizationId: orgId,
-            customerId: cust.id,
-            saleId: sale.id,
-            type: "EARN",
-            points,
-            balanceAfter: updated.loyaltyPoints,
-            note: "كسب بعد تأكيد الاستلام",
-          },
-        });
-      }
-
-      await tx.sale.update({
-        where: { id: sale.id },
-        data: {
-          loyaltyAwardStatus: "AWARDED",
-          loyaltyPointsEarned: points,
-        },
-      });
-
-      return tx.sale.findFirst({
-        where: { id: sale.id },
-        include: {
-          items: { include: { product: true } },
-          branch: true,
-          customer: true,
-          user: { select: { id: true, name: true } },
-          coupon: true,
-        },
-      });
-    }, { maxWait: 10000, timeout: 60000 });
-
-    res.json(out);
-  } catch (e) {
-    if (isDbUnavailableError(e)) {
-      return res.status(503).json({ error: dbUnavailableMessage });
-    }
-    const msg = e instanceof Error ? e.message : "فشل التأكيد";
     return res.status(400).json({ error: msg });
   }
 });

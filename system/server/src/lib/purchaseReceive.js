@@ -64,12 +64,6 @@ export async function executeReceivePurchase({
     const qty = Math.max(1, Math.floor(Number(line.quantity) || 1));
     const uc = Number(line.unitCost);
     if (Number.isNaN(uc) || uc < 0) throw new Error("تكلفة الوحدة غير صالحة");
-    let expiryDate = null;
-    if (line.expiryDate != null && String(line.expiryDate).trim()) {
-      const d = new Date(String(line.expiryDate));
-      if (Number.isNaN(d.getTime())) throw new Error("تاريخ انتهاء غير صالح");
-      expiryDate = d;
-    }
     const product = await prisma.product.findFirst({
       where: { id: productId, organizationId: orgId },
     });
@@ -77,7 +71,7 @@ export async function executeReceivePurchase({
     const unitCost = new Prisma.Decimal(uc.toFixed(2));
     const subtotal = unitCost.mul(qty);
     total = total.add(subtotal);
-    lineData.push({ productId, quantity: qty, unitCost, subtotal, expiryDate });
+    lineData.push({ productId, quantity: qty, unitCost, subtotal });
   }
 
   const afterPurchase = [];
@@ -106,20 +100,6 @@ export async function executeReceivePurchase({
         }),
       );
     }
-    afterPurchase.push(
-      prisma.inventoryLot.create({
-        data: {
-          organizationId: orgId,
-          productId: l.productId,
-          branchId: bid,
-          receivedAt: new Date(),
-          expiryDate: l.expiryDate ?? null,
-          quantityReceived: l.quantity,
-          quantityOnHand: l.quantity,
-          unitCost: l.unitCost,
-        },
-      }),
-    );
   }
 
   const purchaseResults = await prisma.$transaction([
@@ -135,7 +115,6 @@ export async function executeReceivePurchase({
             quantity: l.quantity,
             unitCost: l.unitCost,
             subtotal: l.subtotal,
-            expiryDate: l.expiryDate ?? null,
           })),
         },
       },

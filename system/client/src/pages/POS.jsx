@@ -12,7 +12,6 @@ import {
 } from "../components/PaymentMethodControls.jsx";
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner.js";
 import { useCartStore } from "../store/cartStore.js";
-import { useAuth } from "../context/AuthContext.jsx";
 import { useActiveBranchId, useActiveBranchLabel, useBranchContext } from "../context/BranchContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
@@ -26,13 +25,8 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-function productHasModifiers(p) {
-  return Array.isArray(p?.modifiers) && p.modifiers.length > 0;
-}
-
 export default function POS() {
   const { classFor } = usePrintSettings();
-  const { user, can } = useAuth();
   const { label: currencyLabel } = useOrgCurrency();
   const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
@@ -60,24 +54,14 @@ export default function POS() {
   const [deliveryAddress, setDeliveryAddress] = useState("");
   const [quickCustomerName, setQuickCustomerName] = useState("");
   const [discountInput, setDiscountInput] = useState("");
-  const [taxPercent, setTaxPercent] = useState(() =>
-    user?.tax?.defaultTaxPercent != null ? String(user.tax.defaultTaxPercent) : "0"
-  );
-  const [taxOptions, setTaxOptions] = useState([0, 5, 15]);
-  const [taxMeta, setTaxMeta] = useState(null);
   const [holdLabel, setHoldLabel] = useState("");
   const [heldList, setHeldList] = useState([]);
   const [copyDone, setCopyDone] = useState(false);
   const [couponInput, setCouponInput] = useState("");
-  const [loyaltyPointsInput, setLoyaltyPointsInput] = useState("");
-  const [guestPhoneInput, setGuestPhoneInput] = useState("");
   /** مبلغ يُدفع الآن عند البيع الجزئي بالآجل (يُترك فارغاً للدفع الكامل) */
   const [payNowInput, setPayNowInput] = useState("");
   const [openCashSession, setOpenCashSession] = useState(null);
-  const [tableNumber, setTableNumber] = useState("");
   const [orderNote, setOrderNote] = useState("");
-  const [modifierProduct, setModifierProduct] = useState(null);
-  const [modifierKeys, setModifierKeys] = useState([]);
   const [discountReason, setDiscountReason] = useState("");
   const [cashTendered, setCashTendered] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
@@ -89,23 +73,9 @@ export default function POS() {
   const searchWrapRef = useRef(null);
   const searchInputRef = useRef(null);
 
-  const showCafeExtras = false;
-
   const items = useCartStore((s) => s.items);
-  const useWholesalePricing = useCartStore((s) => s.useWholesalePricing);
-  const setUseWholesalePricing = useCartStore((s) => s.setUseWholesalePricing);
   const syncLinePricesFromProducts = useCartStore((s) => s.syncLinePricesFromProducts);
 
-  const hasWholesaleCatalog = useMemo(
-    () =>
-      products.some(
-        (p) => p.wholesalePrice != null && p.wholesalePrice !== "" && !Number.isNaN(Number(p.wholesalePrice))
-      ),
-    [products]
-  );
-  const showWholesaleToggle =
-    hasWholesaleCatalog &&
-    can("wholesale");
   const addProduct = useCartStore((s) => s.addProduct);
   const setQty = useCartStore((s) => s.setQuantity);
   const removeLine = useCartStore((s) => s.removeLine);
@@ -116,9 +86,7 @@ export default function POS() {
     cartSubtotal
   );
   const afterDisc = Math.max(0, cartSubtotal - discountNum);
-  const taxPctNum = Math.min(100, Math.max(0, Number.parseFloat(String(taxPercent).replace(",", ".")) || 0));
-  const taxPreview = afterDisc * (taxPctNum / 100);
-  const amountDue = round2(afterDisc + taxPreview);
+  const amountDue = round2(afterDisc);
   const clearCart = useCartStore((s) => s.clear);
   const setBranchCart = useCartStore((s) => s.setBranchId);
   const replaceAll = useCartStore((s) => s.replaceAll);
@@ -128,28 +96,6 @@ export default function POS() {
       .then(setCustomers)
       .catch(() => setCustomers([]));
   }, []);
-
-  useEffect(() => {
-    if (typeof navigator !== "undefined" && !navigator.onLine) {
-      if (user?.tax?.defaultTaxPercent != null) {
-        setTaxPercent(String(user.tax.defaultTaxPercent));
-        setTaxMeta(user.tax);
-        if (Array.isArray(user.tax.allowedRates)) setTaxOptions(user.tax.allowedRates);
-      }
-      return;
-    }
-    api("/api/tax-settings/status")
-      .then((s) => {
-        setTaxMeta(s);
-        if (Array.isArray(s?.allowedRates) && s.allowedRates.length) {
-          setTaxOptions(s.allowedRates);
-        }
-        if (s?.defaultTaxPercent != null) {
-          setTaxPercent(String(s.defaultTaxPercent));
-        }
-      })
-      .catch(() => {});
-  }, [user?.tax?.defaultTaxPercent]);
 
   useEffect(() => {
     if (branchId) setBranchCart(branchId);
@@ -192,46 +138,11 @@ export default function POS() {
       .catch(() => setCategories([]));
   }, []);
 
-  useEffect(() => {
-    if (!showWholesaleToggle) setUseWholesalePricing(false);
-  }, [showWholesaleToggle, setUseWholesalePricing]);
-
   const catalogLabel = (row) => {
     if (!row) return "";
     if (locale === "en" && row.nameEn?.trim()) return row.nameEn.trim();
     return row.name || row.nameEn || "";
   };
-
-  const [loyaltyFlags, setLoyaltyFlags] = useState({
-    loyaltyProgramEnabled: Boolean(user?.loyaltyProgramEnabled),
-    loyaltyRedemptionEnabled: Boolean(user?.loyaltyRedemptionEnabled),
-  });
-
-  useEffect(() => {
-    const load = () => {
-      api("/api/loyalty-settings/status")
-        .then((s) =>
-          setLoyaltyFlags({
-            loyaltyProgramEnabled: Boolean(s?.loyaltyProgramEnabled),
-            loyaltyRedemptionEnabled: Boolean(s?.loyaltyRedemptionEnabled),
-          })
-        )
-        .catch(() =>
-          setLoyaltyFlags({ loyaltyProgramEnabled: false, loyaltyRedemptionEnabled: false })
-        );
-    };
-    load();
-    window.addEventListener("focus", load);
-    window.addEventListener("loyalty-settings-changed", load);
-    return () => {
-      window.removeEventListener("focus", load);
-      window.removeEventListener("loyalty-settings-changed", load);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!loyaltyFlags.loyaltyRedemptionEnabled) setLoyaltyPointsInput("");
-  }, [loyaltyFlags.loyaltyRedemptionEnabled]);
 
   const loadProducts = useCallback(async () => {
     const bid = branchId;
@@ -254,11 +165,6 @@ export default function POS() {
       .filter((p) => {
         if (!p?.isActive && p?.isActive !== undefined) return false;
         if (categoryId && p.categoryId !== categoryId) return false;
-        // Wholesale mode: only products that have a wholesale price
-        if (useWholesalePricing) {
-          if (p.wholesalePrice == null || p.wholesalePrice === "") return false;
-          if (Number.isNaN(Number(p.wholesalePrice))) return false;
-        }
         return (
           (p.name && p.name.toLowerCase().includes(q)) ||
           (p.nameEn && p.nameEn.toLowerCase().includes(q)) ||
@@ -275,7 +181,7 @@ export default function POS() {
         );
       })
       .slice(0, 14);
-  }, [search, products, categoryId, useWholesalePricing]);
+  }, [search, products, categoryId]);
 
   const pickSearchProduct = useCallback(
     (p) => {
@@ -290,29 +196,15 @@ export default function POS() {
         setMsg("");
         return;
       }
-      if (showCafeExtras && productHasModifiers(p)) {
-        setModifierProduct(p);
-        setModifierKeys([]);
-      } else {
-        addProduct(p, 1);
-      }
+      addProduct(p, 1);
       setSearch("");
       setSearchOpen(false);
       setSearchHighlight(0);
       setMsg("");
       searchInputRef.current?.focus();
     },
-    [addProduct, showCafeExtras]
+    [addProduct]
   );
-
-  const confirmModifiers = () => {
-    if (!modifierProduct) return;
-    const catalog = Array.isArray(modifierProduct.modifiers) ? modifierProduct.modifiers : [];
-    const selected = catalog.filter((m) => modifierKeys.includes(m.key));
-    addProduct(modifierProduct, 1, { modifiers: selected });
-    setModifierProduct(null);
-    setModifierKeys([]);
-  };
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -348,7 +240,7 @@ export default function POS() {
 
   useEffect(() => {
     if (products.length > 0) syncLinePricesFromProducts(products);
-  }, [products, useWholesalePricing, syncLinePricesFromProducts]);
+  }, [products, syncLinePricesFromProducts]);
 
   useEffect(() => {
     loadHeldCarts();
@@ -500,18 +392,11 @@ export default function POS() {
           items: items.map((i) => ({
             productId: i.productId,
             quantity: i.quantity,
-            ...(i.modifiers?.length
-              ? { modifiers: i.modifiers.map((m) => ({ key: m.key })) }
-              : {}),
           })),
-          useWholesalePricing,
           customerId: customerId || undefined,
           discountInput,
-          taxPercent,
           paymentMethod,
           deliveryAddress: deliveryAddress.trim() || undefined,
-          guestPhone: guestPhoneInput.trim() || undefined,
-          tableNumber: tableNumber.trim() || undefined,
           orderNote: orderNote.trim() || undefined,
         },
       });
@@ -520,10 +405,7 @@ export default function POS() {
       setCustomerId("");
       setDeliveryAddress("");
       setDiscountInput("");
-      setTaxPercent("0");
-      setTableNumber("");
       setOrderNote("");
-      setGuestPhoneInput("");
       setSplitEnabled(false);
       setPaymentMethod("CASH");
       await loadHeldCarts();
@@ -540,14 +422,10 @@ export default function POS() {
     const p = row.payload;
     if (!p?.items?.length) return;
     setMsg("");
-    setUseWholesalePricing(Boolean(p.useWholesalePricing));
     replaceAll(p.items);
     setCustomerId(typeof p.customerId === "string" ? p.customerId : "");
     setDiscountInput(p.discountInput != null ? String(p.discountInput) : "");
-    setTaxPercent(p.taxPercent != null ? String(p.taxPercent) : "0");
     setDeliveryAddress(typeof p.deliveryAddress === "string" ? p.deliveryAddress : "");
-    setGuestPhoneInput(typeof p.guestPhone === "string" ? p.guestPhone : "");
-    setTableNumber(typeof p.tableNumber === "string" ? p.tableNumber : "");
     setOrderNote(typeof p.orderNote === "string" ? p.orderNote : "");
     const pm = typeof p.paymentMethod === "string" ? p.paymentMethod.toUpperCase() : "";
     if (PAYMENT_METHOD_IDS.includes(pm)) {
@@ -572,7 +450,7 @@ export default function POS() {
 
   const copyLastReceipt = async () => {
     if (!lastSale) return;
-    const text = buildReceiptPlainText(lastSale, branchName, locale, taxMeta || user?.tax);
+    const text = buildReceiptPlainText(lastSale, branchName, locale);
     try {
       await navigator.clipboard.writeText(text);
       setCopyDone(true);
@@ -694,33 +572,20 @@ export default function POS() {
       branchId: bid,
       customerId: customerId || undefined,
       discountAmount: discountNum > 0 ? discountNum : undefined,
-      taxPercent: taxPctNum > 0 ? taxPctNum : undefined,
-      useWholesalePricing,
       items: items.map((i) => ({
         productId: i.productId,
         variantId: i.variantId || undefined,
         quantity: i.quantity,
-        ...(i.modifiers?.length
-          ? { modifiers: i.modifiers.map((m) => ({ key: m.key })) }
-          : {}),
       })),
     };
     if (paymentMethod === "ON_DELIVERY" && !splitEnabled && deliveryAddress.trim()) {
       body.deliveryAddress = deliveryAddress.trim();
-    }
-    if (showCafeExtras) {
-      if (tableNumber.trim()) body.tableNumber = tableNumber.trim();
-      if (orderNote.trim()) body.orderNote = orderNote.trim();
     }
     if (discountNum > 0 && discountReason.trim()) {
       body.discountReason = discountReason.trim();
     }
     const cTrim = couponInput.trim();
     if (cTrim) body.couponCode = cTrim;
-    const lp = Math.max(0, Math.floor(Number.parseFloat(String(loyaltyPointsInput).replace(",", ".")) || 0));
-    if (lp > 0) body.loyaltyPointsToRedeem = lp;
-    const gp = guestPhoneInput.trim();
-    if (gp) body.guestPhone = gp;
     if (paymentSplits) {
       body.paymentSplits = paymentSplits;
     } else {
@@ -753,8 +618,6 @@ export default function POS() {
       setDeliveryAddress("");
       setDiscountInput("");
       setDiscountReason("");
-      setTaxPercent("0");
-      setTableNumber("");
       setOrderNote("");
       setSplitEnabled(false);
       setSplitRows([
@@ -762,8 +625,6 @@ export default function POS() {
         { method: "CARD", amount: "" },
       ]);
       setCouponInput("");
-      setLoyaltyPointsInput("");
-      setGuestPhoneInput("");
       setPayNowInput("");
       setCashTendered("");
       setPaymentReference("");
@@ -826,9 +687,7 @@ export default function POS() {
               ) : (
                 searchHits.map((p, idx) => {
                   const stock = p.inventories?.[0]?.quantity ?? 0;
-                  const price = useWholesalePricing && p.wholesalePrice != null
-                    ? Number(p.wholesalePrice)
-                    : Number(p.price);
+                  const price = Number(p.price);
                   return (
                     <button
                       key={p.id}
@@ -878,26 +737,6 @@ export default function POS() {
         <button type="button" className="btn-touch" onClick={() => loadProducts()} style={{ background: "var(--surface2)" }}>
           {t("pos.refresh")}
         </button>
-        {showWholesaleToggle ? (
-          <div className="pos-price-mode" role="group" aria-label={t("pos.wholesaleHint")} title={t("pos.wholesaleHint")}>
-            <button
-              type="button"
-              className={`pos-price-mode__btn${!useWholesalePricing ? " is-active" : ""}`}
-              aria-pressed={!useWholesalePricing}
-              onClick={() => setUseWholesalePricing(false)}
-            >
-              {t("pos.priceRetail")}
-            </button>
-            <button
-              type="button"
-              className={`pos-price-mode__btn${useWholesalePricing ? " is-active" : ""}`}
-              aria-pressed={useWholesalePricing}
-              onClick={() => setUseWholesalePricing(true)}
-            >
-              {t("pos.priceWholesale")}
-            </button>
-          </div>
-        ) : null}
       </div>
 
       {needsCashSessionWarning ? (
@@ -962,7 +801,7 @@ export default function POS() {
                 setSalePrompt(null);
               }}
             >
-              {t("pos.addWithModifiers")}
+              {t("pos.addToCart")}
             </button>
             <button type="button" className="btn-touch" style={{ background: "var(--surface2)" }} onClick={() => setSalePrompt(null)}>
               {t("common.cancel")}
@@ -1090,45 +929,6 @@ export default function POS() {
             </div>
           </div>
 
-          {showCafeExtras ? (
-            <div className="card">
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>{t("pos.cafeOrder")}</div>
-              <label style={{ display: "grid", gap: 6, marginBottom: 10 }}>
-                <span style={{ fontSize: 13, color: "var(--muted)" }}>{t("pos.tableNumber")}</span>
-                <input
-                  value={tableNumber}
-                  onChange={(e) => setTableNumber(e.target.value)}
-                  placeholder={t("pos.tableNumberPh")}
-                  style={{
-                    minHeight: 44,
-                    padding: "0 12px",
-                    borderRadius: 12,
-                    border: "1px solid var(--border)",
-                    background: "var(--bg)",
-                    color: "var(--text)",
-                  }}
-                />
-              </label>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={{ fontSize: 13, color: "var(--muted)" }}>{t("pos.orderNote")}</span>
-                <textarea
-                  value={orderNote}
-                  onChange={(e) => setOrderNote(e.target.value)}
-                  placeholder={t("pos.orderNotePh")}
-                  rows={2}
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: "1px solid var(--border)",
-                    background: "var(--bg)",
-                    color: "var(--text)",
-                    resize: "vertical",
-                  }}
-                />
-              </label>
-            </div>
-          ) : null}
-
           <div className="card">
             <div style={{ fontWeight: 800, marginBottom: 8 }}>{t("pos.customer")}</div>
             <select
@@ -1227,35 +1027,12 @@ export default function POS() {
                 {t("pos.quickCustomerBtn")}
               </button>
             </div>
-            {loyaltyFlags.loyaltyProgramEnabled &&
-            selectedCustomer &&
-            typeof selectedCustomer.loyaltyPoints === "number" ? (
-              <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
-                {t("pos.loyaltyBalance")}: <strong>{selectedCustomer.loyaltyPoints}</strong>
-              </div>
-            ) : null}
             {selectedCustomer && selectedCustomer.accountBalance != null ? (
               <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 8 }}>
                 {t("receivable.balance")}:{" "}
                 <strong>{Number(selectedCustomer.accountBalance).toFixed(2)}</strong> {currencyLabel}
               </div>
             ) : null}
-            <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.guestPhone")}</span>
-              <input
-                value={guestPhoneInput}
-                onChange={(e) => setGuestPhoneInput(e.target.value)}
-                placeholder="05xxxxxxxx"
-                style={{
-                  minHeight: 44,
-                  padding: "0 12px",
-                  borderRadius: 12,
-                  border: "1px solid var(--border)",
-                  background: "var(--bg)",
-                  color: "var(--text)",
-                }}
-              />
-            </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
               <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.couponCode")}</span>
               <input
@@ -1271,35 +1048,6 @@ export default function POS() {
                 }}
               />
             </label>
-            {loyaltyFlags.loyaltyRedemptionEnabled ? (
-              <>
-                <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.loyaltyRedeem")}</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={loyaltyPointsInput}
-                    onChange={(e) => setLoyaltyPointsInput(e.target.value)}
-                    placeholder="0"
-                    style={{
-                      minHeight: 44,
-                      padding: "0 12px",
-                      borderRadius: 12,
-                      border: "1px solid var(--border)",
-                      background: "var(--bg)",
-                      color: "var(--text)",
-                    }}
-                  />
-                </label>
-                <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--muted)" }}>
-                  {t("pos.loyaltyPreviewHint")}
-                </p>
-              </>
-            ) : loyaltyFlags.loyaltyProgramEnabled ? (
-              <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--muted)" }}>
-                {t("pos.loyaltyRedeemDisabled")}
-              </p>
-            ) : null}
             <PaymentSectionHeading t={t} />
             <SplitPaymentToggle
               enabled={splitEnabled}
@@ -1555,38 +1303,6 @@ export default function POS() {
                 </span>
               </div>
             ) : null}
-            <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                {t("pos.taxPercent")}
-                {taxMeta?.countryCode ? ` (${taxMeta.countryCode})` : ""} — {t("pos.taxHint")}
-              </span>
-              <select
-                value={taxPercent}
-                onChange={(e) => setTaxPercent(e.target.value)}
-                style={{
-                  minHeight: 44,
-                  padding: "8px 12px",
-                  borderRadius: 12,
-                  background: "var(--surface)",
-                  color: "var(--text)",
-                  border: "1px solid var(--border)",
-                }}
-              >
-                {taxOptions.map((r) => (
-                  <option key={r} value={String(r)}>
-                    {r}%
-                  </option>
-                ))}
-              </select>
-            </label>
-            {taxPreview > 0 ? (
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 14 }}>
-                <span>{t("invoice.tax")}</span>
-                <span>
-                  {taxPreview.toFixed(2)} {currencyLabel}
-                </span>
-              </div>
-            ) : null}
           </div>
 
           {lastSale ? (
@@ -1642,97 +1358,8 @@ export default function POS() {
         className={`print-invoice ${classFor("retail")}`}
         style={{ position: "fixed", left: -99999, top: 0, width: 400 }}
       >
-        <InvoicePrint sale={lastSale} branchName={branchName} taxInfo={taxMeta || user?.tax} />
+        <InvoicePrint sale={lastSale} branchName={branchName} />
       </div>
-
-      {modifierProduct ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.45)",
-            display: "grid",
-            placeItems: "center",
-            zIndex: 80,
-            padding: 16,
-          }}
-          onClick={() => {
-            setModifierProduct(null);
-            setModifierKeys([]);
-          }}
-        >
-          <div
-            className="card"
-            style={{ width: "min(420px, 100%)", display: "grid", gap: 12 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <strong>{t("pos.modifiersTitle")}</strong>
-            <div style={{ color: "var(--muted)", fontSize: 14 }}>
-              {productDisplayName(modifierProduct, locale)}
-            </div>
-            <div style={{ display: "grid", gap: 8 }}>
-              {(modifierProduct.modifiers || []).map((m) => {
-                const checked = modifierKeys.includes(m.key);
-                const label =
-                  locale === "en" ? m.label || m.key : m.labelAr || m.label || m.key;
-                const delta = Number(m.priceDelta) || 0;
-                return (
-                  <label
-                    key={m.key}
-                    style={{
-                      display: "flex",
-                      gap: 10,
-                      alignItems: "center",
-                      padding: "8px 10px",
-                      borderRadius: 10,
-                      border: "1px solid var(--border)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => {
-                        setModifierKeys((prev) =>
-                          checked ? prev.filter((k) => k !== m.key) : [...prev, m.key]
-                        );
-                      }}
-                    />
-                    <span style={{ flex: 1 }}>{label}</span>
-                    <span style={{ color: "var(--muted)", fontSize: 13 }}>
-                      {delta === 0
-                        ? "—"
-                        : `${delta > 0 ? "+" : ""}${delta.toFixed(2)} ${currencyLabel}`}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                type="button"
-                className="btn-touch"
-                onClick={() => {
-                  setModifierProduct(null);
-                  setModifierKeys([]);
-                }}
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                className="btn-touch"
-                style={{ background: "var(--accent)", color: "#fff" }}
-                onClick={confirmModifiers}
-              >
-                {t("pos.addWithModifiers")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

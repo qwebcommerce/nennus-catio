@@ -1,22 +1,16 @@
 import { useMemo } from "react";
-import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
-import { currencyLabel, normalizeCurrency } from "./fxGulf.js";
 
 /**
- * Tenant display currency from org tax pack / country.
- * Falls back to QAR when unset.
+ * Display currency for the business (Qatari riyal).
  */
 export function useOrgCurrency() {
-  const { user } = useAuth();
   const { locale } = useI18n();
 
   return useMemo(() => {
-    const code = normalizeCurrency(user?.tax?.currency || "QAR");
-    const label =
-      (locale === "en" ? user?.tax?.currencyLabelEn : user?.tax?.currencyLabelAr) ||
-      currencyLabel(code, locale);
-    const decimals = code === "KWD" || code === "BHD" || code === "OMR" ? 3 : 2;
+    const code = "QAR";
+    const label = locale === "en" ? "QAR" : "ر.ق";
+    const decimals = 2;
 
     const format = (amount) => {
       const n = Number(amount);
@@ -25,5 +19,5 @@ export function useOrgCurrency() {
     };
 
     return { code, label, decimals, format };
-  }, [user?.tax, locale]);
+  }, [locale]);
 }

@@ -51,15 +51,6 @@ router.get("/summary", async (req, res) => {
     _sum: { total: true },
   });
 
-  const wholesaleMonth = await prisma.sale.aggregate({
-    where: {
-      ...branchFilter,
-      channel: "WHOLESALE",
-      createdAt: { gte: startOfMonth() },
-    },
-    _sum: { total: true },
-  });
-
   const lowStock = await prisma.inventory.findMany({
     where: branchId
       ? {
@@ -132,7 +123,6 @@ router.get("/summary", async (req, res) => {
     salesTodayCount: todaySales._count,
     salesTodayTotal: todaySales._sum.total?.toString() ?? "0",
     salesMonthTotal: monthSales._sum.total?.toString() ?? "0",
-    wholesaleMonthTotal: wholesaleMonth._sum.total?.toString() ?? "0",
     estimatedProfitMonth: (revenueMonth - costMonth).toFixed(2),
     lowStockAlerts: lowStockCount + variantLow,
     channelsToday: Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: Number(row._sum.total || 0), count: row._count }])),

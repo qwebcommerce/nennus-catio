@@ -28,7 +28,6 @@ export default function Alerts() {
   const [clearing, setClearing] = useState(false);
 
   const [typeLow, setTypeLow] = useState(true);
-  const [typeExp, setTypeExp] = useState(true);
   const [typeCash, setTypeCash] = useState(true);
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
 
@@ -40,12 +39,11 @@ export default function Alerts() {
   const typesParam = useMemo(() => {
     const p = [];
     if (typeLow) p.push("LOW_STOCK");
-    if (typeExp) p.push("EXPIRY");
     if (typeCash) p.push("CASH_NO_SESSION");
     return p.join(",");
-  }, [typeLow, typeExp, typeCash]);
+  }, [typeLow, typeCash]);
 
-  const skipServerTypes = !typeLow && !typeExp && !typeCash;
+  const skipServerTypes = !typeLow && !typeCash;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -106,22 +104,6 @@ export default function Alerts() {
           : it.payload?.productName;
       return t("alerts.title.lowStock", { name: name || "—" });
     }
-    if (it.type === "EXPIRY") {
-      const name =
-        locale === "en" && it.payload?.productNameEn
-          ? it.payload.productNameEn
-          : it.payload?.productName;
-      if (it.payload?.status === "expired") {
-        return t("alerts.title.expiryExpired", { name: name || "—" });
-      }
-      if (it.payload?.status === "soon") {
-        return t("alerts.title.expirySoon", {
-          name: name || "—",
-          days: String(it.payload?.daysUntilExpiry ?? ""),
-        });
-      }
-      return t("alerts.title.expiryToday", { name: name || "—" });
-    }
     if (it.type === "CASH_NO_SESSION") {
       return t("alerts.title.cashNoSession");
     }
@@ -133,12 +115,6 @@ export default function Alerts() {
       return t("alerts.body.lowStock", {
         qty: String(it.payload?.quantity ?? ""),
         min: String(it.payload?.minStockLevel ?? ""),
-      });
-    }
-    if (it.type === "EXPIRY") {
-      return t("alerts.body.expiry", {
-        days: String(it.payload?.daysUntilExpiry ?? ""),
-        status: String(it.payload?.status ?? ""),
       });
     }
     if (it.type === "CASH_NO_SESSION") {
@@ -226,10 +202,6 @@ export default function Alerts() {
         <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={typeLow} onChange={(e) => setTypeLow(e.target.checked)} />
           {t("alerts.type.lowStock")}
-        </label>
-        <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-          <input type="checkbox" checked={typeExp} onChange={(e) => setTypeExp(e.target.checked)} />
-          {t("alerts.type.expiry")}
         </label>
         <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={typeCash} onChange={(e) => setTypeCash(e.target.checked)} />

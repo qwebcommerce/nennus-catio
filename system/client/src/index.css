@@ -874,37 +874,6 @@ html:not([data-theme="light"]) .dash-btn-primary {
   }
 }
 
-.product-card-pos--clickable:hover {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--surface) 94%, var(--accent) 6%);
-}
-.product-card-pos--clickable:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.product-card-pos__title {
-  font-weight: 800;
-  line-height: 1.25;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.product-card-pos:not(.product-card-pos--compact) .product-card-pos__title {
-  font-size: 15px;
-  -webkit-line-clamp: 3;
-}
-
-.product-card-pos--compact.card {
-  padding: 0.45rem 0.5rem;
-}
-
-.product-card-pos--compact .product-card-pos__title {
-  font-size: 12px;
-  -webkit-line-clamp: 2;
-}
-
 /* هيكل التطبيق: سايدبار + محتوى */
 .app-layout-shell {
   display: flex;
@@ -2019,43 +1988,6 @@ a.app-sidebar-link.is-active .app-sidebar-badge {
   border: 1px solid var(--border);
   font: inherit;
   min-width: 140px;
-}
-
-.pos-price-mode {
-  display: inline-flex;
-  align-items: stretch;
-  padding: 3px;
-  gap: 3px;
-  border-radius: 14px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  min-height: 48px;
-}
-.pos-price-mode__btn {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-weight: 700;
-  font-size: 13px;
-  padding: 0 16px;
-  border-radius: 11px;
-  cursor: pointer;
-  min-height: 40px;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-.pos-price-mode__btn:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--surface) 80%, transparent);
-}
-.pos-price-mode__btn.is-active {
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent);
-}
-.pos-price-mode__btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .pos-search {

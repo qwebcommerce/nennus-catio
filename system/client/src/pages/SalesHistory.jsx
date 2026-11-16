@@ -43,7 +43,7 @@ function payLabel(t, method) {
 
 export default function SalesHistory() {
   const { t, locale } = useI18n();
-  const { can, user } = useAuth();
+  const { can } = useAuth();
   const { classFor } = usePrintSettings();
   const branchId = useActiveBranchId();
   const navigate = useNavigate();
@@ -87,20 +87,6 @@ export default function SalesHistory() {
     load().catch(() => {});
   }, [branchId]);
 
-  const confirmDelivery = async (saleId) => {
-    setBusyId(saleId);
-    setMsg("");
-    try {
-      await api(`/api/sales/${encodeURIComponent(saleId)}/confirm-delivery`, { method: "POST" });
-      setMsg(t("sales.confirmDone"));
-      await load();
-    } catch (e) {
-      setMsg(e.message || t("sales.confirmFail"));
-    } finally {
-      setBusyId("");
-    }
-  };
-
   const reprint = async (saleId) => {
     setBusyId(`print:${saleId}`);
     setMsg("");
@@ -119,7 +105,7 @@ export default function SalesHistory() {
     setBusyId(`copy:${saleId}`);
     try {
       const sale = await api(`/api/sales/${encodeURIComponent(saleId)}`);
-      const text = buildReceiptPlainText(sale, sale.branch?.name, locale, user?.tax);
+      const text = buildReceiptPlainText(sale, sale.branch?.name, locale);
       await navigator.clipboard.writeText(text);
       setMsg(t("pos.receiptCopied"));
     } catch (e) {
@@ -155,8 +141,7 @@ export default function SalesHistory() {
     }
   };
 
-  const printClass =
-    printSale?.channel === "WHOLESALE" ? classFor("wholesale") : classFor("retail");
+  const printClass = classFor("retail");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -220,13 +205,11 @@ export default function SalesHistory() {
                 <th style={th}>{t("sales.colCustomer")}</th>
                 <th style={th}>{t("sales.colPayment")}</th>
                 <th style={th}>{t("sales.colTotal")}</th>
-                <th style={th}>{t("sales.colLoyalty")}</th>
                 <th style={th}>{t("sales.thActions")}</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((s) => {
-                const canConfirm = s.loyaltyAwardStatus === "PENDING";
                 const open = expandedId === s.id;
                 return (
                   <React.Fragment key={s.id}>
@@ -266,7 +249,6 @@ export default function SalesHistory() {
                       <td style={td}>{s.customer?.name || s.customer?.phone || "—"}</td>
                       <td style={td}>{payLabel(t, s.paymentMethod)}</td>
                       <td style={td}><strong>{money(s.total)}</strong></td>
-                      <td style={td}>{s.loyaltyAwardStatus || "—"}</td>
                       <td style={td}>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button
@@ -298,23 +280,12 @@ export default function SalesHistory() {
                               {t("sales.refund")}
                             </button>
                           ) : null}
-                          {canConfirm ? (
-                            <button
-                              type="button"
-                              className="btn-touch"
-                              disabled={busyId === s.id}
-                              onClick={() => confirmDelivery(s.id)}
-                              style={{ fontSize: 12, padding: "6px 10px", background: "var(--accent)", color: "#fff" }}
-                            >
-                              {t("sales.confirmDelivery")}
-                            </button>
-                          ) : null}
                         </div>
                       </td>
                     </tr>
                     {open ? (
                       <tr>
-                        <td style={td} colSpan={8}>
+                        <td style={td} colSpan={7}>
                           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>
                             {t("sales.lines")}:{" "}
                             {(s.items || [])
@@ -337,7 +308,7 @@ export default function SalesHistory() {
 
       <div className={`print-invoice ${printClass}`} aria-hidden={!printSale}>
         {printSale ? (
-          <InvoicePrint sale={printSale} branchName={printSale.branch?.name} taxInfo={user?.tax} />
+          <InvoicePrint sale={printSale} branchName={printSale.branch?.name} />
         ) : null}
       </div>
     </div>

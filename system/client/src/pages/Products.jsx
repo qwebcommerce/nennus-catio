@@ -55,10 +55,6 @@ export default function Products() {
   const [printProduct, setPrintProduct] = useState(null);
   const [printBarcodeCode, setPrintBarcodeCode] = useState("");
   const [low, setLow] = useState([]);
-  const [lotsProduct, setLotsProduct] = useState(null);
-  const [lotsRows, setLotsRows] = useState([]);
-  const [lotsLoading, setLotsLoading] = useState(false);
-  const [lotsMsg, setLotsMsg] = useState("");
   const [form, setForm] = useState(() => emptyProductForm());
   const [formMode, setFormMode] = useState(null); // null | "create" | "edit"
   const [editId, setEditId] = useState("");
@@ -82,7 +78,6 @@ export default function Products() {
 
   const activeBranchId = useActiveBranchId();
   const canEditProducts = can("productsEdit");
-  const showLots = true;
 
   const catalogLabel = (row) => {
     if (!row) return "";
@@ -404,28 +399,6 @@ export default function Products() {
     setPrintProduct(p);
     setPrintBarcodeCode(code);
     setTimeout(() => window.print(), 180);
-  };
-
-  const openLots = async (p) => {
-    if (!activeBranchId) {
-      showToast(t("products.needBranchForLots"), "error");
-      return;
-    }
-    setLotsProduct(p);
-    setLotsRows([]);
-    setLotsMsg("");
-    setLotsLoading(true);
-    try {
-      const q = new URLSearchParams();
-      q.set("branchId", activeBranchId);
-      const res = await api(`/api/products/${encodeURIComponent(p.id)}/lots?${q.toString()}`);
-      setLotsRows(Array.isArray(res?.lots) ? res.lots : []);
-      if (!(res?.lots || []).length) setLotsMsg(t("products.lotsEmpty"));
-    } catch (e) {
-      setLotsMsg(e.message || t("products.lotsLoadFailed"));
-    } finally {
-      setLotsLoading(false);
-    }
   };
 
   const toggleSelectAllOnPage = () => {
@@ -856,16 +829,6 @@ export default function Products() {
                       >
                         {t("products.printBarcode")}
                       </button>
-                      {showLots ? (
-                        <button
-                          type="button"
-                          style={{ ...btnSm, background: "var(--surface2)" }}
-                          onClick={() => openLots(p)}
-                          title={t("products.viewLots")}
-                        >
-                          {t("products.viewLots")}
-                        </button>
-                      ) : null}
                       {canEditProducts ? (
                         <>
                           <button type="button" style={btnSm} onClick={() => openEditModal(p)}>
@@ -1598,101 +1561,6 @@ export default function Products() {
                 {importBusy ? t("products.saving") : t("products.excelSaveDrafts")}
               </button>
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      {lotsProduct ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 70,
-            display: "grid",
-            placeItems: "center",
-            padding: 16,
-            background: "rgba(15, 23, 42, 0.55)",
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setLotsProduct(null);
-          }}
-        >
-          <div className="card" style={{ width: "min(720px, 100%)", maxHeight: "85vh", overflow: "auto" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: 18 }}>{t("products.lotsTitle")}</h2>
-                <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
-                  {productDisplayName(lotsProduct, locale)}
-                </p>
-              </div>
-              <button type="button" className="btn-touch" onClick={() => setLotsProduct(null)}>
-                {t("common.cancel")}
-              </button>
-            </div>
-            <p style={{ margin: "10px 0 0", fontSize: 13, color: "var(--muted)" }}>{t("products.lotsIntro")}</p>
-            {lotsLoading ? (
-              <div style={{ padding: 16 }}>{t("common.loading")}</div>
-            ) : lotsMsg && !lotsRows.length ? (
-              <div style={{ padding: "16px 0", color: "var(--muted)" }}>{lotsMsg}</div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 12 }}>
-                <thead>
-                  <tr style={{ color: "var(--muted)", textAlign: "start" }}>
-                    <th style={thCell}>{t("products.lotReceived")}</th>
-                    <th style={thCell}>{t("products.colExpiry")}</th>
-                    <th style={thCell}>{t("products.lotQtyOnHand")}</th>
-                    <th style={thCell}>{t("products.lotQtyReceived")}</th>
-                    <th style={thCell}>{t("products.colPurchase")}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lotsRows.map((lot) => {
-                    const exp = lot.expiryDate ? String(lot.expiryDate).slice(0, 10) : "—";
-                    const days =
-                      lot.expiryDate != null
-                        ? Math.ceil(
-                            (new Date(lot.expiryDate).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) /
-                              86400000,
-                          )
-                        : null;
-                    const tone =
-                      days == null
-                        ? undefined
-                        : days < 0
-                          ? "var(--danger)"
-                          : days <= 30
-                            ? "var(--warning)"
-                            : undefined;
-                    return (
-                      <tr key={lot.id} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td style={tdCell}>
-                          {lot.receivedAt
-                            ? new Date(lot.receivedAt).toLocaleDateString(locale === "en" ? "en-GB" : "ar-SA")
-                            : "—"}
-                        </td>
-                        <td style={{ ...tdCell, color: tone, fontWeight: tone ? 700 : undefined }}>
-                          {exp}
-                          {days != null ? (
-                            <div style={{ fontSize: 11, fontWeight: 500 }}>
-                              {days < 0
-                                ? t("products.lotExpired")
-                                : t("products.lotDaysLeft", { days: String(days) })}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td style={tdCell}>{Number(lot.quantityOnHand ?? 0)}</td>
-                        <td style={tdCell}>{Number(lot.quantityReceived ?? 0)}</td>
-                        <td style={tdCell}>
-                          {lot.unitCost != null ? Number(lot.unitCost).toFixed(2) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
           </div>
         </div>
       ) : null}

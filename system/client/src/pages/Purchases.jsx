@@ -19,7 +19,7 @@ export default function Purchases() {
   const [suppliers, setSuppliers] = useState([]);
   const [supplierId, setSupplierId] = useState("");
   const [products, setProducts] = useState([]);
-  const [lines, setLines] = useState([{ productId: "", quantity: "1", unitCost: "", expiryDate: "" }]);
+  const [lines, setLines] = useState([{ productId: "", quantity: "1", unitCost: "" }]);
   const [note, setNote] = useState("");
   const [updateProductCost, setUpdateProductCost] = useState(true);
   const [list, setList] = useState([]);
@@ -114,7 +114,6 @@ export default function Purchases() {
         productId: l.productId,
         quantity: Math.max(1, parseInt(String(l.quantity), 10) || 1),
         unitCost,
-        expiryDate: l.expiryDate?.trim() ? l.expiryDate : undefined,
       });
     }
     if (!items.length) {
@@ -132,7 +131,7 @@ export default function Purchases() {
           items,
         },
       });
-      setLines([{ productId: "", quantity: "1", unitCost: "", expiryDate: "" }]);
+      setLines([{ productId: "", quantity: "1", unitCost: "" }]);
       setNote("");
       await loadPurchases();
       setMsg(t("purchases.done"));
@@ -288,17 +287,6 @@ export default function Purchases() {
               }}
               style={{ ...inp, width: 120, minHeight: 44 }}
             />
-            <input
-              type="date"
-              value={line.expiryDate || ""}
-              onChange={(e) => {
-                const next = [...lines];
-                next[i] = { ...next[i], expiryDate: e.target.value };
-                setLines(next);
-              }}
-              style={{ ...inp, width: 170, minHeight: 44 }}
-              title={t("purchases.expiryLotHint")}
-            />
             <button
               type="button"
               className="btn-touch"
@@ -312,7 +300,7 @@ export default function Purchases() {
         <button
           type="button"
           className="btn-touch"
-          onClick={() => setLines([...lines, { productId: "", quantity: "1", unitCost: "", expiryDate: "" }])}
+          onClick={() => setLines([...lines, { productId: "", quantity: "1", unitCost: "" }])}
           style={{ background: "var(--surface2)", maxWidth: 200 }}
         >
           {t("returns.addLine")}

@@ -16,7 +16,7 @@ const PAY_KEYS = {
 /**
  * محتوى قابل للطباعة — يُعرض في نافذة الطباعة (window.print)
  */
-export function InvoicePrint({ sale, branchName, taxInfo }) {
+export function InvoicePrint({ sale, branchName }) {
   const { t, locale } = useI18n();
   if (!sale) return null;
   const loc = locale === "en" ? "en-US" : "ar-SA";
@@ -27,12 +27,7 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
   const linesSubtotal =
     sale.items?.reduce((s, it) => s + Number(it.subtotal), 0) ?? Number(sale.total);
   const disc = Number(sale.discountAmount ?? 0);
-  const tax = Number(sale.taxAmount ?? 0);
-  const taxPct = sale.taxPercent != null ? Number(sale.taxPercent) : null;
-  const netBeforeTax = linesSubtotal - disc;
-  const cur =
-    (locale === "en" ? taxInfo?.currencyLabelEn || taxInfo?.currency : taxInfo?.currencyLabelAr) ||
-    t("common.currency");
+  const cur = t("common.currency");
 
   return (
     <div>
@@ -41,11 +36,6 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
         <div style={{ fontWeight: 700 }}>
           {branchName || sale.branch?.name || "—"}
         </div>
-        {taxInfo?.vatNumber ? (
-          <div>
-            {t("invoice.vatNumber")}: {taxInfo.vatNumber}
-          </div>
-        ) : null}
         <div>
           {t("invoice.date")} {new Date(sale.createdAt).toLocaleString(loc)}
         </div>
@@ -63,9 +53,6 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
           <div>
             {t("invoice.deliveryAddress")}: {sale.deliveryAddress}
           </div>
-        ) : null}
-        {sale.channel === "WHOLESALE" ? (
-          <div style={{ fontWeight: 700, color: "#6d28d9" }}>{t("invoice.saleChannelWholesale")}</div>
         ) : null}
         {splits ? (
           <div>
@@ -91,11 +78,6 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
             {sale.customer.phone ? ` — ${sale.customer.phone}` : ""}
           </div>
         ) : null}
-        {sale.tableNumber ? (
-          <div>
-            {t("invoice.table")}: {sale.tableNumber}
-          </div>
-        ) : null}
         {sale.orderNote ? (
           <div>
             {t("invoice.orderNote")}: {sale.orderNote}
@@ -111,27 +93,13 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
           </tr>
         </thead>
         <tbody>
-          {sale.items?.map((it) => {
-            const mods = Array.isArray(it.modifiers) ? it.modifiers : [];
-            return (
-              <tr key={it.id} style={{ borderBottom: "1px solid #eee" }}>
-                <td style={{ padding: 8 }}>
-                  {productDisplayName(it.product, locale)}
-                  {mods.length ? (
-                    <div style={{ fontSize: 11, color: "#666", marginTop: 2 }}>
-                      {mods
-                        .map((m) =>
-                          locale === "en" ? m.label || m.key : m.labelAr || m.label || m.key
-                        )
-                        .join(" · ")}
-                    </div>
-                  ) : null}
-                </td>
-                <td style={{ padding: 8, textAlign: "center" }}>{it.quantity}</td>
-                <td style={{ padding: 8 }}>{Number(it.subtotal).toFixed(2)}</td>
-              </tr>
-            );
-          })}
+          {sale.items?.map((it) => (
+            <tr key={it.id} style={{ borderBottom: "1px solid #eee" }}>
+              <td style={{ padding: 8 }}>{productDisplayName(it.product, locale)}</td>
+              <td style={{ padding: 8, textAlign: "center" }}>{it.quantity}</td>
+              <td style={{ padding: 8 }}>{Number(it.subtotal).toFixed(2)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
       <div style={{ marginTop: 12, fontSize: 14 }}>
@@ -141,15 +109,6 @@ export function InvoicePrint({ sale, branchName, taxInfo }) {
         {disc > 0 ? (
           <div>
             {t("invoice.discount")} −{disc.toFixed(2)} {cur}
-          </div>
-        ) : null}
-        <div>
-          {t("invoice.netBeforeTax")} {netBeforeTax.toFixed(2)} {cur}
-        </div>
-        {tax > 0 ? (
-          <div>
-            {t("invoice.tax")}
-            {taxPct != null && !Number.isNaN(taxPct) ? ` (${taxPct}%)` : ""} {tax.toFixed(2)} {cur}
           </div>
         ) : null}
       </div>

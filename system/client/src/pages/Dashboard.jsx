@@ -47,7 +47,6 @@ export default function Dashboard() {
   const { format: cur } = useOrgCurrency();
   const navigate = useNavigate();
   const branchId = useActiveBranchId();
-  const showWholesale = true;
   const [query, setQuery] = useState("");
   const [summary, setSummary] = useState(null);
   const [byProduct, setByProduct] = useState([]);
@@ -220,17 +219,6 @@ export default function Dashboard() {
                     <span>{t("dashboard.profitMonth")}</span>
                   </div>
                 </div>
-                {showWholesale ? (
-                  <div className="dash-mini-kpi">
-                    <span className="dash-mini-ico tone-violet">
-                      <DashIcon name="box" size={18} />
-                    </span>
-                    <div>
-                      <strong>{cur(summary.wholesaleMonthTotal ?? 0)}</strong>
-                      <span>{t("dashboard.wholesaleMonth")}</span>
-                    </div>
-                  </div>
-                ) : null}
                 <div
                   className="dash-mini-kpi"
                   role="button"

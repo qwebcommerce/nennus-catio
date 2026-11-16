@@ -40,9 +40,7 @@ import Cash from "./pages/Cash.jsx";
 import Audit from "./pages/Audit.jsx";
 import Alerts from "./pages/Alerts.jsx";
 import Settings from "./pages/Settings.jsx";
-import LoyaltyCoupons from "./pages/LoyaltyCoupons.jsx";
 import SalesHistory from "./pages/SalesHistory.jsx";
-import InventoryLots from "./pages/InventoryLots.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
 
@@ -137,7 +135,6 @@ export default function App() {
           }
         >
           <Route path="/pos" element={<Protected permission="pos"><POS /></Protected>} />
-          <Route path="/wholesale" element={<Navigate to="/pos" replace />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route
@@ -150,14 +147,6 @@ export default function App() {
           />
           <Route path="/settings" element={<Settings />} />
           <Route path="/print-settings" element={<Navigate to="/settings" replace />} />
-          <Route
-            path="/loyalty"
-            element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="loyalty">
-                <LoyaltyCoupons />
-              </Protected>
-            }
-          />
           <Route
             path="/reports"
             element={
@@ -179,14 +168,6 @@ export default function App() {
             element={
               <Protected permission="productsView">
                 <Products />
-              </Protected>
-            }
-          />
-          <Route
-            path="/inventory-lots"
-            element={
-              <Protected permission="productsView">
-                <InventoryLots />
               </Protected>
             }
           />

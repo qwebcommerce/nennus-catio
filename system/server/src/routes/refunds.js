@@ -83,15 +83,7 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
   if (saleId != null && String(saleId).trim()) {
     saleRef = await prisma.sale.findFirst({
       where: { id: String(saleId), branch: { organizationId: orgId } },
-      include: {
-        items: {
-          include: {
-            lotUsages: {
-              select: { inventoryLotId: true, quantity: true },
-            },
-          },
-        },
-      },
+      include: { items: true },
     });
     if (!saleRef) return res.status(400).json({ error: "فاتورة غير موجودة" });
     if (saleRef.branchId !== bid) return res.status(400).json({ error: "الفاتورة من فرع آخر" });
@@ -115,7 +107,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       const prev = saleItemsByProduct.get(it.productId) || {
         quantity: 0,
         unitPrice: it.unitPrice,
-        lotUsages: [],
         costAmount: 0,
         variantId: it.variantId || null,
         mixedVariant: false,
@@ -123,7 +114,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
       prev.quantity += Number(it.quantity || 0);
       prev.costAmount += Number(it.costAmount || 0);
       if ((it.variantId || null) !== prev.variantId) prev.mixedVariant = true;
-      prev.lotUsages.push(...(it.lotUsages || []));
       saleItemsByProduct.set(it.productId, prev);
     }
 
@@ -178,7 +168,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
         subtotal,
         variantId: sold && !sold.mixedVariant ? sold.variantId : null,
         costAmount: restock ? share : null,
-        saleLots: sold?.lotUsages || [],
       });
     }
 
@@ -228,55 +217,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
             quantity: { increment: l.quantity },
           },
         });
-
-        // Restore FEFO lots from original sale when possible; otherwise create a return lot.
-        let left = l.quantity;
-        const usages = [...(l.saleLots || [])].reverse(); // restore last consumed first
-        for (const u of usages) {
-          if (left <= 0) break;
-          const take = Math.min(left, Number(u.quantity || 0));
-          if (take <= 0) continue;
-          const lot = await tx.inventoryLot.findFirst({
-            where: { id: u.inventoryLotId, organizationId: orgId },
-          });
-          if (!lot) continue;
-          if (lot.branchId === bid) {
-            await tx.inventoryLot.update({
-              where: { id: lot.id },
-              data: { quantityOnHand: { increment: take } },
-            });
-          } else {
-            await tx.inventoryLot.create({
-              data: {
-                organizationId: orgId,
-                productId: l.productId,
-                branchId: bid,
-                receivedAt: new Date(),
-                expiryDate: lot.expiryDate,
-                quantityReceived: take,
-                quantityOnHand: take,
-                unitCost: lot.unitCost,
-                note: `refund-restore:${created.id}`,
-              },
-            });
-          }
-          left -= take;
-        }
-        if (left > 0) {
-          await tx.inventoryLot.create({
-            data: {
-              organizationId: orgId,
-              productId: l.productId,
-              branchId: bid,
-              receivedAt: new Date(),
-              expiryDate: null,
-              quantityReceived: left,
-              quantityOnHand: left,
-              unitCost: null,
-              note: `refund:${created.id}`,
-            },
-          });
-        }
       }
 
       return created;

@@ -4,7 +4,6 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { resolveStoredImageUrl } from "../lib/productImageUrl.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
-import { normalizeProductModifiers } from "../lib/productModifiers.js";
 import {
   buildProductsExcelBuffer,
   buildProductSampleExcelBuffer,
@@ -13,7 +12,6 @@ import {
   parseYesNo,
   parsePetType,
   parseNumber,
-  parseExpiryCell,
 } from "../lib/productsExcel.js";
 import {
   allocateUniqueBarcode,
@@ -227,14 +225,12 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
     }
 
     const costRaw = parseNumber(r.cost);
-    const wholesaleRaw = parseNumber(r.wholesalePrice);
     const sku = r.sku != null && String(r.sku).trim() ? String(r.sku).trim() : null;
     const barcode = r.barcode != null && String(r.barcode).trim() ? String(r.barcode).trim() : null;
     const petType = parsePetType(r.petType);
     const isActive = asDraft ? false : parseYesNo(r.isActive);
     const stockQty = Math.max(0, Math.floor(parseNumber(r.stockQty) ?? 0));
     const minStock = Math.max(0, Math.floor(parseNumber(r.minStock) ?? 5));
-    const expDate = parseExpiryCell(r.expiryDate);
     const imageRaw = r.imageUrl != null ? String(r.imageUrl).trim() : "";
     const imageUrl =
       imageRaw && (/^https?:\/\/\S+/i.test(imageRaw) || imageRaw.startsWith("/")) ? imageRaw : null;
@@ -263,8 +259,6 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
       sku: catalog.sku,
       barcode,
       price: new Prisma.Decimal(priceNum),
-      wholesalePrice:
-        wholesaleRaw != null && wholesaleRaw >= 0 ? new Prisma.Decimal(wholesaleRaw) : null,
       cost: costRaw != null && costRaw >= 0 ? new Prisma.Decimal(costRaw) : null,
       petType,
       category: catalog.category,
@@ -272,8 +266,6 @@ async function runProductImportFromRows({ orgId, branchId, rows, asDraft = false
       subcategoryId: catalog.subcategoryId,
       ...(imageUrl ? { imageUrl } : {}),
       isActive,
-      expiryDate: expDate,
-      expiryAlertDaysBefore: null,
     };
 
     let existing = null;
@@ -736,44 +728,6 @@ router.get("/:id", async (req, res) => {
   res.json(withResolvedImageUrl(p));
 });
 
-router.get("/:id/lots", async (req, res) => {
-  const branchId =
-    req.query.branchId != null && String(req.query.branchId).trim()
-      ? String(req.query.branchId).trim()
-      : req.user.branchId;
-  if (!branchId) return res.status(400).json({ error: "يجب تحديد الفرع" });
-  if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== branchId) {
-    return res.status(403).json({ error: "لا يمكن الوصول لفرع آخر" });
-  }
-  const orgId = req.user.organizationId;
-  const product = await prisma.product.findFirst({
-    where: { id: req.params.id, organizationId: orgId },
-    select: { id: true, name: true },
-  });
-  if (!product) return res.status(404).json({ error: "المنتج غير موجود" });
-  const branchOk = await findBranchInOrg(prisma, orgId, branchId);
-  if (!branchOk) return res.status(400).json({ error: "فرع غير صالح" });
-
-  const lots = await prisma.inventoryLot.findMany({
-    where: {
-      organizationId: orgId,
-      productId: product.id,
-      branchId,
-    },
-    orderBy: [{ expiryDate: "asc" }, { receivedAt: "asc" }],
-    select: {
-      id: true,
-      receivedAt: true,
-      expiryDate: true,
-      quantityReceived: true,
-      quantityOnHand: true,
-      unitCost: true,
-      note: true,
-    },
-  });
-  res.json({ product, branchId, lots });
-});
-
 function cleanOptionalText(value) {
   const s = value == null ? "" : String(value).trim();
   return s || null;
@@ -819,7 +773,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     sku,
     barcode,
     price,
-    wholesalePrice,
     cost,
     petType,
     categoryId,
@@ -828,8 +781,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     branchId,
     initialStock,
     minStockLevel,
-    expiryDate: expiryDateRaw,
-    modifiers: modifiersRaw,
   } = req.body || {};
   if (!nameEn?.trim()) return res.status(400).json({ error: "English product name is required" });
   if (!name?.trim()) return res.status(400).json({ error: "Arabic product name is required" });
@@ -862,16 +813,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
     throw e;
   }
 
-  let expiryDate = null;
-  if (expiryDateRaw != null && String(expiryDateRaw).trim()) {
-    const d = new Date(String(expiryDateRaw));
-    if (Number.isNaN(d.getTime())) {
-      return res.status(400).json({ error: "تاريخ انتهاء الصلاحية غير صالح" });
-    }
-    expiryDate = d;
-  }
-
-  const modifiers = normalizeProductModifiers(modifiersRaw);
   const catalogCopy = catalogFieldsFromBody(req.body || {});
   if (catalogCopy.error) return res.status(400).json({ error: catalogCopy.error });
 
@@ -905,10 +846,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
           sku: catalog.sku,
           barcode: barcodeTrim,
           price: new Prisma.Decimal(priceNum),
-          wholesalePrice:
-            wholesalePrice != null && wholesalePrice !== ""
-              ? new Prisma.Decimal(Number(wholesalePrice))
-              : null,
           cost:
             cost != null && cost !== ""
               ? new Prisma.Decimal(Number(cost))
@@ -920,9 +857,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
           categoryId: catalog.categoryId,
           subcategoryId: catalog.subcategoryId,
           imageUrl: imageTrim || null,
-          expiryDate,
-          expiryAlertDaysBefore: null,
-          ...(modifiers ? { modifiers } : {}),
           inventories: {
             create: {
               branchId: bid,
@@ -933,23 +867,6 @@ router.post("/", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermission("
         },
         include: { inventories: true },
       });
-      // Keep aggregate stock and expiry lots aligned from day one.
-      if (stockQty > 0) {
-        await tx.inventoryLot.create({
-          data: {
-            organizationId: req.user.organizationId,
-            productId: created.id,
-            branchId: bid,
-            receivedAt: new Date(),
-            expiryDate,
-            quantityReceived: stockQty,
-            quantityOnHand: stockQty,
-            unitCost:
-              cost != null && cost !== "" ? new Prisma.Decimal(Number(cost)) : null,
-            note: "initial-stock",
-          },
-        });
-      }
       return created;
     });
     await syncProductExtras(prisma, {
@@ -1028,12 +945,6 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
         ? new Prisma.Decimal(Number(data.cost))
         : null;
   }
-  if (data.wholesalePrice !== undefined) {
-    update.wholesalePrice =
-      data.wholesalePrice != null && data.wholesalePrice !== ""
-        ? new Prisma.Decimal(Number(data.wholesalePrice))
-        : null;
-  }
   if (data.petType && ["CAT", "DOG", "OTHER"].includes(String(data.petType))) {
     update.petType = String(data.petType);
   }
@@ -1098,24 +1009,6 @@ router.patch("/:id", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePermissi
       if (e?.status === 400) return res.status(400).json({ error: e.message });
       throw e;
     }
-  }
-
-  if (data.expiryDate !== undefined) {
-    if (data.expiryDate === null || data.expiryDate === "") {
-      update.expiryDate = null;
-      update.expiryAlertDaysBefore = null;
-    } else {
-      const d = new Date(String(data.expiryDate));
-      if (Number.isNaN(d.getTime())) {
-        return res.status(400).json({ error: "تاريخ انتهاء الصلاحية غير صالح" });
-      }
-      update.expiryDate = d;
-      update.expiryAlertDaysBefore = null;
-    }
-  }
-
-  if (data.modifiers !== undefined) {
-    update.modifiers = normalizeProductModifiers(data.modifiers);
   }
 
   try {

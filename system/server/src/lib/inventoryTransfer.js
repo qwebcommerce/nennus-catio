@@ -1,10 +1,9 @@
 import { prisma } from "./prisma.js";
-import { moveLotsBetweenBranches } from "./inventoryLots.js";
 import { writeAudit } from "./auditLog.js";
 
 /**
  * Immediate multi-line stock transfer between two org branches.
- * Shared by /api/inventory/transfer and Module 6 balancer execute.
+ * Used by /api/inventory/transfer.
  */
 export async function executeInventoryTransfer({
   orgId,
@@ -145,13 +144,6 @@ export async function executeInventoryTransfer({
             where: { productId_branchId: { productId, branchId: to } },
             create: { productId, branchId: to, quantity: qty, minStockLevel: 5 },
             update: { quantity: { increment: qty } },
-          });
-          await moveLotsBetweenBranches(tx, {
-            orgId,
-            fromBranchId: from,
-            toBranchId: to,
-            productId,
-            quantity: qty,
           });
         }
         await tx.stockMovement.create({

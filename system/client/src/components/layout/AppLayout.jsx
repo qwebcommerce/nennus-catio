@@ -25,7 +25,6 @@ function navSectionForPath(pathname) {
   }
   if (
     p.startsWith("/products") ||
-    p.startsWith("/inventory-lots") ||
     p.startsWith("/categories") ||
     p.startsWith("/cash") ||
     p.startsWith("/purchases") ||
@@ -38,7 +37,6 @@ function navSectionForPath(pathname) {
   if (
     p.startsWith("/customers") ||
     p.startsWith("/customer-accounts") ||
-    p.startsWith("/loyalty") ||
     p.startsWith("/appointments")
   ) {
     return "customers";
@@ -248,12 +246,6 @@ export function AppLayout() {
                 <span>{t("nav.products")}</span>
               </NavLink>
             ) : null}
-            {can("productsView") ? (
-              <NavLink to="/inventory-lots" className={sidebarLinkClass}>
-                <SidebarIcon name="inventory" />
-                <span>{t("nav.lots")}</span>
-              </NavLink>
-            ) : null}
             {can("catalogEdit") ? (
               <NavLink to="/categories" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
@@ -358,12 +350,6 @@ export function AppLayout() {
               <NavLink to="/customer-accounts" className={sidebarLinkClass}>
                 <SidebarIcon name="accounts" />
                 <span>{t("nav.accounts")}</span>
-              </NavLink>
-            ) : null}
-            {can("loyalty") ? (
-              <NavLink to="/loyalty" className={sidebarLinkClass}>
-                <SidebarIcon name="coupons" />
-                <span>{t("nav.coupons")}</span>
               </NavLink>
             ) : null}
             {isAdmin || isManager ? (

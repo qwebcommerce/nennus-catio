@@ -3,15 +3,13 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { unitPriceDecimalForSale } from "../lib/productPricing.js";
-import { resolveLineModifiers } from "../lib/productModifiers.js";
 
 const router = Router();
 router.use(authMiddleware);
 
 const MAX_HELD_PER_USER_BRANCH = 15;
 
-async function normalizeCartPayload(db, organizationId, branchId, rawItems, useWholesale = false) {
+async function normalizeCartPayload(db, organizationId, branchId, rawItems) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new Error("السلة فارغة");
   }
@@ -29,12 +27,7 @@ async function normalizeCartPayload(db, organizationId, branchId, rawItems, useW
     const want = Math.max(1, Math.floor(Number(line.quantity) || 1));
     const qty = Math.min(want, stock);
     if (qty < 1) continue;
-    const { selected, delta } = resolveLineModifiers(
-      product,
-      line.modifiers || line.modifierKeys
-    );
-    const base = Number(unitPriceDecimalForSale(product, useWholesale));
-    const unitPrice = Math.round((base + delta) * 100) / 100;
+    const unitPrice = Math.round(Number(product.price) * 100) / 100;
     out.push({
       productId: product.id,
       name: product.name,
@@ -43,10 +36,7 @@ async function normalizeCartPayload(db, organizationId, branchId, rawItems, useW
       unitPrice,
       quantity: qty,
       maxStock: stock,
-      modifiers: selected.length ? selected : undefined,
-      lineKey: selected.length
-        ? `${product.id}::${selected.map((m) => m.key).sort().join(",")}`
-        : product.id,
+      lineKey: product.id,
     });
   }
   if (!out.length) throw new Error("لا توجد أصناف صالحة أو المخزون غير كافٍ");
@@ -81,15 +71,10 @@ router.post("/", async (req, res) => {
     items: rawItems,
     customerId,
     discountInput,
-    taxPercent,
-    useWholesalePricing: useWholesaleRaw,
     paymentMethod: paymentMethodRaw,
     deliveryAddress: deliveryAddressRaw,
-    guestPhone: guestPhoneRaw,
-    tableNumber: tableNumberRaw,
     orderNote: orderNoteRaw,
   } = req.body || {};
-  const useWholesalePricing = Boolean(useWholesaleRaw);
   const bid = bodyBranch || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب اختيار الفرع" });
   if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== String(bid)) {
@@ -111,15 +96,12 @@ router.post("/", async (req, res) => {
       req.user.organizationId,
       bid,
       rawItems,
-      useWholesalePricing
     );
     const payload = {
       items,
-      useWholesalePricing,
       customerId:
         customerId != null && String(customerId).trim() ? String(customerId).trim() : "",
       discountInput: discountInput != null ? String(discountInput) : "",
-      taxPercent: taxPercent != null ? String(taxPercent) : "0",
       paymentMethod:
         paymentMethodRaw != null && String(paymentMethodRaw).trim()
           ? String(paymentMethodRaw).trim().toUpperCase().slice(0, 20)
@@ -127,14 +109,6 @@ router.post("/", async (req, res) => {
       deliveryAddress:
         deliveryAddressRaw != null && String(deliveryAddressRaw).trim()
           ? String(deliveryAddressRaw).trim().slice(0, 500)
-          : "",
-      guestPhone:
-        guestPhoneRaw != null && String(guestPhoneRaw).trim()
-          ? String(guestPhoneRaw).trim().slice(0, 40)
-          : "",
-      tableNumber:
-        tableNumberRaw != null && String(tableNumberRaw).trim()
-          ? String(tableNumberRaw).trim().slice(0, 40)
           : "",
       orderNote:
         orderNoteRaw != null && String(orderNoteRaw).trim()

@@ -5,7 +5,6 @@
 
 export const PERMISSION_KEYS = [
   "pos",
-  "wholesale",
   "refunds",
   "purchases",
   "stockCount",
@@ -19,12 +18,10 @@ export const PERMISSION_KEYS = [
   "receivables",
   "expenses",
   "audit",
-  "loyalty",
 ];
 
 export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
   pos: true,
-  wholesale: true,
   refunds: true,
   purchases: true,
   stockCount: true,
@@ -38,12 +35,10 @@ export const DEFAULT_MANAGER_PERMISSIONS = Object.freeze({
   receivables: true,
   expenses: true,
   audit: true,
-  loyalty: true,
 });
 
 export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   pos: true,
-  wholesale: false,
   refunds: false,
   purchases: false,
   stockCount: false,
@@ -57,7 +52,6 @@ export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   receivables: false,
   expenses: false,
   audit: false,
-  loyalty: false,
 });
 
 function parseStored(raw, fallback) {

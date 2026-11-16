@@ -164,17 +164,6 @@ router.post("/:id/receive", requireRole("ADMIN", "MANAGER"), async (req, res) =>
             create: { productId: line.productId, branchId: order.branchId, quantity: qty, unitCost: cost, minStockLevel: 5 },
             update: { quantity: { increment: qty }, unitCost },
           });
-          await tx.inventoryLot.create({
-            data: {
-              organizationId: orgId,
-              productId: line.productId,
-              branchId: order.branchId,
-              quantityReceived: qty,
-              quantityOnHand: qty,
-              unitCost: cost,
-              note: `po:${order.id}`,
-            },
-          });
         }
         await tx.stockMovement.create({
           data: {

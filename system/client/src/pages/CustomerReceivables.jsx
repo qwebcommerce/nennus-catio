@@ -88,7 +88,7 @@ export default function CustomerReceivables() {
   };
 
   const paperClass =
-    printSale?.channel === "WHOLESALE" ? classFor("wholesale") : classFor("retail");
+    classFor("retail");
 
   return (
     <div className="accounts-page">
@@ -228,7 +228,7 @@ export default function CustomerReceivables() {
         aria-hidden="true"
       >
         {printSale ? (
-          <InvoicePrint sale={printSale} branchName={printSale.branch?.name} taxInfo={user?.tax} />
+          <InvoicePrint sale={printSale} branchName={printSale.branch?.name} />
         ) : printCollection ? (
           <PaymentReceiptPrint txn={printCollection} />
         ) : null}

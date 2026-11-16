@@ -3,11 +3,8 @@ import { create } from "zustand";
 /**
  * حالة سلة POS — كميات وأسعار لكل فرع
  */
-function pickUnitPrice(product, useWholesale) {
-  const retail = Number(product.price);
-  const w = product.wholesalePrice != null ? Number(product.wholesalePrice) : null;
-  if (useWholesale && w != null && !Number.isNaN(w)) return w;
-  return retail;
+function pickUnitPrice(product) {
+  return Math.round(Number(product.price) * 100) / 100;
 }
 
 function pickCost(product) {
@@ -16,29 +13,8 @@ function pickCost(product) {
   return Number.isNaN(c) ? null : c;
 }
 
-function normalizeModifiers(mods) {
-  if (!Array.isArray(mods) || !mods.length) return [];
-  const out = [];
-  const seen = new Set();
-  for (const m of mods) {
-    const key = String(m?.key || "").trim();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      key,
-      label: String(m?.label || key).trim(),
-      labelAr: m?.labelAr ? String(m.labelAr).trim() : null,
-      priceDelta: Math.round((Number(m?.priceDelta) || 0) * 100) / 100,
-    });
-  }
-  return out.sort((a, b) => a.key.localeCompare(b.key));
-}
-
-export function cartLineKey(productId, modifiers, variantId) {
-  const mods = normalizeModifiers(modifiers);
-  const base = variantId ? `${productId}:${variantId}` : String(productId);
-  if (!mods.length) return base;
-  return `${base}::${mods.map((m) => m.key).join(",")}`;
+export function cartLineKey(productId, variantId) {
+  return variantId ? `${productId}:${variantId}` : String(productId);
 }
 
 export function lineAmount(line) {
@@ -48,17 +24,10 @@ export function lineAmount(line) {
   return Math.round(price * qty * 100) / 100;
 }
 
-function unitPriceWithMods(product, useWholesale, modifiers) {
-  const base = pickUnitPrice(product, useWholesale);
-  const delta = normalizeModifiers(modifiers).reduce((s, m) => s + m.priceDelta, 0);
-  return Math.round((base + delta) * 100) / 100;
-}
-
 function mapCartLine(i) {
-  const modifiers = normalizeModifiers(i.modifiers);
   const productId = i.productId;
   return {
-    lineKey: i.lineKey || cartLineKey(productId, modifiers, i.variantId),
+    lineKey: i.lineKey || cartLineKey(productId, i.variantId),
     productId,
     variantId: i.variantId || null,
     variantLabel: i.variantLabel || null,
@@ -71,21 +40,15 @@ function mapCartLine(i) {
     cost: i.cost != null ? Number(i.cost) : null,
     quantity: Math.max(1, Math.floor(Number(i.quantity) || 1)),
     maxStock: Math.max(0, Math.floor(Number(i.maxStock) || 0)),
-    modifiers,
   };
 }
 
 export const useCartStore = create((set, get) => ({
   branchId: null,
   items: [],
-  /** عند true تُستخدم أسعار الجملة في السلة (إن وُجدت) */
-  useWholesalePricing: false,
-
   setBranchId: (branchId) => set({ branchId }),
 
-  setUseWholesalePricing: (v) => set({ useWholesalePricing: Boolean(v) }),
-
-  /** يحدّث أسطر السلة من أسعار الكتالوج الحالية (بعد جلب المنتجات أو تغيير وضع الجملة) */
+  /** يحدّث أسطر السلة من أسعار الكتالوج الحالية (بعد جلب المنتجات) */
   syncLinePricesFromProducts: (products) =>
     set((state) => {
       const map = new Map(products.map((p) => [p.id, p]));
@@ -95,7 +58,7 @@ export const useCartStore = create((set, get) => ({
           if (!p) return i;
           return {
             ...i,
-            unitPrice: unitPriceWithMods(p, state.useWholesalePricing, i.modifiers),
+            unitPrice: pickUnitPrice(p),
             cost: pickCost(p),
             name: p.name,
             nameEn: p.nameEn || null,
@@ -107,7 +70,7 @@ export const useCartStore = create((set, get) => ({
   /**
    * @param {object} product
    * @param {number} qty
-   * @param {{ modifiers?: object[] }} [opts]
+   * @param {{ variant?: object }} [opts]
    */
   addProduct: (product, qty = 1, opts = {}) => {
     const variant = opts.variant || null;
@@ -115,10 +78,8 @@ export const useCartStore = create((set, get) => ({
     const stock = variant
       ? variant.stocks?.[0]?.quantity ?? 0
       : product.inventories?.[0]?.quantity ?? 0;
-    const useW = get().useWholesalePricing && !variant;
-    const modifiers = normalizeModifiers(opts.modifiers);
-    const lineKey = cartLineKey(product.id, modifiers, variant?.id);
-    const unitPrice = variant ? Number(variant.price) : unitPriceWithMods(product, useW, modifiers);
+    const lineKey = cartLineKey(product.id, variant?.id);
+    const unitPrice = variant ? Number(variant.price) : pickUnitPrice(product);
     const cost = pickCost(product);
     set((state) => {
       const existing = state.items.find((i) => i.lineKey === lineKey);
@@ -137,7 +98,6 @@ export const useCartStore = create((set, get) => ({
                     : product.nameEn || null,
                   unitPrice,
                   cost,
-                  modifiers,
                 }
               : i
           ),
@@ -162,7 +122,6 @@ export const useCartStore = create((set, get) => ({
             cost,
             quantity: qty,
             maxStock: stock,
-            modifiers,
           },
         ],
       };

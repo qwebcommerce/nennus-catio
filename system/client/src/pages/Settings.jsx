@@ -5,7 +5,6 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { api } from "../api/client.js";
 import { useToast } from "../context/ToastContext.jsx";
 import PrintSettings from "./PrintSettings.jsx";
-import TaxSettingsPanel from "../components/TaxSettingsPanel.jsx";
 import { LanguageSwitcher } from "../components/LanguageSwitcher.jsx";
 import { useBranchContext } from "../context/BranchContext.jsx";
 
@@ -233,8 +232,6 @@ export default function Settings() {
           </button>
         </section>
       ) : null}
-
-      <TaxSettingsPanel />
 
       <section className="settings-print" aria-label={t("nav.printSettings")}>
         <PrintSettings />

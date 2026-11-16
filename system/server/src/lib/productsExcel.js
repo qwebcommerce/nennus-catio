@@ -134,18 +134,6 @@ export function buildProductSampleExcelBuffer() {
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
 }
 
-/** تحويل تاريخ من Excel (رقم تسلسلي أو نص) */
-export function parseExpiryCell(v) {
-  if (v === "" || v == null) return null;
-  if (typeof v === "number" && Number.isFinite(v) && v > 20000 && v < 1000000) {
-    const utc = Math.round((v - 25569) * 86400 * 1000);
-    const d = new Date(utc);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(String(v).trim());
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 function categoryName(p) {
   return p.productCategory?.name || p.category || "";
 }
@@ -170,12 +158,10 @@ export function buildProductsExcelBuffer(products, inventoryByProductId) {
       subcategory: subcategoryName(p),
       cost: p.cost != null ? Number(p.cost) : "",
       price: Number(p.price),
-      wholesalePrice: p.wholesalePrice != null ? Number(p.wholesalePrice) : "",
       imageUrl: p.imageUrl ?? "",
       isActive: p.isActive ? "yes" : "no",
       stockQty: inv ? inv.quantity : "",
       minStock: inv ? inv.minStockLevel : "",
-      expiryDate: p.expiryDate ? new Date(p.expiryDate).toISOString().slice(0, 10) : "",
       description: p.description ?? "",
     };
   });
