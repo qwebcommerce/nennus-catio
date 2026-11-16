@@ -6,7 +6,9 @@ import { prisma } from "../lib/prisma.js";
 import { customerSession, endCustomerSession, startCustomerSession } from "../lib/customerSession.js";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
 import { assertStockForHolds, commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
-import { LOCK_TX, needsReview, settleGatewayPayment, statusError } from "../lib/payments.js";
+import { LOCK_TX, statusError } from "../lib/payments.js";
+import { applyGatewayResult } from "../lib/gatewayNotify.js";
+import { lookupOnReturn } from "../lib/paymentLookup.js";
 import { minutesOf, qatarNowMinutes, qatarToday } from "../lib/groomingSlots.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { mailConfigured, mailCustomer, mailStaff } from "../lib/mailer.js";
@@ -574,6 +576,11 @@ router.get("/orders", async (req, res) => {
 router.get("/orders/:id", async (req, res) => {
   const session = await requireCustomer(req, res);
   if (!session) return;
+  const owned = await prisma.sale.findFirst({
+    where: { id: req.params.id, customerId: session.sub, orderChannel: "WEBSITE" },
+    select: { id: true, webStatus: true, gatewayPaymentId: true },
+  });
+  if (owned) await lookupOnReturn(req, "sale", owned, owned.webStatus === "PENDING_PAYMENT");
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, customerId: session.sub, orderChannel: "WEBSITE" },
     include: { items: { include: { product: { select: { name: true, nameEn: true, sellBy: true } }, variant: true } } },
@@ -1007,140 +1014,10 @@ router.post("/payments/skipcash", async (req, res) => {
   if (!skipcashWebhookValid(body, req.headers.authorization)) {
     return res.status(401).json({ error: "Invalid signature" });
   }
-  const custom = String(body.Custom1 || "").trim();
-  const statusId = Number(body.StatusId);
-  const paymentRef = String(body.PaymentId || "");
   try {
-    if (custom.startsWith("till:")) return res.status(200).json({ ok: true });
-    if (custom.startsWith("booking:")) {
-      const booking = await prisma.appointment.findFirst({ where: { id: custom.slice(8) } });
-      if (!booking) return res.status(200).json({ ok: true });
-      if (statusId === 2) {
-        // FR-51, FR-76, FR-79: amount must match and the hold must still be live; otherwise staff review.
-        const result = await settleGatewayPayment({
-          parentKind: "appointment",
-          parentId: booking.id,
-          organizationId: booking.organizationId,
-          body,
-          expected: Number(booking.amount),
-          confirm: async (tx, paid) => {
-            const now = new Date();
-            const moved = await tx.appointment.updateMany({
-              where: { id: booking.id, status: "PENDING_PAYMENT", holdExpiresAt: { gt: now } },
-              data: { status: "CONFIRMED", amountPaid: paid, paidAt: now, paymentReference: paymentRef || booking.paymentReference },
-            });
-            if (!moved.count) {
-              const current = await tx.appointment.findUnique({ where: { id: booking.id }, select: { status: true } });
-              throw needsReview(["PENDING_PAYMENT", "CANCELLED"].includes(current?.status) ? "LATE_PAYMENT" : "DUPLICATE_PAYMENT");
-            }
-          },
-        });
-        const buyer = booking.customerId ? await prisma.customer.findUnique({ where: { id: booking.customerId } }) : null;
-        const ref = booking.reference || booking.id.slice(-8).toUpperCase();
-        if (result.outcome === "confirmed") {
-          await mailCustomer(buyer, "booking", { reference: ref, status: "CONFIRMED", startAt: booking.startAt });
-          await mailStaff(booking.organizationId, "alertBooking", { reference: ref });
-        } else if (result.outcome === "review") {
-          await mailStaff(booking.organizationId, "alertBooking", `Grooming booking ${ref} has a payment that needs review (${result.reason}).`);
-        }
-        return res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
-      }
-      if ([3, 4, 5].includes(statusId)) {
-        await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
-      }
-      return res.status(200).json({ ok: true });
-    }
-    if (custom.startsWith("relocation:")) {
-      const request = await prisma.relocationRequest.findFirst({ where: { id: custom.slice(11) } });
-      if (!request) return res.status(200).json({ ok: true });
-      if (statusId === 2) {
-        const expected = Number(request.quoteAmount || 0);
-        const result = await settleGatewayPayment({
-          parentKind: "relocation",
-          parentId: request.id,
-          organizationId: request.organizationId,
-          body,
-          expected,
-          confirm: async (tx, paid) => {
-            const now = new Date();
-            const moved = await tx.relocationRequest.updateMany({
-              where: { id: request.id, status: "QUOTE_SENT", quoteAmount: new Prisma.Decimal(expected.toFixed(2)) },
-              data: { status: "PAID", paymentMethod: "ONLINE", paidAt: now, amountPaid: paid },
-            });
-            if (!moved.count) {
-              const current = await tx.relocationRequest.findUnique({ where: { id: request.id }, select: { status: true } });
-              if (current?.status === "QUOTE_SENT") throw needsReview("AMOUNT_MISMATCH");
-              throw needsReview(["PAID", "IN_PROGRESS", "COMPLETED"].includes(current?.status) ? "DUPLICATE_PAYMENT" : "LATE_PAYMENT");
-            }
-            const fresh = await tx.relocationRequest.findUnique({ where: { id: request.id }, select: { history: true } });
-            const history = Array.isArray(fresh?.history) ? fresh.history : [];
-            await tx.relocationRequest.update({
-              where: { id: request.id },
-              data: { history: [...history, { at: now.toISOString(), status: "PAID", note: "ONLINE" }] },
-            });
-          },
-        });
-        if (result.outcome === "confirmed") {
-          const buyer = await prisma.customer.findUnique({ where: { id: request.customerId } });
-          await mailCustomer(buyer, "relocation", { reference: request.reference || request.id.slice(-8).toUpperCase(), status: "PAID" });
-        } else if (result.outcome === "review") {
-          await mailStaff(request.organizationId, "alertRelocation", `Relocation ${request.reference || request.id} has a payment that needs review (${result.reason}).`);
-        }
-        return res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
-      }
-      return res.status(200).json({ ok: true });
-    }
-    const sale = custom ? await prisma.sale.findFirst({ where: { id: custom, orderChannel: "WEBSITE" } }) : null;
-    if (!sale) return res.status(200).json({ ok: true });
-    if (statusId === 2) {
-      const org = await prisma.branch.findUnique({ where: { id: sale.branchId }, select: { organizationId: true } });
-      const result = await settleGatewayPayment({
-        parentKind: "sale",
-        parentId: sale.id,
-        organizationId: org.organizationId,
-        body,
-        expected: Number(sale.total),
-        confirm: async (tx) => {
-          const now = new Date();
-          // Guarded: only a live, unpaid order confirms; a late payment goes to staff (FR-79).
-          const moved = await tx.sale.updateMany({
-            where: { id: sale.id, webStatus: "PENDING_PAYMENT", holdExpiresAt: { gt: now } },
-            data: {
-              webStatus: "CONFIRMED",
-              amountPaid: sale.total,
-              amountDue: 0,
-              invoiceStatus: "PAID",
-              paidAt: now,
-              paymentReference: paymentRef || sale.paymentReference || "",
-            },
-          });
-          if (!moved.count) {
-            const current = await tx.sale.findUnique({ where: { id: sale.id }, select: { webStatus: true } });
-            throw needsReview(["PENDING_PAYMENT", "CANCELLED"].includes(current?.webStatus) ? "LATE_PAYMENT" : "DUPLICATE_PAYMENT");
-          }
-          await commitSaleHolds(tx, sale);
-        },
-      });
-      const buyer = sale.customerId ? await prisma.customer.findUnique({ where: { id: sale.customerId } }) : null;
-      const ref = sale.reference || sale.invoiceNumber || sale.id.slice(-8).toUpperCase();
-      if (result.outcome === "confirmed") {
-        await mailCustomer(buyer, "order", { reference: ref, status: "CONFIRMED", link: `${publicBase(req)}/shop/orders/${sale.id}` });
-        await mailStaff(org.organizationId, "alertOrder", { reference: ref });
-      } else if (result.outcome === "review") {
-        await mailStaff(org.organizationId, "alertOrder", `Website order ${ref} has a payment that needs review (${result.reason}).`);
-      }
-      return res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
-    }
-    if ([3, 4, 5].includes(statusId)) {
-      await prisma.$transaction(async (tx) => {
-        const moved = await tx.sale.updateMany({
-          where: { id: sale.id, webStatus: "PENDING_PAYMENT" },
-          data: { webStatus: "CANCELLED" },
-        });
-        if (moved.count) await releaseSaleHolds(tx, sale.id);
-      });
-    }
-    res.status(200).json({ ok: true });
+    // Same guarded confirm path as the server's own payment lookup (lib/gatewayNotify.js).
+    const result = await applyGatewayResult(body, { req });
+    res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message || "Could not update the order" });
   }

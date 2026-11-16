@@ -448,6 +448,12 @@ export function ShopReset() {
   );
 }
 
+/** Back from SkipCash: the return URL carries ?id=<payment id>. The server looks it up itself (FR-76). */
+function returnQuery() {
+  const paymentId = new URLSearchParams(window.location.search).get("id");
+  return paymentId ? `?paymentId=${encodeURIComponent(paymentId)}` : "";
+}
+
 export function ShopOrders() {
   const { id } = useParams();
   const { t, locale } = useI18n();
@@ -455,7 +461,7 @@ export function ShopOrders() {
   const [one, setOne] = useState(null);
   const [msg, setMsg] = useState("");
   useEffect(() => {
-    if (id) shopApi(`/api/shop/orders/${id}`).then(setOne).catch((e) => setMsg(e.message));
+    if (id) shopApi(`/api/shop/orders/${id}${returnQuery()}`).then(setOne).catch((e) => setMsg(e.message));
     else shopApi("/api/shop/orders").then(setRows).catch((e) => setMsg(e.message));
   }, [id]);
   const cancel = async () => {

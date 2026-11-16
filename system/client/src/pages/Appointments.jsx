@@ -147,6 +147,11 @@ export default function Appointments() {
   const fail = (x) => setMsg(x.message);
   const resolve = (id, accept) =>
     api(`/api/appointments/${id}/resolve-payment`, { method: "POST", body: { accept } }).then(loadAppointments).catch(fail);
+  /** FR-76: the server asks the gateway; a paid result confirms through the webhook's checks. */
+  const checkPayment = (id) =>
+    api(`/api/appointments/${id}/check-payment`, { method: "POST", body: {} })
+      .then((r) => { setMsg(t("shop.checkPaymentResult", { status: r.gatewayStatus, outcome: r.outcome })); return loadAppointments(); })
+      .catch(fail);
   const paidLeft = (a) => {
     const rows = a.payments || [];
     const inn = rows.filter((p) => p.kind === "PAYMENT" && ["CAPTURED", "REJECTED"].includes(p.status)).reduce((s, p) => s + Number(p.amount), 0);
@@ -294,6 +299,9 @@ export default function Appointments() {
                   <td style={td}>
                     {statusLabel("booking", a.status, locale)}
                     {Number(a.amountPaid) > 0 ? <div style={{ color: "var(--muted)" }}>{t("shop.paid")} {Number(a.amountPaid).toFixed(2)}</div> : null}
+                    {a.gatewayPaymentId && (a.status === "PENDING_PAYMENT" || a.paymentReview) ? (
+                      <button className="btn-touch" type="button" onClick={() => checkPayment(a.id)}>{t("shop.checkPayment")}</button>
+                    ) : null}
                     {a.paymentReview ? (
                       <div style={{ color: "var(--danger, #b42318)" }}>
                         <strong>{t(`shop.reviewReason.${a.paymentReviewReason || "AMOUNT_MISMATCH"}`)}</strong>

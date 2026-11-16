@@ -6,6 +6,7 @@ import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js"
 import { customerSession } from "../lib/customerSession.js";
 import { DOCUMENT_MIMES, contentDisposition, sniffFileType } from "../lib/fileCheck.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
+import { checkGatewayPayment, lookupOnReturn } from "../lib/paymentLookup.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
 import { writeAudit } from "../lib/auditLog.js";
 import {
@@ -206,11 +207,16 @@ relocationShop.post("/", async (req, res) => {
 });
 
 relocationShop.get("/:id", async (req, res) => {
-  const row = await prisma.relocationRequest.findFirst({
+  const include = { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } };
+  let row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, customerId: req.customer.id },
-    include: { pets: { include: { pet: true } }, documents: { select: { id: true, fileName: true, mime: true, createdAt: true } } },
+    include,
   });
   if (!row) return res.status(404).json({ error: "Request not found" });
+  // FR-76: back from the payment page — the server looks the payment up itself.
+  if (await lookupOnReturn(req, "relocation", row, row.status === "QUOTE_SENT")) {
+    row = await prisma.relocationRequest.findUnique({ where: { id: row.id }, include });
+  }
   res.json(publicRequest(row));
 });
 
@@ -458,6 +464,26 @@ relocationStaff.post("/:id/pay", async (req, res) => {
   const buyer = await prisma.customer.findUnique({ where: { id: result.updated.customerId } });
   await mailCustomer(buyer, "relocation", { reference: result.updated.reference || result.updated.id.slice(-8).toUpperCase(), status: "PAID" });
   res.json({ ...result.updated, payment: result.payment });
+});
+
+/** FR-76: staff ask the gateway for the payment's status; a paid result confirms through the webhook's path. */
+relocationStaff.post("/:id/check-payment", async (req, res) => {
+  const row = await prisma.relocationRequest.findFirst({ where: { id: req.params.id, organizationId: req.user.organizationId } });
+  if (!row) return res.status(404).json({ error: "Request not found" });
+  try {
+    const result = await checkGatewayPayment({ parentKind: "relocation", parentId: row.id, source: "staff", req, allowReview: true });
+    if (!result.checked) return res.status(400).json({ error: "There is no gateway payment to check", ...result });
+    await writeAudit({
+      userId: req.user.sub,
+      action: "PAYMENT_LOOKUP",
+      entityType: "RelocationRequest",
+      entityId: row.id,
+      summary: `${row.reference || row.id} gateway ${result.gatewayStatus}: ${result.outcome}`,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
 });
 
 /** FR-77: refund a relocation payment in part or in full (gateway for online, recorded for cash/bank). */

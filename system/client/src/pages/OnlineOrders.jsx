@@ -29,6 +29,11 @@ export default function OnlineOrders() {
   const refunded = (row) => (row.refunds || []).reduce((sum, r) => sum + Number(r.total), 0);
   const resolve = (row, accept) =>
     api(`/api/online-orders/${row.id}/resolve-payment`, { method: "POST", body: { accept } }).then(load).catch((e) => setMsg(e.message));
+  /** FR-76: the server asks the gateway; a paid result confirms through the webhook's checks. */
+  const checkPayment = (row) =>
+    api(`/api/online-orders/${row.id}/check-payment`, { method: "POST", body: {} })
+      .then((r) => { setMsg(t("shop.checkPaymentResult", { status: r.gatewayStatus, outcome: r.outcome })); return load(); })
+      .catch((e) => setMsg(e.message));
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <h1>{t("shop.staffOrders")}</h1>
@@ -55,6 +60,9 @@ export default function OnlineOrders() {
           </div>
           {row.deliveryDate ? <div>{String(row.deliveryDate).slice(0, 10)} · {row.deliveryAddress}</div> : null}
           {row.fleetwizReference ? <div>FleetWiz {row.fleetwizReference} · {row.fleetwizStatus}</div> : null}
+          {row.gatewayPaymentId && (row.webStatus === "PENDING_PAYMENT" || row.paymentReview) ? (
+            <button type="button" onClick={() => checkPayment(row)}>{t("shop.checkPayment")}</button>
+          ) : null}
           {row.paymentReview ? (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", color: "var(--danger, #b42318)" }}>
               <strong>{t("shop.paymentReview")}: {t(`shop.reviewReason.${row.paymentReviewReason || "AMOUNT_MISMATCH"}`)}</strong>

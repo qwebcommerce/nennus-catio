@@ -67,6 +67,13 @@ export default function RelocationDesk() {
               {p.kind} · {p.method} · {Number(p.amount).toFixed(2)} QAR · {p.status}{p.reference ? ` · ${p.reference}` : ""}
             </div>
           ))}
+          {row.gatewayPaymentId && (row.status === "QUOTE_SENT" || row.paymentReview) ? (
+            <div>
+              <button type="button" onClick={() => api(`/api/relocation/${row.id}/check-payment`, { method: "POST", body: {} })
+                .then((r) => { setMsg(t("shop.checkPaymentResult", { status: r.gatewayStatus, outcome: r.outcome })); return load(); })
+                .catch(fail)}>{t("shop.checkPayment")}</button>
+            </div>
+          ) : null}
           {row.paymentReview ? (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", color: "var(--danger, #b42318)" }}>
               <strong>{t("shop.paymentReview")}: {t(`shop.reviewReason.${row.paymentReviewReason || "AMOUNT_MISMATCH"}`)}</strong>

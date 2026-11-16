@@ -120,6 +120,12 @@ export function ShopGroomingBook() {
   );
 }
 
+/** Back from SkipCash: the return URL carries ?id=<payment id>. The server looks it up itself (FR-76). */
+function returnQuery() {
+  const paymentId = new URLSearchParams(window.location.search).get("id");
+  return paymentId ? `?paymentId=${encodeURIComponent(paymentId)}` : "";
+}
+
 export function ShopBookings() {
   const { id } = useParams();
   const { t, locale } = useI18n();
@@ -127,7 +133,7 @@ export function ShopBookings() {
   const [one, setOne] = useState(null);
   const [msg, setMsg] = useState("");
   const load = () => {
-    if (id) shopApi(`/api/shop/grooming/bookings/${id}`).then(setOne).catch((e) => setMsg(e.message));
+    if (id) shopApi(`/api/shop/grooming/bookings/${id}${returnQuery()}`).then(setOne).catch((e) => setMsg(e.message));
     else shopApi("/api/shop/grooming/bookings").then(setRows).catch((e) => setMsg(e.message));
   };
   useEffect(() => { load(); }, [id]);
@@ -201,7 +207,7 @@ export function ShopRelocation() {
     else setMsg(e.message);
   };
   const load = () => {
-    if (id) shopApi(`/api/shop/relocation/${id}`).then(setOne).catch(onErr);
+    if (id) shopApi(`/api/shop/relocation/${id}${returnQuery()}`).then(setOne).catch(onErr);
     else shopApi("/api/shop/relocation").then(setRows).catch(onErr);
   };
   /** Documents open through a 5-minute signed link, downloaded as an attachment. */

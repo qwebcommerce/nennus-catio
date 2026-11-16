@@ -1,17 +1,31 @@
 import { prisma } from "./prisma.js";
+import { lookupExpiredPayments } from "./paymentLookup.js";
 
+/**
+ * Releases expired holds and cancels unpaid orders / bookings whose hold lapsed. A pending
+ * gateway payment is looked up once first (FR-76, lib/paymentLookup.js) so a customer who paid
+ * but whose notification was lost is confirmed rather than released; parents whose lookup is
+ * still to come (or in flight on another instance) are left for the next sweep.
+ */
 export async function sweepExpiredHolds() {
+  let deferred = { saleIds: [], appointmentIds: [] };
+  try {
+    deferred = await lookupExpiredPayments();
+  } catch (e) {
+    console.error("[sweep] payment lookup failed:", e?.message || e);
+  }
   const now = new Date();
+  const keepSales = deferred.saleIds.length ? { saleId: { notIn: deferred.saleIds } } : {};
   await prisma.stockHold.updateMany({
-    where: { status: "HELD", expiresAt: { lt: now } },
+    where: { status: "HELD", expiresAt: { lt: now }, ...keepSales },
     data: { status: "RELEASED", releasedAt: now },
   });
   await prisma.sale.updateMany({
-    where: { webStatus: "PENDING_PAYMENT", holdExpiresAt: { lt: now } },
+    where: { webStatus: "PENDING_PAYMENT", holdExpiresAt: { lt: now }, ...(deferred.saleIds.length ? { id: { notIn: deferred.saleIds } } : {}) },
     data: { webStatus: "CANCELLED" },
   });
   await prisma.appointment.updateMany({
-    where: { status: "PENDING_PAYMENT", holdExpiresAt: { lt: now } },
+    where: { status: "PENDING_PAYMENT", holdExpiresAt: { lt: now }, ...(deferred.appointmentIds.length ? { id: { notIn: deferred.appointmentIds } } : {}) },
     data: { status: "CANCELLED" },
   });
 }

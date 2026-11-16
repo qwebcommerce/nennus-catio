@@ -100,3 +100,83 @@ export async function createSkipcashPayment(payload) {
   }
   return { id: json.resultObj.id, payUrl: json.resultObj.payUrl };
 }
+
+const LOOKUP_FIELDS = ["Id", "KeyId"];
+
+function pickField(obj, names) {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const name of names) {
+    if (obj[name] != null && obj[name] !== "") return obj[name];
+  }
+  const lower = Object.fromEntries(Object.entries(obj).map(([k, v]) => [k.toLowerCase(), v]));
+  for (const name of names) {
+    const v = lower[name.toLowerCase()];
+    if (v != null && v !== "") return v;
+  }
+  return undefined;
+}
+
+/**
+ * Server-side payment status lookup (FR-76): asks SkipCash for the payment's current state.
+ * Signed the same way as create and refund (HMAC-SHA256 of "Id=…,KeyId=…" with the client
+ * secret in the Authorization header). The answer comes from the gateway over HTTPS, never
+ * from the browser. StatusId follows the webhook: 2 = paid, 3/4/5 = cancelled / failed /
+ * rejected, 0/1 = new / pending.
+ * @returns {Promise<{ id: string, statusId: number, amount: string|null, currency: string, transactionId: string, custom1: string, visaId: string, paidAt: Date|null }>}
+ */
+export async function lookupSkipcashPayment(id, { timeoutMs = 8000 } = {}) {
+  if (!skipcashConfigured()) {
+    const err = new Error("Payment lookups need the SkipCash key and secret");
+    err.status = 503;
+    throw err;
+  }
+  const paymentId = String(id || "").trim();
+  if (!paymentId) {
+    const err = new Error("There is no gateway payment to look up");
+    err.status = 400;
+    throw err;
+  }
+  const keyId = process.env.SKIPCASH_KEY_ID.trim();
+  const payload = { Id: paymentId, KeyId: keyId };
+  const authorization = sign(LOOKUP_FIELDS, payload, process.env.SKIPCASH_SECRET.trim());
+  const base = (process.env.SKIPCASH_API_URL || "https://api.skipcash.app/api/v1/payments").replace(/\/$/, "");
+  let res;
+  try {
+    res = await fetch(`${base}/${encodeURIComponent(paymentId)}?KeyId=${encodeURIComponent(keyId)}`, {
+      method: "GET",
+      headers: { Authorization: authorization, Accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    const err = new Error(`SkipCash could not be reached: ${e.message || e}`);
+    err.status = 502;
+    throw err;
+  }
+  const json = await res.json().catch(() => ({}));
+  const result = json?.resultObj;
+  if (!res.ok || json.hasError || !result) {
+    const err = new Error(json.errorMessage || json.error || "SkipCash did not return the payment");
+    err.status = 502;
+    throw err;
+  }
+  const gotId = String(pickField(result, ["id", "paymentId"]) || "");
+  if (gotId !== paymentId) {
+    const err = new Error("SkipCash returned a different payment");
+    err.status = 502;
+    throw err;
+  }
+  const statusId = Number(pickField(result, ["statusId"]));
+  const amount = pickField(result, ["amount"]);
+  const rawPaidAt = pickField(result, ["paidAt", "paymentDate", "transactionDate"]);
+  const paidAt = rawPaidAt ? new Date(rawPaidAt) : null;
+  return {
+    id: gotId,
+    statusId: Number.isFinite(statusId) ? statusId : -1,
+    amount: amount == null ? null : String(amount),
+    currency: String(pickField(result, ["currency"]) || "QAR"),
+    transactionId: String(pickField(result, ["transactionId"]) || ""),
+    custom1: String(pickField(result, ["custom1"]) || ""),
+    visaId: String(pickField(result, ["visaId"]) || ""),
+    paidAt: paidAt && !Number.isNaN(paidAt.getTime()) ? paidAt : null,
+  };
+}

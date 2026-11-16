@@ -6,6 +6,7 @@ import { findBranchInOrg } from "../lib/orgScope.js";
 import { claimSlot, qatarDateTime, qatarDayBounds, qatarParts, qatarToday, slotTaken } from "../lib/groomingSlots.js";
 import { LOCK_TX, acceptReviewPayments, lockParent, paymentTotals, refundParent, rejectReviewPayments, statusError } from "../lib/payments.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { checkGatewayPayment } from "../lib/paymentLookup.js";
 import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
@@ -372,6 +373,30 @@ router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
  * accept=true keeps the money (and confirms the booking if the slot is still free);
  * accept=false refunds it.
  */
+/** FR-76: staff ask the gateway for a pending or reviewed booking's payment; a paid result confirms through the webhook's path. */
+router.post("/:id/check-payment", requireModule("grooming", "edit"), async (req, res) => {
+  const existing = await prisma.appointment.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId },
+    select: { id: true, reference: true, branchId: true },
+  });
+  if (!existing) return res.status(404).json({ error: "الموعد غير موجود", errorEn: "Booking not found" });
+  try {
+    const result = await checkGatewayPayment({ parentKind: "appointment", parentId: existing.id, source: "staff", req, allowReview: true });
+    if (!result.checked) return res.status(400).json({ error: "لا يوجد دفع إلكتروني للتحقق منه", errorEn: "There is no gateway payment to check", ...result });
+    await writeAudit({
+      userId: req.user.sub,
+      action: "PAYMENT_LOOKUP",
+      entityType: "Appointment",
+      entityId: existing.id,
+      branchId: existing.branchId,
+      summary: `${existing.reference || existing.id} gateway ${result.gatewayStatus}: ${result.outcome}`,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message, errorEn: e.message });
+  }
+});
+
 router.post("/:id/resolve-payment", requireModule("grooming", "edit"), async (req, res) => {
   const existing = await prisma.appointment.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId, paymentReview: true },

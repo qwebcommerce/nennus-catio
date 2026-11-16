@@ -6,6 +6,7 @@ import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { claimSlot, minutesOf, qatarDateTime, slotTaken, weekdayOf } from "../lib/groomingSlots.js";
 import { sweepExpiredHolds } from "../lib/webOrder.js";
+import { lookupOnReturn } from "../lib/paymentLookup.js";
 import { customerSession } from "../lib/customerSession.js";
 import { LOCK_TX } from "../lib/payments.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
@@ -139,11 +140,15 @@ router.get("/bookings/:id", async (req, res) => {
   const session = await customerSession(req, res);
   const org = await shopOrg();
   if (!session || !org) return res.status(401).json({ error: "Sign in to see bookings" });
-  const row = await prisma.appointment.findFirst({
+  let row = await prisma.appointment.findFirst({
     where: { id: req.params.id, organizationId: org.id, customerId: session.sub },
     include: { service: true },
   });
   if (!row) return res.status(404).json({ error: "Booking not found" });
+  // FR-76: back from the payment page — the server looks the payment up itself.
+  if (await lookupOnReturn(req, "appointment", row, row.status === "PENDING_PAYMENT")) {
+    row = await prisma.appointment.findUnique({ where: { id: row.id }, include: { service: true } });
+  }
   res.json(publicBooking(row, org));
 });
 
