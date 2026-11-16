@@ -80,12 +80,20 @@ New database migrations (additive only, nothing dropped):
 `20261117101000_staff_active_sessions_audit_lock`, `20261117102000_stock_till_rules`,
 `20261117103000_fc_payments_references`, `20261117104000_finance_paid_from_email_outbox`.
 
+Second pass (18 November 2026), also fixed and merged:
+- NFR-13: every editable record carries a version; a save from an older copy is refused (409) and the screen reloads.
+- NFR-03: money is stored as whole dirhams (integer columns) and all server arithmetic is integer; the API and screens still use riyals with two decimals. Migration `20261118103000_money_dirhams` (see `NFR-03-money.md`).
+- Grooming and relocation payments are included in finance, P&L, money in/out and exports.
+- Server-side SkipCash payment lookup (customer return, staff "check payment status", before a hold expires). The lookup URL is unverified against SkipCash's docs; a failed lookup changes nothing.
+- Uploaded product images are re-encoded (auto-orient, metadata stripped, max 1600 px, WebP).
+
 Still open:
-- NFR-03: money is still stored as decimal riyals (sums are now exact Decimal maths).
-- NFR-13: no version check against saving over a newer edit.
-- No server-side payment lookup to SkipCash; only the signed notification confirms.
-- Images are checked and stripped of metadata but not resized.
-- Grooming payments are not yet included in finance money-in and P&L.
+- Confirm the SkipCash payment-lookup endpoint against SkipCash's API documentation.
+
+**Deploying the money migration:** deploy outside opening hours. Migrations run during the Vercel build,
+while the previous deployment is still live; a sale or edit made by the old code in that window would be
+written into the converted columns with the wrong scale. Check first that no single amount exceeds
+21,474,836.47 QAR (queries in `NFR-03-money.md`).
 
 Production settings needed: `CRON_SECRET`, `RESEND_API_KEY`, `SHOP_FROM_EMAIL`, `APP_PUBLIC_URL`,
-`NODE_ENV=production`. The email retry cron runs every 10 minutes, which needs a Vercel Pro plan.
+`NODE_ENV=production`. The email retry cron runs once a day (Vercel Hobby); emails are also sent immediately when queued.
