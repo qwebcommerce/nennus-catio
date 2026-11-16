@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { writeAudit } from "../lib/auditLog.js";
-import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { assertVersion, clientVersion, staleEditError } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { receivePurchaseOrderTx } from "../lib/purchaseReceive.js";
-import { dec, money, parseMoney } from "../lib/money.js";
+import { d, fmt, money, parseMoney } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
+
+const api = (order) => toApi("PurchaseOrder", order);
 
 const router = Router();
 router.use(authMiddleware);
@@ -26,7 +28,7 @@ router.get("/", async (req, res) => {
     take: 100,
     include,
   });
-  res.json(rows);
+  res.json(api(rows));
 });
 
 router.post("/", requireModule("purchasing", "create"), async (req, res) => {
@@ -57,9 +59,9 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
     });
     if (!product) return res.status(400).json({ error: "A line product was not found" });
     const qty = Number(line.quantity);
-    const cost = Number(line.unitCost);
-    if (!Number.isInteger(qty) || qty < 1 || !Number.isFinite(cost) || cost < 0) {
-      return res.status(400).json({ error: "Each line needs a quantity and a unit cost" });
+    const cost = parseMoney(line.unitCost);
+    if (!Number.isInteger(qty) || qty < 1 || cost == null) {
+      return res.status(400).json({ error: "Each line needs a quantity and a unit cost (at most 2 decimals)", errorAr: "كل سطر يحتاج كمية وتكلفة وحدة (منزلتان عشريتان كحد أقصى)", errorEn: "Each line needs a quantity and a unit cost (at most 2 decimals)" });
     }
     let variantId = null;
     if (line.variantId) {
@@ -73,7 +75,7 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
       productId: product.id,
       variantId,
       quantity: qty,
-      unitCost: new Prisma.Decimal(cost.toFixed(2)),
+      unitCost: cost,
     });
   }
   const order = await prisma.purchaseOrder.create({
@@ -87,7 +89,7 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
     },
     include,
   });
-  res.status(201).json(order);
+  res.status(201).json(api(order));
 });
 
 /** A guarded status step that matched nothing: a newer version means the client's copy was stale. */
@@ -114,7 +116,7 @@ router.post("/:id/send", requireModule("purchasing", "edit"), async (req, res) =
     await refuseIfStale(order.id, version);
     return res.status(400).json({ error: "Only a draft can be sent" });
   }
-  res.json(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include }));
+  res.json(api(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include })));
 });
 
 router.post("/:id/cancel", requireModule("purchasing", "edit"), async (req, res) => {
@@ -135,7 +137,7 @@ router.post("/:id/cancel", requireModule("purchasing", "edit"), async (req, res)
       error: order.status === "CANCELLED" ? "The order is already cancelled" : "A received order cannot be cancelled",
     });
   }
-  res.json(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include }));
+  res.json(api(await prisma.purchaseOrder.findUnique({ where: { id: order.id }, include })));
 });
 
 router.post("/:id/receive", requireModule("purchasing", "edit"), async (req, res) => {
@@ -167,10 +169,10 @@ router.post("/:id/receive", requireModule("purchasing", "edit"), async (req, res
       entityType: "PurchaseOrder",
       entityId: order.id,
       branchId: order.branchId,
-      summary: `${order.status}: bill ${result.bill.amount}`,
+      summary: `${order.status}: bill ${fmt(result.bill.amount)}`,
       meta: { billId: result.bill.id, received: result.received },
     });
-    res.json({ order, bill: result.bill });
+    res.json({ order: api(order), bill: toApi("SupplierBill", result.bill) });
   } catch (e) {
     res.status(e.status || 400).json({
       error: e.message || "Could not receive",
@@ -188,10 +190,10 @@ const AGE_BUCKETS = [
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function billView(bill, now = new Date()) {
-  const owed = dec(bill.amount).minus(dec(bill.amountPaid));
+  const owed = d(bill.amount) - d(bill.amountPaid);
   const ageDays = Math.max(0, Math.floor((now.getTime() - new Date(bill.createdAt).getTime()) / DAY_MS));
   const bucket = AGE_BUCKETS.find((b) => ageDays >= b.min && ageDays <= b.max)?.key || "90+";
-  return { ...bill, owed: money(owed), ageDays, ageBucket: bucket };
+  return { ...toApi("SupplierBill", bill), owed: money(owed), owedDirhams: owed, ageDays, ageBucket: bucket };
 }
 
 /** FR-104: bills with amount, paid and owed. Filters: supplierId, open=1, age=0-30|31-60|61-90|90+. */
@@ -208,7 +210,7 @@ router.get("/bills", async (req, res) => {
     include: { supplier: { select: { id: true, name: true } }, payments: { orderBy: { paidAt: "desc" } }, purchaseOrder: { select: { id: true, status: true } } },
   });
   const now = new Date();
-  res.json(rows.map((bill) => billView(bill, now)).filter((bill) => !age || bill.ageBucket === age));
+  res.json(rows.map((bill) => billView(bill, now)).filter((bill) => !age || bill.ageBucket === age).map(({ owedDirhams, ...bill }) => bill));
 });
 
 /** FR-104: what is still owed, per supplier and by age. */
@@ -219,24 +221,24 @@ router.get("/bills/aging", async (req, res) => {
   });
   const now = new Date();
   const bySupplier = new Map();
-  const totals = Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, dec(0)]));
-  let grand = dec(0);
+  const totals = Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, 0]));
+  let grand = 0;
   for (const bill of rows) {
     const view = billView(bill, now);
-    const owed = dec(bill.amount).minus(dec(bill.amountPaid));
+    const owed = view.owedDirhams;
     const entry = bySupplier.get(bill.supplierId) || {
       supplierId: bill.supplierId,
       supplier: bill.supplier?.name || "",
       bills: 0,
-      buckets: Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, dec(0)])),
-      owed: dec(0),
+      buckets: Object.fromEntries(AGE_BUCKETS.map((b) => [b.key, 0])),
+      owed: 0,
     };
     entry.bills += 1;
-    entry.buckets[view.ageBucket] = entry.buckets[view.ageBucket].plus(owed);
-    entry.owed = entry.owed.plus(owed);
+    entry.buckets[view.ageBucket] += owed;
+    entry.owed += owed;
     bySupplier.set(bill.supplierId, entry);
-    totals[view.ageBucket] = totals[view.ageBucket].plus(owed);
-    grand = grand.plus(owed);
+    totals[view.ageBucket] += owed;
+    grand += owed;
   }
   const suppliers = [...bySupplier.values()]
     .map((entry) => ({
@@ -275,8 +277,8 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
         err.errorAr = "الفاتورة غير موجودة";
         throw err;
       }
-      const balance = dec(row.amount).minus(dec(row.amountPaid));
-      if (amount.greaterThan(balance)) {
+      const balance = d(row.amount) - d(row.amountPaid);
+      if (amount > balance) {
         const err = new Error("A payment cannot be larger than the balance");
         err.status = 400;
         err.errorAr = "لا يمكن أن تزيد الدفعة عن الرصيد المتبقي";
@@ -291,8 +293,8 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
           note: req.body?.note ? String(req.body.note).trim().slice(0, 500) : null,
         },
       });
-      const amountPaid = dec(row.amountPaid).plus(amount);
-      const status = amountPaid.greaterThanOrEqualTo(dec(row.amount)) ? "PAID" : "PARTIAL";
+      const amountPaid = d(row.amountPaid) + amount;
+      const status = amountPaid >= d(row.amount) ? "PAID" : "PARTIAL";
       return tx.supplierBill.update({
         where: { id: row.id },
         data: { amountPaid, status },
@@ -304,9 +306,10 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
       action: "SUPPLIER_PAYMENT",
       entityType: "SupplierBill",
       entityId: bill.id,
-      summary: `${amount.toFixed(2)} ${method} → ${String(bill.amountPaid)}`,
+      summary: `${fmt(amount)} ${method} → ${fmt(bill.amountPaid)}`,
     });
-    res.json(billView(bill));
+    const { owedDirhams, ...view } = billView(bill);
+    res.json(view);
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not record the payment", errorEn: e.message, errorAr: e.errorAr });
   }

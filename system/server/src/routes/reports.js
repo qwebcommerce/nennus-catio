@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
-import { dec, money } from "../lib/money.js";
+import { d, money } from "../lib/money.js";
 import { qatarDayKey, qatarDayStart, qatarRange } from "../lib/qatarTime.js";
 import { COUNTED_SALE } from "../lib/financeData.js";
 
@@ -93,36 +93,36 @@ router.get("/analytics", async (req, res) => {
   const salesByPeriod = new Map();
   const expensesByPeriod = new Map();
   for (const k of periodKeys) {
-    salesByPeriod.set(k, dec(0));
-    expensesByPeriod.set(k, dec(0));
+    salesByPeriod.set(k, 0);
+    expensesByPeriod.set(k, 0);
   }
 
   for (const s of sales) {
     const k = groupBy === "month" ? monthKey(s.createdAt) : dayKey(s.createdAt);
-    salesByPeriod.set(k, (salesByPeriod.get(k) || dec(0)).plus(dec(s.total)));
+    salesByPeriod.set(k, (salesByPeriod.get(k) || 0) + d(s.total));
   }
 
   for (const e of expenses) {
     const k = groupBy === "month" ? monthKey(e.expenseDate) : dayKey(e.expenseDate);
-    expensesByPeriod.set(k, (expensesByPeriod.get(k) || dec(0)).plus(dec(e.amount)));
+    expensesByPeriod.set(k, (expensesByPeriod.get(k) || 0) + d(e.amount));
   }
 
   const series = periodKeys.map((key) => ({
     period: key,
-    sales: money(salesByPeriod.get(key)),
-    expenses: money(expensesByPeriod.get(key)),
-    net: money((salesByPeriod.get(key) || dec(0)).minus(expensesByPeriod.get(key) || dec(0))),
+    sales: money(salesByPeriod.get(key) || 0),
+    expenses: money(expensesByPeriod.get(key) || 0),
+    net: money((salesByPeriod.get(key) || 0) - (expensesByPeriod.get(key) || 0)),
   }));
 
-  const byCategory = { RENT: dec(0), PAYROLL: dec(0), ELECTRICITY: dec(0), INTERNET: dec(0), OTHER: dec(0) };
-  let expenseTotal = dec(0);
+  const byCategory = { RENT: 0, PAYROLL: 0, ELECTRICITY: 0, INTERNET: 0, OTHER: 0 };
+  let expenseTotal = 0;
   for (const e of expenses) {
-    expenseTotal = expenseTotal.plus(dec(e.amount));
-    if (byCategory[e.category]) byCategory[e.category] = byCategory[e.category].plus(dec(e.amount));
+    expenseTotal += d(e.amount);
+    if (byCategory[e.category] != null) byCategory[e.category] += d(e.amount);
   }
   const expenseByCategory = Object.fromEntries(Object.entries(byCategory).map(([k, v]) => [k, money(v)]));
 
-  const salesTotal = sales.reduce((acc, x) => acc.plus(dec(x.total)), dec(0));
+  const salesTotal = sales.reduce((acc, x) => acc + d(x.total), 0);
 
   res.json({
     from: from.toISOString(),
@@ -133,7 +133,7 @@ router.get("/analytics", async (req, res) => {
     totals: {
       sales: money(salesTotal),
       expenses: money(expenseTotal),
-      net: money(salesTotal.minus(expenseTotal)),
+      net: money(salesTotal - expenseTotal),
     },
     salesCount: sales.length,
     expenseCount: expenses.length,

@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { d, fmt, riyals, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { customerSession } from "../lib/customerSession.js";
@@ -13,7 +14,6 @@ import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVer
 import {
   LOCK_TX,
   acceptReviewPayments,
-  cents,
   lockParent,
   paymentTotals,
   recordStaffPayment,
@@ -97,7 +97,7 @@ function publicRequest(row) {
     petSummary: row.petSummary,
     status: row.status,
     version: row.version,
-    quoteAmount: row.quoteAmount != null ? Number(row.quoteAmount) : null,
+    quoteAmount: riyals(row.quoteAmount),
     quoteNote: row.quoteNote,
     history: Array.isArray(row.history) ? row.history : [],
     paymentMethod: row.paymentMethod,
@@ -279,7 +279,7 @@ relocationShop.post("/:id/pay", async (req, res) => {
   const payment = await createSkipcashPayment({
     Uid: crypto.randomUUID(),
     KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-    Amount: Number(row.quoteAmount).toFixed(2),
+    Amount: fmt(row.quoteAmount),
     FirstName: (first || "Customer").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Customer",
     LastName: (rest.join(" ") || "Catio").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Catio",
     Phone: String(row.customer.phone || "00000000").slice(0, 15),
@@ -293,7 +293,7 @@ relocationShop.post("/:id/pay", async (req, res) => {
     where: { id: row.id },
     data: { gatewayPaymentId: payment.id },
   });
-  res.json({ payUrl: payment.payUrl, total: Number(row.quoteAmount) });
+  res.json({ payUrl: payment.payUrl, total: riyals(row.quoteAmount) });
 });
 
 export const relocationStaff = Router();
@@ -313,7 +313,7 @@ relocationStaff.get("/", async (req, res) => {
     orderBy: { createdAt: "desc" },
     take: 100,
   });
-  res.json(rows);
+  res.json(toApi("RelocationRequest", rows));
 });
 
 relocationStaff.post("/:id/status", async (req, res) => {
@@ -337,7 +337,7 @@ relocationStaff.post("/:id/status", async (req, res) => {
         return res.status(400).json({
           error: "This request is paid. Choose to refund it in full or to keep the payment before cancelling.",
           code: "REFUND_DECISION_REQUIRED",
-          remaining: totals.remaining,
+          remaining: riyals(totals.remaining),
         });
       }
       if (decision === "NO_REFUND" && !note) {
@@ -366,7 +366,7 @@ relocationStaff.post("/:id/status", async (req, res) => {
     const moved = await tx.relocationRequest.updateMany({ where: { id: row.id, status: row.status }, data: { status: next } });
     if (!moved.count) throw statusError("The request changed. Refresh and try again.", 409);
     const fresh = await tx.relocationRequest.findUnique({ where: { id: row.id } });
-    const historyNote = [note, refunded ? `Refunded ${refunded.toFixed(2)} QAR` : ""].filter(Boolean).join(" · ");
+    const historyNote = [note, refunded ? `Refunded ${fmt(refunded)} QAR` : ""].filter(Boolean).join(" · ");
     return tx.relocationRequest.update({
       where: { id: row.id },
       data: { history: pushHistory(fresh.history, next, historyNote) },
@@ -382,12 +382,12 @@ relocationStaff.post("/:id/status", async (req, res) => {
   });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
   await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: updated.status });
-  res.json(updated);
+  res.json(toApi("RelocationRequest", updated));
 });
 
 relocationStaff.post("/:id/quote", async (req, res) => {
-  const amount = Number(req.body?.amount);
-  if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: "Enter a quote amount" });
+  const amount = toDirhams(req.body?.amount);
+  if (amount == null) return res.status(400).json({ error: "Enter a quote amount (at most 2 decimals)", errorAr: "أدخل مبلغ العرض (منزلتان عشريتان كحد أقصى)", errorEn: "Enter a quote amount (at most 2 decimals)" });
   const version = requireVersion(req);
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
@@ -404,15 +404,15 @@ relocationStaff.post("/:id/quote", async (req, res) => {
     where: { status: { in: ["UNDER_REVIEW", "QUOTE_SENT"] } },
     data: {
       status: "QUOTE_SENT",
-      quoteAmount: new Prisma.Decimal(amount.toFixed(2)),
+      quoteAmount: amount,
       quoteNote: req.body?.note ? String(req.body.note).trim() : null,
       history: pushHistory(row.history, "QUOTE_SENT", req.body?.note ? String(req.body.note).trim() : ""),
     },
   });
-  await writeAudit({ userId: req.user.sub, action: "RELOCATION_QUOTE", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${amount.toFixed(2)}` });
+  await writeAudit({ userId: req.user.sub, action: "RELOCATION_QUOTE", entityType: "RelocationRequest", entityId: row.id, summary: `${row.reference || row.id} ${fmt(amount)}` });
   const buyer = await prisma.customer.findUnique({ where: { id: updated.customerId } });
-  await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: "QUOTE_SENT", amount });
-  res.json(updated);
+  await mailCustomer(buyer, "relocation", { reference: updated.reference || updated.id.slice(-8).toUpperCase(), status: "QUOTE_SENT", amount: fmt(amount) });
+  res.json(toApi("RelocationRequest", updated));
 });
 
 /**
@@ -428,9 +428,9 @@ relocationStaff.post("/:id/pay", async (req, res) => {
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row || row.status !== "QUOTE_SENT" || row.quoteAmount == null) return res.status(400).json({ error: "There is no quote to mark paid" });
-  const amount = req.body?.amount == null || req.body.amount === "" ? Number(row.quoteAmount) : Number(req.body.amount);
-  if (!Number.isFinite(amount) || cents(amount) !== cents(row.quoteAmount)) {
-    return res.status(400).json({ error: `The payment must be the quoted ${Number(row.quoteAmount).toFixed(2)} QAR` });
+  const amount = req.body?.amount == null || req.body.amount === "" ? d(row.quoteAmount) : toDirhams(req.body.amount);
+  if (amount == null || amount !== d(row.quoteAmount)) {
+    return res.status(400).json({ error: `The payment must be the quoted ${fmt(row.quoteAmount)} QAR` });
   }
   let result;
   try {
@@ -466,11 +466,11 @@ relocationStaff.post("/:id/pay", async (req, res) => {
     action: "RELOCATION_PAYMENT",
     entityType: "Payment",
     entityId: result.payment.id,
-    summary: `${row.reference || row.id} ${amount.toFixed(2)} ${method}${reference ? ` ref ${reference}` : ""}`,
+    summary: `${row.reference || row.id} ${fmt(amount)} ${method}${reference ? ` ref ${reference}` : ""}`,
   });
   const buyer = await prisma.customer.findUnique({ where: { id: result.updated.customerId } });
   await mailCustomer(buyer, "relocation", { reference: result.updated.reference || result.updated.id.slice(-8).toUpperCase(), status: "PAID" });
-  res.json({ ...result.updated, payment: result.payment });
+  res.json({ ...toApi("RelocationRequest", result.updated), payment: toApi("Payment", result.payment) });
 });
 
 /** FR-76: staff ask the gateway for the payment's status; a paid result confirms through the webhook's path. */
@@ -505,14 +505,14 @@ relocationStaff.post("/:id/refund", requireModule("relocation", "refund"), async
       parentKind: "relocation",
       parentId: row.id,
       organizationId: row.organizationId,
-      amount: req.body?.amount,
+      amount: toDirhams(req.body?.amount, { allowZero: false }) ?? 0,
       userId: req.user.sub,
       method: req.body?.method || (row.paymentMethod === "ONLINE" ? "ONLINE" : row.paymentMethod),
       note: req.body?.note,
     });
-    await writeAudit({ userId: req.user.sub, action: "RELOCATION_REFUND", entityType: "Payment", entityId: refund.id, summary: `${row.reference || row.id} ${Number(refund.amount).toFixed(2)} ${refund.method}` });
-    await mailCustomer(row.customer, "refund", { reference: row.reference || row.id.slice(-8).toUpperCase(), amount: refund.amount });
-    res.status(201).json(refund);
+    await writeAudit({ userId: req.user.sub, action: "RELOCATION_REFUND", entityType: "Payment", entityId: refund.id, summary: `${row.reference || row.id} ${fmt(refund.amount)} ${refund.method}` });
+    await mailCustomer(row.customer, "refund", { reference: row.reference || row.id.slice(-8).toUpperCase(), amount: fmt(refund.amount) });
+    res.status(201).json(toApi("Payment", refund));
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message });
   }

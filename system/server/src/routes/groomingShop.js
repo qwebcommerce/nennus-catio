@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { d, fmt, riyals } from "../lib/money.js";
 import { prisma } from "../lib/prisma.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { quotePromotions } from "../lib/promotions.js";
@@ -33,7 +33,7 @@ function publicPackage(row) {
     id: row.id,
     name: row.name,
     nameEn: row.nameEn,
-    price: Number(row.price),
+    price: riyals(row.price),
     durationMin: row.durationMin,
     included: row.included,
     includedEn: row.includedEn,
@@ -53,7 +53,7 @@ function publicBooking(row, org) {
     reference: row.reference,
     status: row.status,
     note: row.notes,
-    paid: Number(row.amountPaid || 0) > 0,
+    paid: d(row.amountPaid) > 0,
     cancelUntil: deadline,
     canCancel: row.status === "CONFIRMED" && new Date() < deadline,
     visitKind: row.visitKind,
@@ -63,8 +63,8 @@ function publicBooking(row, org) {
     breed: row.breed,
     ageText: row.ageText,
     address: row.address,
-    amount: Number(row.amount),
-    homeFee: Number(row.homeFee),
+    amount: riyals(row.amount),
+    homeFee: riyals(row.homeFee),
     package: row.service ? { id: row.service.id, name: row.service.name, nameEn: row.service.nameEn } : null,
   };
 }
@@ -88,7 +88,7 @@ router.get("/packages/:id", async (req, res) => {
     include: { petLinks: { include: { petType: true } } },
   });
   if (!row) return res.status(404).json({ error: "Package not found" });
-  res.json({ ...publicPackage(row), homeVisitFee: Number(org.homeVisitFee) });
+  res.json({ ...publicPackage(row), homeVisitFee: riyals(org.homeVisitFee) });
 });
 
 router.get("/availability", async (req, res) => {
@@ -171,7 +171,7 @@ router.post("/bookings/:id/cancel", async (req, res) => {
       code: "CANCEL_WINDOW_CLOSED",
     });
   }
-  const paid = Number(row.amountPaid || 0) > 0;
+  const paid = d(row.amountPaid) > 0;
   // Guarded: a parallel staff change or retry cannot cancel twice. A paid cancel is flagged for a refund.
   const moved = await prisma.appointment.updateMany({
     where: { id: row.id, status: "CONFIRMED" },
@@ -179,7 +179,7 @@ router.post("/bookings/:id/cancel", async (req, res) => {
   });
   if (!moved.count) return res.status(409).json({ error: "This booking changed. Refresh and try again." });
   if (paid) {
-    await mailStaff(org.id, "alertBooking", `Grooming booking ${row.reference || row.id} was cancelled by the customer. A refund of ${Number(row.amountPaid).toFixed(2)} QAR is due.`);
+    await mailStaff(org.id, "alertBooking", `Grooming booking ${row.reference || row.id} was cancelled by the customer. A refund of ${fmt(row.amountPaid)} QAR is due.`);
   }
   const customer = await prisma.customer.findUnique({ where: { id: session.sub } });
   await mailCustomer(customer, "booking", { reference: row.reference || row.id.slice(-8).toUpperCase(), status: "CANCELLED", startAt: row.startAt });
@@ -250,17 +250,18 @@ router.post("/book", async (req, res) => {
     const branch = org.websiteBranchId
       ? await prisma.branch.findFirst({ where: { id: org.websiteBranchId, organizationId: org.id, isActive: true } })
       : await prisma.branch.findFirst({ where: { organizationId: org.id, isActive: true, kind: { not: "VAN" } } });
-    const homeFee = visitKind === "HOME" ? org.homeVisitFee : new Prisma.Decimal(0);
-    const gross = service.price.add(homeFee);
+    // Whole dirhams (NFR-03).
+    const homeFee = visitKind === "HOME" ? d(org.homeVisitFee) : 0;
+    const gross = d(service.price) + homeFee;
     const promo = await quotePromotions(prisma, {
       organizationId: org.id,
       channel: "GROOMING",
       lines: [],
-      goods: Number(gross),
+      goods: gross,
       code: body.code,
     });
-    let amount = gross.sub(promo.discountDec);
-    if (amount.lessThan(0)) amount = new Prisma.Decimal(0);
+    let amount = gross - promo.discount;
+    if (amount < 0) amount = 0;
     const holdMinutes = Math.max(5, Number(org.holdMinutes) || 20);
     const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
     const booking = await prisma.$transaction(async (tx) => {
@@ -288,7 +289,7 @@ router.post("/book", async (req, res) => {
       },
       });
     }, LOCK_TX);
-    if (Number(amount) <= 0) {
+    if (amount <= 0) {
       await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CONFIRMED" } });
       return res.status(201).json({ bookingId: booking.id, reference: booking.reference, total: 0 });
     }
@@ -296,7 +297,7 @@ router.post("/book", async (req, res) => {
     const payment = await createSkipcashPayment({
       Uid: crypto.randomUUID(),
       KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-      Amount: Number(amount).toFixed(2),
+      Amount: fmt(amount),
       FirstName: (first || "Customer").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Customer",
       LastName: (rest.join(" ") || "Catio").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Catio",
       Phone: phone.slice(0, 15),
@@ -313,7 +314,7 @@ router.post("/book", async (req, res) => {
       where: { id: booking.id },
       data: { gatewayPaymentId: payment.id, paymentReference: payment.id },
     });
-    res.status(201).json({ bookingId: booking.id, reference: booking.reference, payUrl: payment.payUrl, total: Number(amount) });
+    res.status(201).json({ bookingId: booking.id, reference: booking.reference, payUrl: payment.payUrl, total: riyals(amount) });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Booking failed", ...(e.errorAr ? { errorAr: e.errorAr, errorEn: e.message } : {}) });
   }

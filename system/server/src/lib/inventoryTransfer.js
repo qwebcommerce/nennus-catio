@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { fmt } from "./money.js";
 import { writeAudit } from "./auditLog.js";
 
 /**
@@ -202,5 +203,12 @@ export async function executeInventoryTransfer({
     summary: `Transfer ${prep.length} products to branch ${to}`,
   });
 
-  return { ok: true, fromBranchId: from, toBranchId: to, lineCount: prep.length, items: prep };
+  // unitCost is whole dirhams inside; the response shows riyals like the Decimal column did (NFR-03).
+  return {
+    ok: true,
+    fromBranchId: from,
+    toBranchId: to,
+    lineCount: prep.length,
+    items: prep.map((line) => (line.unitCost !== undefined ? { ...line, unitCost: fmt(line.unitCost) } : line)),
+  };
 }

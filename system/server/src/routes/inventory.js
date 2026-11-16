@@ -5,6 +5,8 @@ import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { executeInventoryTransfer } from "../lib/inventoryTransfer.js";
 import { lockStockRow, setStockCount } from "../lib/stockLedger.js";
+import { fmt } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { listLowStock } from "../lib/lowStock.js";
 
 const router = Router();
@@ -249,7 +251,8 @@ async function adjustBalance(req, res, { productId, variantId, branchId }) {
         meta: { productId, variantId, minStockLevel: level },
       });
     }
-    res.json({ ...result.row, adjustment: result.change });
+    const change = result.change && result.change.unitCost !== undefined ? { ...result.change, unitCost: fmt(result.change.unitCost) } : result.change;
+    res.json({ ...toApi(variantId ? "VariantStock" : "Inventory", result.row), adjustment: change });
   } catch (e) {
     res.status(e?.status || 400).json({
       error: e instanceof Error ? e.message : "فشل التعديل",

@@ -2,7 +2,7 @@ import { Router } from "express";
 import * as XLSX from "xlsx";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
-import { dec, money, sumDec } from "../lib/money.js";
+import { d, money, sum } from "../lib/money.js";
 import { qatarRange } from "../lib/qatarTime.js";
 import { financeFilters, financeSummary, financeTransactions, stockValueRows } from "../lib/financeData.js";
 import { tablePdf } from "../lib/pdfTable.js";
@@ -141,6 +141,9 @@ const HEAD = {
 };
 
 const NUMERIC = new Set(["total", "amount", "balance", "price", "paid", "owed", "ageDays", "float", "counted", "card", "expected", "difference", "quantity", "unitCost", "value"]);
+/** NFR-03: money columns are shown with two decimals in every format (CSV text, XLSX number format, PDF). */
+const MONEY_COLUMNS = new Set(["total", "amount", "balance", "price", "paid", "owed", "float", "counted", "card", "expected", "difference", "unitCost", "value"]);
+const moneyText = (value) => (typeof value === "number" ? value.toFixed(2) : value);
 const ENUMS = new Set(["type", "status", "method", "paidFrom", "category", "channel", "paymentMethod", "credit", "active", "visit", "unit"]);
 
 function tr(value, lang) {
@@ -292,7 +295,7 @@ async function buildList(list, req, lang) {
         supplier: bill.supplier?.name || "",
         amount: money(bill.amount),
         paid: money(bill.amountPaid),
-        owed: money(dec(bill.amount).minus(dec(bill.amountPaid))),
+        owed: money(d(bill.amount) - d(bill.amountPaid)),
         ageDays: Math.max(0, Math.floor((now - bill.createdAt.getTime()) / 86400000)),
         status: bill.status,
         date: qatarStamp(bill.createdAt, false),
@@ -352,13 +355,13 @@ async function buildList(list, req, lang) {
       subtitle,
       columns: ["location", "opened", "closed", "float", "counted", "card", "expected", "difference"],
       rows: sessions.map((session) => {
-        const card = session.sales.reduce((sum, sale) => {
-          if (sale.paymentMethod === "CARD") return sum.plus(dec(sale.amountPaid));
+        const card = session.sales.reduce((acc, sale) => {
+          if (sale.paymentMethod === "CARD") return acc + d(sale.amountPaid);
           if (sale.paymentMethod === "SPLIT" && Array.isArray(sale.paymentSplits)) {
-            return sum.plus(sumDec(sale.paymentSplits.filter((row) => String(row?.method).toUpperCase() === "CARD"), (row) => row.amount));
+            return acc + sum(sale.paymentSplits.filter((row) => String(row?.method).toUpperCase() === "CARD"), (row) => row.amount);
           }
-          return sum;
-        }, dec(0));
+          return acc;
+        }, 0);
         return {
           location: pick(lang, session.branch?.name, session.branch?.nameEn),
           opened: qatarStamp(session.openedAt),
@@ -480,6 +483,13 @@ router.get("/:list", async (req, res, next) => {
       const base = `${list}-${lang}`;
       if (format === "xlsx") {
         const sheet = XLSX.utils.aoa_to_sheet([headers, ...cells]);
+        // Money cells stay numbers for Excel, shown with two decimals.
+        cells.forEach((row, r) => row.forEach((value, c) => {
+          if (MONEY_COLUMNS.has(columns[c]) && typeof value === "number") {
+            const cell = sheet[XLSX.utils.encode_cell({ r: r + 1, c })];
+            if (cell) cell.z = "0.00";
+          }
+        }));
         sheet["!cols"] = columns.map((key) => ({ wch: NUMERIC.has(key) ? 14 : 24 }));
         const book = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(book, sheet, title.slice(0, 31));
@@ -503,7 +513,7 @@ router.get("/:list", async (req, res, next) => {
         return res.send(buffer);
       }
       const esc = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-      const csv = [headers.map(esc).join(","), ...cells.map((row) => row.map(esc).join(","))].join("\r\n");
+      const csv = [headers.map(esc).join(","), ...cells.map((row) => row.map((value, i) => esc(MONEY_COLUMNS.has(columns[i]) ? moneyText(value) : value)).join(","))].join("\r\n");
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition", `attachment; filename="${base}.csv"`);
       res.send(`﻿${csv}`);

@@ -1,5 +1,5 @@
-import { Prisma } from "./prisma-client-bundle.js";
 import { prisma } from "./prisma.js";
+import { d, fmt, toDirhams } from "./money.js";
 import { refundSkipcashPayment } from "./skipcash.js";
 
 /** Interactive transactions that take row locks may wait behind other checkouts. */
@@ -18,12 +18,14 @@ export function statusError(message, status, extra = {}) {
   return err;
 }
 
-export function cents(n) {
-  return Math.round(Number(n) * 100);
-}
-
-export function dec(n) {
-  return new Prisma.Decimal(Number(n).toFixed(2));
+/**
+ * A gateway amount (riyals, "100.00" or 100) in whole dirhams; null when it is not a valid
+ * amount with at most two decimals (then it never matches what is owed).
+ */
+export function gatewayDirhams(amount) {
+  // "100.000" from a gateway is still 100.00: only zeros past the second decimal are dropped.
+  const text = typeof amount === "string" ? amount.trim().replace(/^(\d+\.\d{2})0+$/, "$1") : amount;
+  return toDirhams(text);
 }
 
 function isUniqueViolation(e) {
@@ -53,20 +55,21 @@ export function needsReview(reason) {
  */
 export async function settleGatewayPayment({ parentKind, parentId, organizationId, body, expected, confirm }) {
   const { field, model } = PARENTS[parentKind];
-  const paid = Number(body.Amount);
+  // NFR-03: compared in whole dirhams; expected is dirhams, the gateway sends riyals.
+  const paid = gatewayDirhams(body.Amount);
   const currency = String(body.Currency || body.currency || "QAR").trim().toUpperCase();
-  const amountOk = Number.isFinite(paid) && cents(paid) === cents(expected) && currency === "QAR";
+  const amountOk = paid != null && paid === d(expected) && currency === "QAR";
   const gatewayPaymentId = String(body.PaymentId || "").trim() || null;
   const base = {
     organizationId,
     [field]: parentId,
     kind: "PAYMENT",
     method: "ONLINE",
-    amount: dec(Number.isFinite(paid) && paid > 0 ? paid : 0.01),
+    amount: paid != null && paid > 0 ? paid : 1,
     currency,
     gatewayPaymentId,
     reference: String(body.TransactionId || body.PaymentId || "").slice(0, 120) || null,
-    note: Number.isFinite(paid) && paid > 0 ? null : `Gateway amount was ${String(body.Amount)}`,
+    note: paid != null && paid > 0 ? null : `Gateway amount was ${String(body.Amount)}`.slice(0, 500),
   };
   if (gatewayPaymentId) {
     const seen = await prisma.payment.findFirst({ where: { gatewayPaymentId, kind: "PAYMENT" }, select: { id: true } });
@@ -101,7 +104,7 @@ export async function settleGatewayPayment({ parentKind, parentId, organizationI
   }
 }
 
-/** Sums of a parent's payments. Captured = confirmed money in; refunded counts refunds in flight. */
+/** Sums of a parent's payments in whole dirhams. Captured = confirmed money in; refunded counts refunds in flight. */
 export async function paymentTotals(db, parentKind, parentId) {
   const { field } = PARENTS[parentKind];
   const rows = await db.payment.findMany({ where: { [field]: parentId }, orderBy: { createdAt: "asc" } });
@@ -109,22 +112,22 @@ export async function paymentTotals(db, parentKind, parentId) {
   let refunded = 0;
   for (const row of rows) {
     // A rejected review payment came in and went back out through its own refund row.
-    if (row.kind === "PAYMENT" && ["CAPTURED", "REJECTING", "REJECTED"].includes(row.status)) captured += cents(row.amount);
-    if (row.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(row.status)) refunded += cents(row.amount);
+    if (row.kind === "PAYMENT" && ["CAPTURED", "REJECTING", "REJECTED"].includes(row.status)) captured += d(row.amount);
+    if (row.kind === "REFUND" && ["CAPTURED", "PENDING"].includes(row.status)) refunded += d(row.amount);
   }
-  return { rows, captured: captured / 100, refunded: refunded / 100, remaining: (captured - refunded) / 100 };
+  return { rows, captured, refunded, remaining: captured - refunded };
 }
 
 /**
  * Refunds money on a booking or relocation request (FR-77, FR-55). The parent row is locked
  * while the remaining amount is checked and the refund row is written, so parallel refunds
  * can never exceed what was captured. An online payment is refunded through the gateway;
- * otherwise staff record a cash or bank refund.
+ * otherwise staff record a cash or bank refund. amount is whole dirhams.
  */
 export async function refundParent({ parentKind, parentId, organizationId, amount, userId, method, note }) {
   const { field, model } = PARENTS[parentKind];
   const wanted = Number(amount);
-  if (!Number.isFinite(wanted) || wanted <= 0) throw statusError("Refund amount is not valid", 400);
+  if (!Number.isSafeInteger(wanted) || wanted <= 0) throw statusError("Refund amount is not valid", 400);
   const chosen = String(method || "").toUpperCase();
   const { refund, gatewayPaymentId, remainingAfter } = await prisma.$transaction(async (tx) => {
     const found = await tx[model].findFirst({ where: { id: parentId, organizationId }, select: { id: true } });
@@ -132,8 +135,8 @@ export async function refundParent({ parentKind, parentId, organizationId, amoun
     await lockParent(tx, parentKind, parentId);
     const totals = await paymentTotals(tx, parentKind, parentId);
     if (totals.remaining <= 0) throw statusError("There is no captured payment left to refund", 400);
-    if (cents(wanted) > cents(totals.remaining)) {
-      throw statusError(`Refund amount is more than the ${totals.remaining.toFixed(2)} QAR left to refund`, 400);
+    if (wanted > totals.remaining) {
+      throw statusError(`Refund amount is more than the ${fmt(totals.remaining)} QAR left to refund`, 400);
     }
     const online = [...totals.rows].reverse().find(
       (row) => row.kind === "PAYMENT" && row.status === "CAPTURED" && row.method === "ONLINE" && row.gatewayPaymentId,
@@ -150,7 +153,7 @@ export async function refundParent({ parentKind, parentId, organizationId, amoun
         kind: "REFUND",
         method: refundMethod,
         status: refundMethod === "ONLINE" ? "PENDING" : "CAPTURED",
-        amount: dec(wanted),
+        amount: wanted,
         userId: userId || null,
         note: note ? String(note).slice(0, 500) : null,
       },
@@ -158,7 +161,7 @@ export async function refundParent({ parentKind, parentId, organizationId, amoun
     return {
       refund: row,
       gatewayPaymentId: refundMethod === "ONLINE" ? online.gatewayPaymentId : null,
-      remainingAfter: (cents(totals.remaining) - cents(wanted)) / 100,
+      remainingAfter: totals.remaining - wanted,
     };
   }, LOCK_TX);
   let finished = refund;
@@ -216,7 +219,7 @@ export async function rejectReviewPayments({ parentKind, parentId, userId }) {
   for (const { payment, refund } of claimed) {
     if (payment.gatewayPaymentId) {
       try {
-        const gateway = await refundSkipcashPayment({ id: payment.gatewayPaymentId, amount: Number(payment.amount) });
+        const gateway = await refundSkipcashPayment({ id: payment.gatewayPaymentId, amount: payment.amount });
         await prisma.payment.update({ where: { id: refund.id }, data: { status: "CAPTURED", gatewayRefundId: gateway.id } });
       } catch (e) {
         await prisma.payment.update({ where: { id: refund.id }, data: { status: "FAILED" } });
@@ -225,24 +228,24 @@ export async function rejectReviewPayments({ parentKind, parentId, userId }) {
       }
     }
     await prisma.payment.update({ where: { id: payment.id }, data: { status: "REJECTED" } });
-    refunded += Number(payment.amount);
+    refunded += d(payment.amount);
   }
   return { refunded, count: claimed.length };
 }
 
-/** Staff accept payments under review (inside the caller's transaction). Returns the amount accepted. */
+/** Staff accept payments under review (inside the caller's transaction). Returns the amount accepted (dirhams). */
 export async function acceptReviewPayments(tx, parentKind, parentId) {
   const { field } = PARENTS[parentKind];
   const rows = await tx.payment.findMany({ where: { [field]: parentId, kind: "PAYMENT", status: "REVIEW" } });
   let total = 0;
   for (const row of rows) {
     const got = await tx.payment.updateMany({ where: { id: row.id, status: "REVIEW" }, data: { status: "CAPTURED" } });
-    if (got.count) total += Number(row.amount);
+    if (got.count) total += d(row.amount);
   }
   return total;
 }
 
-/** Staff-recorded cash or bank payment (FR-64): one Payment row with amount, method, reference and user. */
+/** Staff-recorded cash or bank payment (FR-64): one Payment row with amount (dirhams), method, reference and user. */
 export async function recordStaffPayment(tx, { parentKind, parentId, organizationId, amount, method, reference, userId, note }) {
   const { field } = PARENTS[parentKind];
   return tx.payment.create({
@@ -252,7 +255,7 @@ export async function recordStaffPayment(tx, { parentKind, parentId, organizatio
       kind: "PAYMENT",
       method,
       status: "CAPTURED",
-      amount: dec(amount),
+      amount: d(amount),
       reference: reference ? String(reference).slice(0, 120) : null,
       userId: userId || null,
       note: note ? String(note).slice(0, 500) : null,

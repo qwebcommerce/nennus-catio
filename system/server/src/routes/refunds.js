@@ -7,6 +7,10 @@ import { writeAudit } from "../lib/auditLog.js";
 import { moveStock } from "../lib/stockLedger.js";
 import { cashPortionFromSale } from "../lib/saleCash.js";
 import { mailCustomer } from "../lib/mailer.js";
+import { d, divRound, fmt, splitProportional } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
+
+const api = (refund) => toApi("Refund", refund);
 
 const router = Router();
 router.use(authMiddleware);
@@ -28,7 +32,7 @@ router.get("/", async (req, res) => {
       sale: { select: { id: true, total: true, createdAt: true, invoiceNumber: true } },
     },
   });
-  res.json(rows);
+  res.json(api(rows));
 });
 
 const refundInclude = {
@@ -50,10 +54,11 @@ function refundError(errorAr, errorEn, status = 400, code) {
   return err;
 }
 
-const cents = (v) => Math.round(Number(v != null && typeof v === "object" ? v.toString() : v || 0) * 100);
+/** Money columns are whole dirhams (NFR-03): the "cents" below are dirhams. */
+const cents = (v) => d(v);
 
 /**
- * What the customer actually paid for each sale line, in cents: the line subtotal less its
+ * What the customer actually paid for each sale line, in dirhams: the line subtotal less its
  * promotion discount, less its share of sale-level discounts, scaled to the amount paid.
  * Rounding leftovers go to the lines with the largest remainders so the lines add up exactly.
  */
@@ -63,21 +68,13 @@ function paidCentsByLine(sale) {
   const total = cents(sale.total);
   const goods = Math.max(0, total - cents(sale.deliveryFee));
   const paid = Math.max(0, Math.min(total, cents(sale.amountPaid)));
-  const paidGoods = total > 0 ? Math.round((goods * paid) / total) : 0;
+  const paidGoods = total > 0 ? divRound(goods * paid, total) : 0;
   const out = new Map();
   if (sumNet <= 0 || paidGoods <= 0) {
     for (const it of sale.items) out.set(it.id, 0);
     return { byLine: out, paid };
   }
-  const exact = nets.map((n) => (paidGoods * n) / sumNet);
-  const base = exact.map((x) => Math.floor(x));
-  let left = paidGoods - base.reduce((a, b) => a + b, 0);
-  const order = exact.map((x, i) => [x - Math.floor(x), i]).sort((a, b) => b[0] - a[0]);
-  for (const [, i] of order) {
-    if (left <= 0) break;
-    base[i] += 1;
-    left -= 1;
-  }
+  const base = splitProportional(paidGoods, nets);
   sale.items.forEach((it, i) => out.set(it.id, base[i]));
   return { byLine: out, paid };
 }
@@ -85,7 +82,7 @@ function paidCentsByLine(sale) {
 function defaultRefundMethod(sale) {
   const pm = String(sale.paymentMethod || "");
   if (REFUND_METHODS.has(pm)) return pm;
-  if (pm === "SPLIT") return cashPortionFromSale(sale) > 0.005 ? "CASH" : "CARD";
+  if (pm === "SPLIT") return cashPortionFromSale(sale) > 0 ? "CASH" : "CARD";
   return null;
 }
 
@@ -151,7 +148,7 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
       if (existing.branchId !== bid || existing.userId !== req.user.sub) {
         return res.status(409).json({ error: "تعارض معرف المزامنة" });
       }
-      return res.status(200).json(existing);
+      return res.status(200).json(api(existing));
     }
   }
 
@@ -202,7 +199,7 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
               if (room <= 0) continue;
               const take = Math.min(room, qtyLeft);
               st.refQty += take;
-              st.refCents += Math.round((cents(ri.subtotal) * take) / ri.quantity);
+              st.refCents += divRound(cents(ri.subtotal) * take, ri.quantity);
               qtyLeft -= take;
             }
           }
@@ -258,17 +255,19 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
           const linePaid = paidByLine.get(st.line.id) || 0;
           const lineLeft = Math.max(0, linePaid - st.refCents);
           const closesLine = st.refQty + st.reqQty >= lineQty;
-          const amount = closesLine ? lineLeft : Math.min(lineLeft, Math.round((linePaid * st.reqQty) / lineQty));
+          // A part refund is its share of what was paid, rounded half away from zero to a
+          // dirham; the refund that closes the line takes exactly what is left on it.
+          const amount = closesLine ? lineLeft : Math.min(lineLeft, divRound(linePaid * st.reqQty, lineQty));
           totalCents += amount;
-          const lineCost = Number(st.line.costAmount || 0);
+          const lineCost = d(st.line.costAmount);
           lineData.push({
             saleItemId: st.line.id,
             productId: st.line.productId,
             variantId: st.line.variantId || null,
             quantity: st.reqQty,
             unitPrice: st.line.unitPrice,
-            subtotal: new Prisma.Decimal((amount / 100).toFixed(2)),
-            costAmount: restock && lineQty > 0 ? (lineCost * st.reqQty) / lineQty : null,
+            subtotal: amount,
+            costAmount: restock && lineQty > 0 ? divRound(lineCost * st.reqQty, lineQty) : null,
             unitCost: st.line.unitCost,
           });
         }
@@ -297,7 +296,7 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
             userId: req.user.sub,
             saleId: sale.id,
             ...(clientMutationId ? { clientMutationId } : {}),
-            total: new Prisma.Decimal((totalCents / 100).toFixed(2)),
+            total: totalCents,
             method,
             cashSessionId: openSession?.id ?? null,
             note: note != null && String(note).trim() ? String(note).trim() : null,
@@ -309,7 +308,7 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
                 quantity: l.quantity,
                 unitPrice: l.unitPrice,
                 subtotal: l.subtotal,
-                ...(l.costAmount != null ? { costAmount: new Prisma.Decimal(Number(l.costAmount).toFixed(4)) } : {}),
+                ...(l.costAmount != null ? { costAmount: l.costAmount } : {}),
               })),
             },
           },
@@ -327,7 +326,7 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
               delta: l.quantity,
               reason: "RETURN",
               note: created.id,
-              receiptUnitCost: l.unitCost != null ? Number(l.unitCost) : null,
+              receiptUnitCost: l.unitCost != null ? d(l.unitCost) : null,
             });
           }
         }
@@ -343,17 +342,17 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
       entityType: "Refund",
       entityId: refund.id,
       branchId: bid,
-      summary: `Refund total ${refund.total} ${refund.method}${restock ? " restocked" : ""}`,
+      summary: `Refund total ${fmt(refund.total)} ${refund.method}${restock ? " restocked" : ""}`,
       meta: { lines: refund.items?.length, saleId: refund.saleId, method: refund.method, restock },
     });
 
     // Refund email to the customer (FR-85). Queued; never fails the saved refund.
     if (refund.saleId) {
       const sale = await prisma.sale.findUnique({ where: { id: refund.saleId }, select: { id: true, invoiceNumber: true, customer: true } });
-      if (sale?.customer) await mailCustomer(sale.customer, "refund", { reference: sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount: refund.total });
+      if (sale?.customer) await mailCustomer(sale.customer, "refund", { reference: sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount: fmt(refund.total) });
     }
 
-    res.status(201).json(refund);
+    res.status(201).json(api(refund));
   } catch (e) {
     if (
       clientMutationId &&
@@ -368,7 +367,7 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
         include: refundInclude,
       });
       if (replay) {
-        return res.status(200).json(replay);
+        return res.status(200).json(api(replay));
       }
     }
     const msg = e instanceof Error ? e.message : "فشل تسجيل الإرجاع";

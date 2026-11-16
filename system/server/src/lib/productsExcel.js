@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { riyals, toDirhams } from "./money.js";
 
 export const PRODUCTS_SHEET = "Products";
 
@@ -156,8 +157,8 @@ export function buildProductsExcelBuffer(products, inventoryByProductId) {
       barcode: p.barcode ?? "",
       category: categoryName(p),
       subcategory: subcategoryName(p),
-      cost: p.cost != null ? Number(p.cost) : "",
-      price: Number(p.price),
+      cost: p.cost != null ? riyals(p.cost) : "",
+      price: riyals(p.price),
       imageUrl: p.imageUrl ?? "",
       isActive: p.isActive ? "yes" : "no",
       stockQty: inv ? inv.quantity : "",
@@ -201,6 +202,12 @@ export function parseNumber(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** A sheet money cell (riyals, at most 2 decimals) → whole dirhams; null when empty or invalid (NFR-03). */
+export function parseMoneyCell(v) {
+  if (v === "" || v == null) return null;
+  return toDirhams(typeof v === "number" ? v : String(v).replace(/,/g, ".").replace(/\s/g, ""));
+}
+
 /**
  * Normalize sheet rows for import preview / confirm.
  * Skips blank name+nameEn rows. Preserves Excel field names used by the importer.
@@ -216,7 +223,7 @@ export function normalizeImportPreviewRows(rawRows) {
     const name = cellText(r.name);
     const nameEn = cellText(r.nameEn);
     if (!name && !nameEn && !cellText(r.category) && !cellText(r.sku)) continue;
-    const priceNum = parseNumber(r.price);
+    const priceNum = parseMoneyCell(r.price);
     const rowNum = i + 2;
     out.push({
       key: `excel-${rowNum}-${out.length}`,

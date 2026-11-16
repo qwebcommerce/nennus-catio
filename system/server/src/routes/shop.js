@@ -12,6 +12,7 @@ import { applyGatewayResult } from "../lib/gatewayNotify.js";
 import { lookupOnReturn } from "../lib/paymentLookup.js";
 import { minutesOf, qatarNowMinutes, qatarToday } from "../lib/groomingSlots.js";
 import { quotePromotions } from "../lib/promotions.js";
+import { d, fmt, lineAmount, riyals } from "../lib/money.js";
 import { mailConfigured, mailCustomer, mailStaff } from "../lib/mailer.js";
 import { publicBase as publicUrl } from "../lib/publicUrl.js";
 
@@ -41,9 +42,6 @@ async function websiteBranch(org) {
   return branch;
 }
 
-function money(n) {
-  return new Prisma.Decimal(Number(n).toFixed(2));
-}
 
 function unitsFor(product, raw) {
   const n = Number(raw);
@@ -65,9 +63,9 @@ function unitsFor(product, raw) {
   return qty;
 }
 
+/** Line amount in whole dirhams: a weight line is grams × price per kg, rounded half away from zero. */
 function lineMoney(product, price, units) {
-  if (product.sellBy === "WEIGHT") return price.mul(units).div(1000);
-  return price.mul(units);
+  return lineAmount(price, units, product.sellBy);
 }
 
 function publicProduct(product, branchId) {
@@ -80,7 +78,7 @@ function publicProduct(product, branchId) {
       label: v.label,
       labelEn: v.labelEn,
       sku: v.sku,
-      price: Number(v.price),
+      price: riyals(v.price),
       packWeight: v.packWeight != null ? Number(v.packWeight) : null,
       available: open ? 99 : stock?.quantity ?? 0,
     };
@@ -95,14 +93,14 @@ function publicProduct(product, branchId) {
     description: product.description,
     descriptionEn: product.descriptionEn,
     sellBy: product.sellBy,
-    price: Number(product.price),
+    price: riyals(product.price),
     images,
     categoryId: product.categoryId,
     category: product.productCategory,
     petTypes: (product.petLinks || []).map((link) => link.petType),
     isPetHouse: product.isPetHouse === true,
     leadTimeDays: product.leadTimeDays,
-    houseDeliveryFee: Number(product.houseDeliveryFee || 0),
+    houseDeliveryFee: riyals(product.houseDeliveryFee || 0),
     takesStock: product.takesStock !== false,
     variants,
     available: variants.length ? null : open ? 99 : own?.quantity ?? 0,
@@ -172,7 +170,7 @@ router.get("/meta", async (req, res) => {
     petTypes,
     categories,
     whatsappNumber: org.whatsappNumber || "",
-    homeVisitFee: Number(org.homeVisitFee || 0),
+    homeVisitFee: riyals(org.homeVisitFee || 0),
     business: {
       name: org.name,
       phone: org.phone || "",
@@ -182,7 +180,7 @@ router.get("/meta", async (req, res) => {
       hoursEn: org.hoursTextEn || "",
       whatsapp: org.whatsappNumber || "",
     },
-    areas: areas.map((a) => ({ id: a.id, name: a.name, nameEn: a.nameEn, city: a.city, fee: Number(a.fee) })),
+    areas: areas.map((a) => ({ id: a.id, name: a.name, nameEn: a.nameEn, city: a.city, fee: riyals(a.fee) })),
     windows: windows.map((w) => ({
       id: w.id,
       label: w.label,
@@ -611,8 +609,8 @@ function publicOrder(sale) {
     reference: sale.reference,
     status: sale.webStatus,
     fulfillment: sale.fulfillment,
-    total: Number(sale.total),
-    deliveryFee: Number(sale.deliveryFee || 0),
+    total: riyals(sale.total),
+    deliveryFee: riyals(sale.deliveryFee || 0),
     deliveryAddress: sale.deliveryAddress,
     createdAt: sale.createdAt,
     items: (sale.items || []).map((item) => ({
@@ -621,8 +619,8 @@ function publicOrder(sale) {
       variant: item.variant?.label || null,
       sellBy: item.product?.sellBy,
       quantity: item.quantity,
-      unitPrice: Number(item.unitPrice),
-      subtotal: Number(item.subtotal),
+      unitPrice: riyals(item.unitPrice),
+      subtotal: riyals(item.subtotal),
     })),
   };
 }
@@ -652,7 +650,7 @@ router.post("/orders/:id/cancel", async (req, res) => {
           webStatus: "CANCELLED",
           invoiceStatus: "CANCELLED",
           // A paid order cancelled by the customer is flagged so staff refund it (FR-38, FR-77).
-          ...(Number(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
+          ...(d(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
         },
       });
       if (!moved.count) {
@@ -663,9 +661,9 @@ router.post("/orders/:id/cancel", async (req, res) => {
       await restoreCommittedHolds(tx, row.id);
       return tx.sale.findUnique({ where: { id: row.id } });
     });
-    if (Number(sale.amountPaid) > 0) {
+    if (d(sale.amountPaid) > 0) {
       const org = await shopOrg();
-      if (org) await mailStaff(org.id, "alertOrder", `Website order ${sale.reference || sale.id} was cancelled by the customer. A refund of ${Number(sale.amountPaid).toFixed(2)} QAR is due.`);
+      if (org) await mailStaff(org.id, "alertOrder", `Website order ${sale.reference || sale.id} was cancelled by the customer. A refund of ${fmt(sale.amountPaid)} QAR is due.`);
     }
     res.json({ id: sale.id, reference: sale.reference, status: sale.webStatus });
   } catch (e) {
@@ -794,7 +792,8 @@ router.post("/checkout", async (req, res) => {
     });
 
     const prepared = [];
-    let goods = new Prisma.Decimal(0);
+    // NFR-03: whole dirhams from here on.
+    let goods = 0;
     for (const raw of body.items) {
       const product = await prisma.product.findFirst({
         where: { id: String(raw.productId || ""), organizationId: org.id, isActive: true },
@@ -803,11 +802,11 @@ router.post("/checkout", async (req, res) => {
       if (!product) return res.status(400).json({ error: "A product in the cart is no longer available" });
       const units = unitsFor(product, raw.quantity);
       let variant = null;
-      let price = product.price;
+      let price = d(product.price);
       if (product.variants.length) {
         variant = product.variants.find((v) => v.id === raw.variantId && v.isActive);
         if (!variant) return res.status(400).json({ error: `Choose a variant for ${product.nameEn || product.name}` });
-        price = variant.price;
+        price = d(variant.price);
       } else if (raw.variantId) {
         return res.status(400).json({ error: "That variant is not on this product" });
       }
@@ -821,7 +820,7 @@ router.post("/checkout", async (req, res) => {
             where: { productId_branchId: { productId: product.id, branchId: branch.id } },
           });
       const onHand = stockRow?.quantity ?? 0;
-      unitCost = stockRow?.unitCost != null ? Number(stockRow.unitCost) : 0;
+      unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : 0;
         const held = await heldQuantity(prisma, {
           branchId: branch.id,
           productId: product.id,
@@ -832,7 +831,7 @@ router.post("/checkout", async (req, res) => {
         }
       }
       const subtotal = lineMoney(product, price, units);
-      goods = goods.add(subtotal);
+      goods += subtotal;
       prepared.push({
         product,
         variant,
@@ -840,7 +839,7 @@ router.post("/checkout", async (req, res) => {
         price,
         subtotal,
         unitCost,
-        costAmount: product.sellBy === "WEIGHT" ? (unitCost * units) / 1000 : unitCost * units,
+        costAmount: lineAmount(unitCost, units, product.sellBy),
         discount: 0,
       });
     }
@@ -851,17 +850,17 @@ router.post("/checkout", async (req, res) => {
         productId: line.product.id,
         categoryId: line.product.categoryId,
         quantity: line.units,
-        subtotal: Number(line.subtotal),
+        subtotal: line.subtotal,
         sellBy: line.product.sellBy,
       })),
-      goods: Number(goods),
+      goods,
       code: body.code,
     });
     prepared.forEach((line, index) => {
       line.discount = promo.lineDiscounts[index] || 0;
     });
-    goods = goods.sub(promo.discountDec);
-    if (goods.lessThan(0)) goods = new Prisma.Decimal(0);
+    goods -= promo.discount;
+    if (goods < 0) goods = 0;
 
     if (windowRow) {
       // Early answer only; the locked check inside the hold transaction is the one that counts.
@@ -869,16 +868,16 @@ router.post("/checkout", async (req, res) => {
       if (used >= windowRow.seats) return res.status(400).json({ error: "That delivery window is full" });
     }
 
-    let fee = area ? area.fee : new Prisma.Decimal(0);
+    let fee = area ? d(area.fee) : 0;
     if (fulfillment === "DELIVERY") {
       for (const line of prepared) {
         if (line.product.isPetHouse) {
           const copies = line.product.sellBy === "WEIGHT" ? 1 : line.units;
-          fee = fee.add(new Prisma.Decimal(line.product.houseDeliveryFee || 0).mul(copies));
+          fee += d(line.product.houseDeliveryFee) * copies;
         }
       }
     }
-    const total = goods.add(fee);
+    const total = goods + fee;
     const holdMinutes = Math.max(5, Number(org.holdMinutes) || 20);
     const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
     const [first, ...rest] = name.split(/\s+/);
@@ -923,8 +922,8 @@ router.post("/checkout", async (req, res) => {
           deliveryLng: pin ? new Prisma.Decimal(pin.lng.toFixed(6)) : null,
           deliveryFee: fee,
           total,
-          discountAmount: promo.discountDec,
-          promotionDiscount: promo.discountDec,
+          discountAmount: promo.discount,
+          promotionDiscount: promo.discount,
           taxAmount: 0,
           taxPercent: 0,
           amountPaid: 0,
@@ -939,9 +938,9 @@ router.post("/checkout", async (req, res) => {
               quantity: line.units,
               unitPrice: line.price,
               subtotal: line.subtotal,
-              discountAmount: new Prisma.Decimal(Number(line.discount || 0).toFixed(2)),
-              unitCost: new Prisma.Decimal(Number(line.unitCost || 0).toFixed(4)),
-              costAmount: new Prisma.Decimal(Number(line.costAmount || 0).toFixed(4)),
+              discountAmount: d(line.discount),
+              unitCost: d(line.unitCost),
+              costAmount: d(line.costAmount),
             })),
           },
         },
@@ -983,7 +982,7 @@ router.post("/checkout", async (req, res) => {
     const payment = await createSkipcashPayment({
       Uid: crypto.randomUUID(),
       KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-      Amount: Number(total).toFixed(2),
+      Amount: fmt(total),
       FirstName: (first || "Customer").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Customer",
       LastName: (rest.join(" ") || "Catio").replace(/[^a-zA-Z\u0600-\u06FF ]/g, "").slice(0, 60) || "Catio",
       Phone: phone.slice(0, 15),
@@ -1004,7 +1003,7 @@ router.post("/checkout", async (req, res) => {
       where: { id: sale.id },
       data: { gatewayPaymentId: payment.id, paymentReference: payment.id },
     });
-    res.status(201).json({ orderId: sale.id, reference: sale.reference, payUrl: payment.payUrl, total: Number(total) });
+    res.status(201).json({ orderId: sale.id, reference: sale.reference, payUrl: payment.payUrl, total: riyals(total) });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Checkout failed" });
   }

@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { lineAmount, riyals } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
@@ -28,8 +29,10 @@ async function normalizeCartPayload(db, organizationId, branchId, rawItems) {
     const want = Math.max(1, Math.floor(Number(line.quantity) || 1));
     const qty = Math.min(want, stock);
     if (qty < 1) continue;
-    const unitPrice = Math.round(Number(product.price) * 100) / 100;
+    // The payload is the till's cart snapshot (riyals for the screen); subtotal is whole dirhams.
+    const unitPrice = riyals(product.price);
     out.push({
+      dirhams: lineAmount(product.price, qty, product.sellBy),
       productId: product.id,
       name: product.name,
       nameEn: product.nameEn,
@@ -41,8 +44,8 @@ async function normalizeCartPayload(db, organizationId, branchId, rawItems) {
     });
   }
   if (!out.length) throw new Error("لا توجد أصناف صالحة أو المخزون غير كافٍ");
-  const subtotal = out.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
-  return { items: out, subtotal };
+  const subtotal = out.reduce((s, i) => s + i.dirhams, 0);
+  return { items: out.map(({ dirhams, ...item }) => item), subtotal };
 }
 
 router.get("/", async (req, res) => {
@@ -62,7 +65,7 @@ router.get("/", async (req, res) => {
     take: 50,
     include: { user: { select: { id: true, name: true, nameEn: true, role: true } } },
   });
-  res.json(rows);
+  res.json(toApi("HeldCart", rows));
 });
 
 router.post("/", requireModule("pos", "create"), async (req, res) => {
@@ -123,7 +126,7 @@ router.post("/", requireModule("pos", "create"), async (req, res) => {
         label: label != null && String(label).trim() ? String(label).trim().slice(0, 80) : null,
         payload,
         lineCount: items.length,
-        subtotal: new Prisma.Decimal(subtotal.toFixed(2)),
+        subtotal,
       },
       include: { user: { select: { id: true, name: true, nameEn: true, role: true } } },
     });
@@ -137,7 +140,7 @@ router.post("/", requireModule("pos", "create"), async (req, res) => {
       summary: `Held ${created.lineCount} lines`,
     });
 
-    res.status(201).json(created);
+    res.status(201).json(toApi("HeldCart", created));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "فشل تعليق السلة";
     res.status(400).json({ error: msg });

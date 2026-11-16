@@ -16,6 +16,8 @@ import { requireModule } from "../middleware/auth.js";
 import crypto from "crypto";
 import QRCode from "qrcode";
 import { heldQuantity } from "../lib/webOrder.js";
+import { d, fmt, lineAmount, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -26,10 +28,6 @@ const SALE_FILTER_PAY = new Set([...OK_PAY, "SPLIT"]);
 /** Split tender lines — cash-like methods only (matches POS UI). */
 const SPLIT_PAY = new Set(["CASH", "CARD", "ONLINE"]);
 
-function roundMoney(n) {
-  return Math.round(n * 100) / 100;
-}
-
 function generateInvoiceNumber(branchId) {
   const stamp = Date.now().toString().slice(-8);
   const rand = Math.floor(Math.random() * 9000 + 1000);
@@ -38,8 +36,10 @@ function generateInvoiceNumber(branchId) {
 }
 
 /**
+ * Split tender rows from the till: riyal amounts in, whole dirhams out (stored as dirhams in
+ * Sale.paymentSplits, NFR-03). The rows must add up to the bill exactly.
  * @param {unknown} splits
- * @param {number} expectedTotal
+ * @param {number} expectedTotal whole dirhams
  */
 function normalizePaymentSplits(splits, expectedTotal) {
   if (splits == null) return { useSplit: false, pm: null, normalized: null };
@@ -55,26 +55,23 @@ function normalizePaymentSplits(splits, expectedTotal) {
         "تقسيم الدفع يقتصر على نقد / بطاقة / إلكتروني — لا يُسمح بالآجل أو الدفع عند الاستلام داخل التقسيم",
       );
     }
-    const raw = String(row?.amount ?? "").replace(",", ".");
-    const amt = Number.parseFloat(raw);
-    if (Number.isNaN(amt) || amt <= 0) {
+    const amt = toDirhams(row?.amount, { allowZero: false });
+    if (amt == null) {
       throw new Error("مبلغ غير صالح في تقسيم الدفع");
     }
-    const r = roundMoney(amt);
-    sum = roundMoney(sum + r);
-    norm.push({ method: m, amount: r });
+    sum += amt;
+    norm.push({ method: m, amount: amt });
   }
-  const exp = roundMoney(expectedTotal);
-  if (Math.abs(sum - exp) > 0.02) {
-    throw new Error(`مجموع التقسيم (${sum}) يجب أن يساوي المستحق (${exp})`);
+  if (sum !== expectedTotal) {
+    throw new Error(`مجموع التقسيم (${fmt(sum)}) يجب أن يساوي المستحق (${fmt(expectedTotal)})`);
   }
   return { useSplit: true, pm: "SPLIT", normalized: norm };
 }
 
 router.post("/payment-link", async (req, res) => {
   if (!skipcashConfigured()) return res.status(503).json({ error: "Card payments need the SkipCash key and secret" });
-  const amount = Number(req.body?.amount);
-  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "Enter the amount to collect" });
+  const amount = toDirhams(req.body?.amount, { allowZero: false });
+  if (amount == null) return res.status(400).json({ error: "Enter the amount to collect (at most 2 decimals)", errorAr: "أدخل المبلغ المطلوب (منزلتان عشريتان كحد أقصى)", errorEn: "Enter the amount to collect (at most 2 decimals)" });
   const branch = await prisma.branch.findFirst({
     where: { id: String(req.body?.branchId || req.user.branchId || ""), organizationId: req.user.organizationId },
   });
@@ -84,7 +81,7 @@ router.post("/payment-link", async (req, res) => {
   const payment = await createSkipcashPayment({
     Uid: crypto.randomUUID(),
     KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-    Amount: amount.toFixed(2),
+    Amount: fmt(amount),
     FirstName: first || "Customer",
     LastName: rest.join(" ") || "Van",
     Phone: String(req.body?.phone || "00000000"),
@@ -210,7 +207,7 @@ router.post("/checkout", async (req, res) => {
         if (existing.branchId !== bid || existing.userId !== req.user.sub) {
           return res.status(409).json({ error: "تعارض معرف المزامنة" });
         }
-        return res.status(200).json(existing);
+        return res.status(200).json(toApi("Sale", existing));
       }
     }
 
@@ -234,7 +231,8 @@ router.post("/checkout", async (req, res) => {
         : null;
     let orderNote = orderNoteBase;
 
-    let total = new Prisma.Decimal(0);
+    // NFR-03: every amount below is whole dirhams.
+    let total = 0;
     const lineData = [];
 
     for (const line of items) {
@@ -276,16 +274,17 @@ router.post("/checkout", async (req, res) => {
             where: { productId_branchId: { productId, branchId: bid } },
           });
       const onHand = stockRow?.quantity ?? 0;
-      const unitCost = stockRow?.unitCost != null ? Number(stockRow.unitCost) : 0;
+      const unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : 0;
       const held = await heldQuantity(prisma, {
         branchId: bid,
         productId,
         variantId: variant?.id || null,
       });
       if (onHand - held < qty) throw new Error(`كمية غير كافية: ${variant?.label || product.name}`);
-      const unitPrice = variant ? variant.price : new Prisma.Decimal(product.price);
-      const subtotal = product.sellBy === "WEIGHT" ? unitPrice.mul(qty).div(1000) : unitPrice.mul(qty);
-      total = total.add(subtotal);
+      const unitPrice = variant ? d(variant.price) : d(product.price);
+      // A weight line is grams × price per kg / 1000, rounded half away from zero to a dirham.
+      const subtotal = lineAmount(unitPrice, qty, product.sellBy);
+      total += subtotal;
       lineData.push({
         productId,
         categoryId: product.categoryId,
@@ -295,27 +294,25 @@ router.post("/checkout", async (req, res) => {
         unitPrice,
         subtotal,
         unitCost,
-        costAmount: product.sellBy === "WEIGHT" ? (unitCost * qty) / 1000 : unitCost * qty,
+        costAmount: lineAmount(unitCost, qty, product.sellBy),
         discountAmount: 0,
       });
     }
 
     const subtotalDec = total;
-    let discountDec = new Prisma.Decimal(0);
-    const d = Number(discountRaw);
-    if (!Number.isNaN(d) && d > 0) {
-      const cap = Number(subtotalDec);
-      const applied = Math.min(d, cap);
-      discountDec = new Prisma.Decimal(applied.toFixed(2));
+    let discountDec = 0;
+    if (discountRaw != null && String(discountRaw).trim() !== "") {
+      const asked = toDirhams(discountRaw);
+      if (asked == null) throw new Error("خصم غير صالح — Enter a valid discount (at most 2 decimals)");
+      discountDec = Math.min(asked, subtotalDec);
     }
 
-    if (discountReason && Number(discountDec) > 0) {
+    if (discountReason && discountDec > 0) {
       const tag = `Discount reason: ${discountReason}`;
       orderNote = orderNote ? `${orderNote} · ${tag}`.slice(0, 500) : tag;
     }
 
-    const afterManualDec = subtotalDec.sub(discountDec);
-    const afterManualNum = roundMoney(Number(afterManualDec.toString()));
+    const afterManualNum = subtotalDec - discountDec;
 
     const promo = await quotePromotions(prisma, {
       organizationId: orgId,
@@ -324,7 +321,7 @@ router.post("/checkout", async (req, res) => {
         productId: line.productId,
         categoryId: line.categoryId,
         quantity: line.quantity,
-        subtotal: Number(line.subtotal),
+        subtotal: line.subtotal,
         sellBy: line.sellBy,
       })),
       goods: afterManualNum,
@@ -338,7 +335,7 @@ router.post("/checkout", async (req, res) => {
       throw new Error("كوبون غير صالح");
     }
 
-    let afterPromoNum = roundMoney(afterManualNum - promo.discount);
+    let afterPromoNum = afterManualNum - promo.discount;
     if (afterPromoNum < 0) afterPromoNum = 0;
 
     const custRow = custId
@@ -346,7 +343,7 @@ router.post("/checkout", async (req, res) => {
       : null;
 
     // Qatar has no VAT: sales carry no tax.
-    const grandTotal = new Prisma.Decimal(afterPromoNum.toFixed(2));
+    const grandTotal = afterPromoNum;
     const grandNum = afterPromoNum;
 
     const splitInfo = normalizePaymentSplits(paymentSplits, grandNum);
@@ -383,30 +380,27 @@ router.post("/checkout", async (req, res) => {
       if (!custRow?.creditApproved) {
         throw new Error("This customer is not approved to buy on credit");
       }
-      const limit = custRow.creditLimit != null ? Number(custRow.creditLimit) : null;
-      if (limit != null && Number(custRow.accountBalance) + grandNum > limit + 0.01) {
+      const limit = custRow.creditLimit != null ? d(custRow.creditLimit) : null;
+      if (limit != null && d(custRow.accountBalance) + grandNum > limit) {
         throw new Error("This sale would pass the customer's credit limit");
       }
       amountPaidNum = 0;
       amountDueNum = grandNum;
     } else {
       if (amountPaidRaw != null && String(amountPaidRaw).trim() !== "") {
-        amountPaidNum = roundMoney(
-          Number(String(amountPaidRaw).replace(",", "."))
-        );
-        if (Number.isNaN(amountPaidNum) || amountPaidNum < 0) {
+        amountPaidNum = toDirhams(amountPaidRaw);
+        if (amountPaidNum == null) {
           throw new Error("مبلغ المدفوع غير صالح");
         }
-        if (amountPaidNum - grandNum > 0.02) {
+        if (amountPaidNum > grandNum) {
           throw new Error("المبلغ المدفوع يتجاوز إجمالي الفاتورة");
         }
-        amountDueNum = roundMoney(grandNum - amountPaidNum);
-        if (amountDueNum < 0) amountDueNum = 0;
+        amountDueNum = grandNum - amountPaidNum;
       } else {
         amountPaidNum = grandNum;
         amountDueNum = 0;
       }
-      if (amountDueNum > 0.02 && !custId) {
+      if (amountDueNum > 0 && !custId) {
         throw new Error("يجب اختيار عميلاً للبيع بالآجل (المتبقي على الحساب)");
       }
     }
@@ -431,7 +425,7 @@ router.post("/checkout", async (req, res) => {
     }
     // Attach non-delivery paid sales to the open session when present (cash required above).
     const attachSessionId =
-      pm !== "ON_DELIVERY" && amountPaidNum > 0.005 && openSession
+      pm !== "ON_DELIVERY" && amountPaidNum > 0 && openSession
         ? openSession.id
         : null;
 
@@ -461,19 +455,19 @@ router.post("/checkout", async (req, res) => {
           ...(clientMutationId ? { clientMutationId } : {}),
           total: grandTotal,
           discountAmount: discountDec,
-          taxAmount: new Prisma.Decimal(0),
+          taxAmount: 0,
           taxPercent: new Prisma.Decimal(0),
-          amountPaid: new Prisma.Decimal(amountPaidNum.toFixed(2)),
-          amountDue: new Prisma.Decimal(amountDueNum.toFixed(2)),
+          amountPaid: amountPaidNum,
+          amountDue: amountDueNum,
           invoiceNumber: generateInvoiceNumber(bid),
           invoiceStatus:
-            amountDueNum <= 0.01 ? "PAID" : amountPaidNum > 0.01 ? "PARTIAL" : "ISSUED",
-          dueDate: amountDueNum > 0.01 ? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) : null,
-          paidAt: amountDueNum <= 0.01 ? new Date() : null,
+            amountDueNum <= 0 ? "PAID" : amountPaidNum > 0 ? "PARTIAL" : "ISSUED",
+          dueDate: amountDueNum > 0 ? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) : null,
+          paidAt: amountDueNum <= 0 ? new Date() : null,
           paymentMethod: pm,
           ...(splitInfo.useSplit ? { paymentSplits: splitInfo.normalized } : {}),
           cashSessionId: attachSessionId,
-          promotionDiscount: promo.discountDec,
+          promotionDiscount: promo.discount,
           orderNote,
           deliveryAddress,
           items: {
@@ -483,9 +477,9 @@ router.post("/checkout", async (req, res) => {
               quantity: l.quantity,
               unitPrice: l.unitPrice,
               subtotal: l.subtotal,
-              discountAmount: new Prisma.Decimal(Number(l.discountAmount || 0).toFixed(2)),
-              unitCost: new Prisma.Decimal(Number(l.unitCost || 0).toFixed(4)),
-              costAmount: new Prisma.Decimal(Number(l.costAmount || 0).toFixed(4)),
+              discountAmount: d(l.discountAmount),
+              unitCost: d(l.unitCost),
+              costAmount: d(l.costAmount),
             })),
           },
         },
@@ -519,8 +513,8 @@ router.post("/checkout", async (req, res) => {
         });
       }
 
-      if (amountDueNum > 0.01 && customerIdFinal && pm !== "ON_DELIVERY") {
-        const dueDec = new Prisma.Decimal(amountDueNum.toFixed(2));
+      if (amountDueNum > 0 && customerIdFinal && pm !== "ON_DELIVERY") {
+        const dueDec = amountDueNum;
         await tx.customerAccountLedger.create({
           data: {
             organizationId: orgId,
@@ -547,7 +541,7 @@ router.post("/checkout", async (req, res) => {
       entityType: "Sale",
       entityId: sale.id,
       branchId: bid,
-      summary: `Total ${sale.total} ${sale.paymentMethod}`,
+      summary: `Total ${fmt(sale.total)} ${sale.paymentMethod}`,
       meta: {
         paymentMethod: sale.paymentMethod,
         lines: items.length,
@@ -567,7 +561,7 @@ router.post("/checkout", async (req, res) => {
       await mailStaff(orgId, "alertLowStock", { count: lowNames.length });
     }
 
-    return res.status(201).json(sale);
+    return res.status(201).json(toApi("Sale", sale));
   } catch (e) {
     if (res.headersSent) {
       console.error("[checkout] error after response", e);
@@ -595,7 +589,7 @@ router.post("/checkout", async (req, res) => {
           },
         });
         if (replay) {
-          return res.status(200).json(replay);
+          return res.status(200).json(toApi("Sale", replay));
         }
       } catch (replayErr) {
         console.error("[checkout] idempotency replay failed", replayErr);
@@ -656,7 +650,7 @@ router.get("/", async (req, res) => {
       user: { select: { id: true, name: true, nameEn: true, role: true, email: true } },
     },
   });
-  res.json(sales);
+  res.json(toApi("Sale", sales));
 });
 
 router.get("/:id", async (req, res) => {
@@ -676,7 +670,7 @@ router.get("/:id", async (req, res) => {
   if (req.user.role !== "ADMIN" && req.user.branchId && sale.branchId !== req.user.branchId) {
     return res.status(403).json({ error: "غير مصرح" });
   }
-  res.json(sale);
+  res.json(toApi("Sale", sale));
 });
 
 export default router;

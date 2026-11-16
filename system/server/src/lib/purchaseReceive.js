@@ -1,5 +1,5 @@
-import { Prisma } from "./prisma-client-bundle.js";
 import { prisma } from "./prisma.js";
+import { d, fmt, toDirhams } from "./money.js";
 import { writeAudit } from "./auditLog.js";
 import { moveStock } from "./stockLedger.js";
 
@@ -53,7 +53,7 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
     if (!order.lines.some((line) => line.id === id)) throw poError("A line is not on this order", 400, "السطر غير موجود في الأمر");
   }
 
-  let receivedCost = new Prisma.Decimal(0);
+  let receivedCost = 0; // whole dirhams
   let anyLeft = false;
   const received = [];
   for (const line of order.lines) {
@@ -71,7 +71,7 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
       if (remaining > 0) anyLeft = true;
       continue;
     }
-    receivedCost = receivedCost.add(line.unitCost.mul(qty));
+    receivedCost += d(line.unitCost) * qty;
     await moveStock(tx, {
       orgId,
       userId,
@@ -81,7 +81,7 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
       delta: qty,
       reason: "RECEIPT",
       note: order.id,
-      receiptUnitCost: Number(line.unitCost),
+      receiptUnitCost: d(line.unitCost),
     });
     // Guarded update: the line must still hold what we read under the lock.
     const updated = await tx.purchaseOrderLine.updateMany({
@@ -175,7 +175,7 @@ export async function executeReceivePurchase({
   }
 
   const applyCost = Boolean(updateProductCost);
-  let total = new Prisma.Decimal(0);
+  let total = 0;
   const lineData = [];
 
   for (const line of items) {
@@ -184,8 +184,8 @@ export async function executeReceivePurchase({
     if (!Number.isInteger(qty) || qty < 1) {
       throw poError("Each line needs a whole quantity above zero", 400, "الكمية يجب أن تكون عدداً صحيحاً أكبر من صفر");
     }
-    const uc = Number(line?.unitCost);
-    if (!Number.isFinite(uc) || uc < 0) throw poError("Invalid unit cost", 400, "تكلفة الوحدة غير صالحة");
+    const uc = toDirhams(line?.unitCost);
+    if (uc == null) throw poError("Invalid unit cost (at most 2 decimals)", 400, "تكلفة الوحدة غير صالحة");
     const product = await prisma.product.findFirst({
       where: { id: productId, organizationId: orgId },
       include: { variants: { select: { id: true } } },
@@ -198,9 +198,9 @@ export async function executeReceivePurchase({
     if (!variantId && product.variants.length) {
       throw poError(`Choose a variant for ${product.nameEn || product.name}`, 400, `اختر الحجم لـ ${product.name}`);
     }
-    const unitCost = new Prisma.Decimal(uc.toFixed(2));
-    const subtotal = unitCost.mul(qty);
-    total = total.add(subtotal);
+    const unitCost = uc;
+    const subtotal = unitCost * qty;
+    total += subtotal;
     lineData.push({ productId, variantId, quantity: qty, unitCost, subtotal });
   }
 
@@ -266,7 +266,7 @@ export async function executeReceivePurchase({
     entityType: "PurchaseOrder",
     entityId: result.orderId,
     branchId: bid,
-    summary: `Quick receive ${lineData.length} lines, bill ${result.bill.amount}`,
+    summary: `Quick receive ${lineData.length} lines, bill ${fmt(result.bill.amount)}`,
     meta: { purchaseId: result.purchase.id, billId: result.bill.id },
   });
 

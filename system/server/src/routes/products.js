@@ -12,7 +12,10 @@ import {
   parseYesNo,
   parsePetType,
   parseNumber,
+  parseMoneyCell,
 } from "../lib/productsExcel.js";
+import { toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import {
   allocateUniqueBarcode,
   assertBarcodeAvailable,
@@ -51,12 +54,27 @@ const uploadImage = multer({
   },
 });
 
+/** Response shape of a product row: money in riyals (NFR-03 boundary) and a resolved image URL. */
 function withResolvedImageUrl(product) {
   if (!product) return product;
   return {
-    ...product,
+    ...toApi("Product", product),
     imageUrl: resolveStoredImageUrl(product.imageUrl),
   };
+}
+
+const BAD_PRICE = {
+  error: "سعر غير صالح (رقمان عشريان كحد أقصى)",
+  errorAr: "سعر غير صالح (رقمان عشريان كحد أقصى)",
+  errorEn: "Enter a valid price (at most 2 decimals)",
+  code: "AMOUNT_INVALID",
+};
+
+/** Price / cost from the product form: riyals → whole dirhams. Empty is 0 (price) or no cost. */
+function formDirhams(value, emptyAs) {
+  if (value == null || String(value).trim() === "") return emptyAs;
+  const n = toDirhams(value);
+  return n == null ? undefined : n;
 }
 
 async function linkProductImage(orgId, productId, imageUrl) {
@@ -222,13 +240,18 @@ async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft
       continue;
     }
 
-    const priceNum = parseNumber(r.price);
-    if (priceNum === null || priceNum < 0) {
+    // NFR-03: whole dirhams; more than two decimals is refused for the row.
+    const priceNum = parseMoneyCell(r.price);
+    if (priceNum === null) {
       errors.push({ row: rowNum, message: "سعر غير صالح" });
       continue;
     }
 
-    const costRaw = parseNumber(r.cost);
+    const costRaw = parseMoneyCell(r.cost);
+    if (costRaw === null && r.cost != null && String(r.cost).trim() !== "") {
+      errors.push({ row: rowNum, message: "تكلفة غير صالحة" });
+      continue;
+    }
     const sku = r.sku != null && String(r.sku).trim() ? String(r.sku).trim() : null;
     const barcode = r.barcode != null && String(r.barcode).trim() ? String(r.barcode).trim() : null;
     const petType = parsePetType(r.petType);
@@ -262,8 +285,8 @@ async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft
       featuresEn: cleanOptionalText(r.featuresEn),
       sku: catalog.sku,
       barcode,
-      price: new Prisma.Decimal(priceNum),
-      cost: costRaw != null && costRaw >= 0 ? new Prisma.Decimal(costRaw) : null,
+      price: priceNum,
+      cost: costRaw,
       petType,
       category: catalog.category,
       categoryId: catalog.categoryId,
@@ -333,7 +356,7 @@ async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft
             branchId,
             quantity: stockQty,
             note: "Product import",
-            unitCost: costRaw != null && costRaw >= 0 ? costRaw : null,
+            unitCost: costRaw,
           });
           await tx.inventory.update({
             where: { productId_branchId: { productId, branchId } },
@@ -806,9 +829,10 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
     return res.status(400).json({ error: "Image URL must be http(s) or a path starting with /" });
   }
   const nameLocal = name?.trim() || "";
-  const priceNum = Number(price);
-  if (Number.isNaN(priceNum) || priceNum < 0) {
-    return res.status(400).json({ error: "سعر غير صالح" });
+  const priceNum = formDirhams(price, 0);
+  const costNum = formDirhams(cost, null);
+  if (priceNum === undefined || costNum === undefined) {
+    return res.status(400).json(BAD_PRICE);
   }
   const bid = branchId || req.user.branchId;
   if (!bid) return res.status(400).json({ error: "يجب تحديد الفرع للمخزون الأولي" });
@@ -855,7 +879,7 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
       errorEn: "This product keeps stock per variant. Receive or adjust each variant after saving.",
     });
   }
-  const openingCost = cost != null && cost !== "" && Number.isFinite(Number(cost)) && Number(cost) >= 0 ? Number(cost) : null;
+  const openingCost = costNum;
   let product;
   try {
     product = await prisma.$transaction(async (tx) => {
@@ -876,11 +900,8 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
           isActive: catalogCopy.fields.isActive !== false,
           sku: catalog.sku,
           barcode: barcodeTrim,
-          price: new Prisma.Decimal(priceNum),
-          cost:
-            cost != null && cost !== ""
-              ? new Prisma.Decimal(Number(cost))
-              : null,
+          price: priceNum,
+          cost: costNum,
           petType: ["CAT", "DOG", "OTHER"].includes(String(petType))
             ? String(petType)
             : "OTHER",
@@ -937,7 +958,7 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
     meta: {
       sku: product.sku,
       barcode: product.barcode,
-      price: Number(product.price),
+      price: Number(product.price) / 100,
       categoryId: product.categoryId,
       subcategoryId: product.subcategoryId,
       initialStock: stockQty,
@@ -981,12 +1002,13 @@ router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
     Object.assign(update, catalogCopy.fields);
   }
   if (data.barcode !== undefined) update.barcode = data.barcode?.trim() || null;
-  if (data.price != null) update.price = new Prisma.Decimal(Number(data.price));
+  if (data.price != null) {
+    update.price = formDirhams(data.price, 0);
+    if (update.price === undefined) return res.status(400).json(BAD_PRICE);
+  }
   if (data.cost !== undefined) {
-    update.cost =
-      data.cost != null && data.cost !== ""
-        ? new Prisma.Decimal(Number(data.cost))
-        : null;
+    update.cost = formDirhams(data.cost, null);
+    if (update.cost === undefined) return res.status(400).json(BAD_PRICE);
   }
   if (data.petType && ["CAT", "DOG", "OTHER"].includes(String(data.petType))) {
     update.petType = String(data.petType);
@@ -1085,7 +1107,7 @@ router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
         changes: Object.keys(update),
         sku: p.sku,
         barcode: p.barcode,
-        price: Number(p.price),
+        price: Number(p.price) / 100,
         isActive: p.isActive,
         categoryId: p.categoryId,
         subcategoryId: p.subcategoryId,
@@ -1138,7 +1160,7 @@ router.delete("/:id", requireModule("products", "delete"), async (req, res) => {
       meta: {
         sku: existing.sku,
         barcode: existing.barcode,
-        price: Number(existing.price),
+        price: Number(existing.price) / 100,
         categoryId: existing.categoryId,
         subcategoryId: existing.subcategoryId,
       },

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
+import { riyals, toDirhams } from "../lib/money.js";
 import { authMiddleware, requireModule, requireOwner } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { requireVersion, versionedUpdate } from "../lib/recordVersion.js";
@@ -40,7 +41,7 @@ router.get("/", requireModule("settings", "view"), async (req, res, next) => {
       holdMinutes: org.holdMinutes,
       bookingCancelHours: org.bookingCancelHours,
       whatsappNumber: org.whatsappNumber || "",
-      homeVisitFee: Number(org.homeVisitFee || 0),
+      homeVisitFee: riyals(org.homeVisitFee || 0),
       phone: org.phone || "",
       publicEmail: org.publicEmail || "",
       publicAddress: org.publicAddress || "",
@@ -82,8 +83,8 @@ router.patch("/", requireOwner, async (req, res, next) => {
       if (b[key] !== undefined) data[key] = Boolean(b[key]);
     }
     if (b.homeVisitFee !== undefined) {
-      const fee = Number(b.homeVisitFee);
-      if (!Number.isFinite(fee) || fee < 0) return res.status(400).json({ error: "Home-visit fee is not valid" });
+      const fee = b.homeVisitFee === "" || b.homeVisitFee == null ? 0 : toDirhams(b.homeVisitFee);
+      if (fee == null) return res.status(400).json({ error: "Home-visit fee is not valid", errorAr: "رسوم الزيارة المنزلية غير صالحة", errorEn: "Home-visit fee is not valid (at most 2 decimals)" });
       data.homeVisitFee = fee;
     }
     if (b.holdMinutes !== undefined) {
@@ -163,7 +164,7 @@ router.patch("/", requireOwner, async (req, res, next) => {
       holdMinutes: org.holdMinutes,
       bookingCancelHours: org.bookingCancelHours,
       whatsappNumber: org.whatsappNumber || "",
-      homeVisitFee: Number(org.homeVisitFee || 0),
+      homeVisitFee: riyals(org.homeVisitFee || 0),
       phone: org.phone || "",
       publicEmail: org.publicEmail || "",
       publicAddress: org.publicAddress || "",

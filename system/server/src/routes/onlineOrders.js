@@ -2,12 +2,16 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { recommitReleasedHolds, releaseSaleHolds, restoreCommittedHolds } from "../lib/webOrder.js";
-import { LOCK_TX, acceptReviewPayments, cents, lockParent, rejectReviewPayments, statusError } from "../lib/payments.js";
+import { LOCK_TX, acceptReviewPayments, lockParent, rejectReviewPayments, statusError } from "../lib/payments.js";
+import { d, fmt, riyals, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { refundSkipcashPayment } from "../lib/skipcash.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { checkGatewayPayment } from "../lib/paymentLookup.js";
 import { mailCustomer } from "../lib/mailer.js";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+
+/** Money columns are whole dirhams (NFR-03). */
+const cents = (v) => d(v);
 
 const router = Router();
 router.use(authMiddleware);
@@ -44,7 +48,7 @@ router.get("/", async (req, res) => {
       payments: { select: { id: true, kind: true, method: true, status: true, amount: true, reviewReason: true, createdAt: true } },
     },
   });
-  res.json(rows);
+  res.json(toApi("Sale", rows));
 });
 
 router.post("/:id/dispatch", requireModule("orders", "edit"), async (req, res) => {
@@ -73,7 +77,7 @@ router.post("/:id/dispatch", requireModule("orders", "edit"), async (req, res) =
       lat: sale.deliveryLat != null ? Number(sale.deliveryLat) : null,
       lng: sale.deliveryLng != null ? Number(sale.deliveryLng) : null,
       window: sale.deliveryWindow?.label || "",
-      total: Number(sale.total),
+      total: riyals(sale.total),
     }),
   });
   const json = await response.json().catch(() => ({}));
@@ -130,7 +134,7 @@ router.post("/:id/resolve-payment", requireModule("orders", "edit"), async (req,
       // Customer cancelled a paid order: refund what is left, or keep it (staff decision, audited).
       if (!accept) {
         const already = sale.refunds.reduce((sum, row) => sum + cents(row.total), 0);
-        const left = (cents(sale.amountPaid) - already) / 100;
+        const left = cents(sale.amountPaid) - already;
         if (left > 0) await refundOrder({ sale, amount: left, userId: req.user.sub, note: "Refund after customer cancel" });
       }
       await prisma.sale.update({ where: { id: sale.id }, data: { paymentReview: false, paymentReviewReason: null } });
@@ -152,7 +156,7 @@ router.post("/:id/resolve-payment", requireModule("orders", "edit"), async (req,
             paymentReview: false,
             paymentReviewReason: null,
             amountPaid: accepted,
-            amountDue: Math.max(0, Number(current.total) - accepted),
+            amountDue: Math.max(0, d(current.total) - accepted),
             invoiceStatus: "PAID",
             paidAt: new Date(),
           },
@@ -176,7 +180,7 @@ router.post("/:id/resolve-payment", requireModule("orders", "edit"), async (req,
 /**
  * FR-77: refunds can never add up to more than was captured. The order row is locked while
  * the remaining amount is checked and the refund row is written; the gateway is called after
- * the lock is released and the row is removed again if the gateway refuses.
+ * the lock is released and the row is removed again if the gateway refuses. amount is whole dirhams.
  */
 async function refundOrder({ sale, amount, userId, restock, note }) {
   const refund = await prisma.$transaction(async (tx) => {
@@ -184,16 +188,16 @@ async function refundOrder({ sale, amount, userId, restock, note }) {
     const fresh = await tx.sale.findUnique({ where: { id: sale.id }, include: { refunds: true, items: true } });
     const already = fresh.refunds.reduce((sum, row) => sum + cents(row.total), 0);
     const remaining = cents(fresh.amountPaid) - already;
-    if (!Number.isFinite(amount) || amount <= 0 || cents(amount) > remaining) {
-      throw statusError(`Refund amount is not valid. ${(Math.max(0, remaining) / 100).toFixed(2)} QAR is left to refund.`, 400);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > remaining) {
+      throw statusError(`Refund amount is not valid. ${fmt(Math.max(0, remaining))} QAR is left to refund.`, 400);
     }
-    const full = cents(amount) === remaining;
+    const full = amount === remaining;
     return tx.refund.create({
       data: {
         branchId: fresh.branchId,
         userId,
         saleId: fresh.id,
-        total: new Prisma.Decimal(amount.toFixed(2)),
+        total: amount,
         note: note || "SkipCash refund",
         ...(restock && full
           ? {
@@ -228,13 +232,13 @@ async function refundOrder({ sale, amount, userId, restock, note }) {
 }
 
 router.post("/:id/refund", requireModule("orders", "refund"), async (req, res) => {
-  const amount = Number(req.body?.amount);
+  const amount = toDirhams(req.body?.amount, { allowZero: false }) ?? NaN;
   const sale = await prisma.sale.findFirst({
     where: { id: req.params.id, orderChannel: "WEBSITE", branch: { organizationId: req.user.organizationId } },
     include: { customer: true },
   });
   // A paid order stays refundable after a cancel (FR-38, FR-77): what matters is money captured.
-  if (!sale?.gatewayPaymentId || !(Number(sale.amountPaid) > 0)) {
+  if (!sale?.gatewayPaymentId || !(d(sale.amountPaid) > 0)) {
     return res.status(400).json({ error: "This order has no confirmed card payment" });
   }
   let refund;
@@ -247,9 +251,9 @@ router.post("/:id/refund", requireModule("orders", "refund"), async (req, res) =
   if (refunds.reduce((sum, row) => sum + cents(row.total), 0) >= cents(sale.amountPaid)) {
     await prisma.sale.updateMany({ where: { id: sale.id, paymentReviewReason: "REFUND_DUE" }, data: { paymentReview: false, paymentReviewReason: null } });
   }
-  await writeAudit({ userId: req.user.sub, action: "ONLINE_REFUND", entityType: "Refund", entityId: refund.id, summary: `${sale.reference || sale.id} ${amount.toFixed(2)}` });
-  await mailCustomer(sale.customer, "refund", { reference: sale.reference || sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount });
-  res.status(201).json(refund);
+  await writeAudit({ userId: req.user.sub, action: "ONLINE_REFUND", entityType: "Refund", entityId: refund.id, summary: `${sale.reference || sale.id} ${fmt(amount)}` });
+  await mailCustomer(sale.customer, "refund", { reference: sale.reference || sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), amount: fmt(amount) });
+  res.status(201).json(toApi("Refund", refund));
 });
 
 router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => {
@@ -286,7 +290,7 @@ router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => 
         data: {
           webStatus: next,
           ...(next === "CANCELLED" ? { invoiceStatus: "CANCELLED" } : {}),
-          ...(next === "CANCELLED" && Number(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
+          ...(next === "CANCELLED" && d(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
         },
       });
       if (!moved.count) {

@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule, requirePermission } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { claimSlot, qatarDateTime, qatarDayBounds, qatarParts, qatarToday, slotTaken } from "../lib/groomingSlots.js";
+import { d, fmt, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { LOCK_TX, acceptReviewPayments, lockParent, paymentTotals, refundParent, rejectReviewPayments, statusError } from "../lib/payments.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { checkGatewayPayment } from "../lib/paymentLookup.js";
@@ -112,7 +113,7 @@ router.get("/services", async (req, res) => {
     },
     orderBy: [{ name: "asc" }],
   });
-  res.json(rows);
+  res.json(toApi("GroomingService", rows));
 });
 
 router.post("/services", requireModule("grooming", "create"), async (req, res) => {
@@ -121,9 +122,9 @@ router.post("/services", requireModule("grooming", "create"), async (req, res) =
     const name = String(b.name || "").trim();
     if (!name) return res.status(400).json({ error: "اسم الخدمة مطلوب" });
     const durationMin = Math.max(10, Math.min(360, Number(b.durationMin) || 60));
-    const price = Number(b.price);
-    if (!Number.isFinite(price) || price < 0) {
-      return res.status(400).json({ error: "سعر غير صالح" });
+    const price = toDirhams(b.price);
+    if (price == null) {
+      return res.status(400).json({ error: "سعر غير صالح", errorAr: "سعر غير صالح", errorEn: "Enter a valid price (at most 2 decimals)" });
     }
     const branchId = b.branchId ? await assertBranchAllowed(req, String(b.branchId)) : null;
     const petTypeIds = Array.isArray(b.petTypeIds) ? [...new Set(b.petTypeIds.map(String))] : [];
@@ -139,12 +140,12 @@ router.post("/services", requireModule("grooming", "create"), async (req, res) =
         included: b.included ? String(b.included).trim() : null,
         includedEn: b.includedEn ? String(b.includedEn).trim() : null,
         durationMin,
-        price: new Prisma.Decimal(price.toFixed(2)),
+        price,
         active: true,
         petLinks: { create: petTypes.map((pet) => ({ petTypeId: pet.id })) },
       },
     });
-    res.status(201).json(row);
+    res.status(201).json(toApi("GroomingService", row));
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "فشل إنشاء الخدمة" });
   }
@@ -174,7 +175,7 @@ router.get("/", async (req, res) => {
       orderBy: [{ startAt: "asc" }],
       take: 500,
     });
-    res.json(rows);
+    res.json(toApi("Appointment", rows));
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : "تعذر جلب المواعيد" });
   }
@@ -274,7 +275,7 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
       },
       });
     }, LOCK_TX);
-    res.status(201).json(row);
+    res.status(201).json(toApi("Appointment", row));
   } catch (e) {
     res.status(e.status || 400).json({
       error: e.errorAr || (e instanceof Error ? e.message : "فشل إنشاء الموعد"),
@@ -309,7 +310,7 @@ router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
       }
       if (next) data.status = next;
       // A paid booking cancelled by staff is flagged so the refund is decided (FR-55).
-      if (next === "CANCELLED" && Number(existing.amountPaid) > 0) {
+      if (next === "CANCELLED" && d(existing.amountPaid) > 0) {
         data.paymentReview = true;
         data.paymentReviewReason = "REFUND_DUE";
       }
@@ -369,7 +370,7 @@ router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
         startAt: row.startAt,
       });
     }
-    res.json(row);
+    res.json(toApi("Appointment", row));
   } catch (e) {
     if (isStaleEditError(e)) throw e;
     res.status(e.status || 400).json({
@@ -482,7 +483,7 @@ router.post("/:id/refund", requireModule("grooming", "refund"), async (req, res)
       parentKind: "appointment",
       parentId: existing.id,
       organizationId: existing.organizationId,
-      amount: req.body?.amount,
+      amount: toDirhams(req.body?.amount, { allowZero: false }) ?? 0,
       userId: req.user.sub,
       method: req.body?.method,
       note: req.body?.note,
@@ -493,10 +494,10 @@ router.post("/:id/refund", requireModule("grooming", "refund"), async (req, res)
       entityType: "Payment",
       entityId: refund.id,
       branchId: existing.branchId,
-      summary: `${existing.reference || existing.id} ${Number(refund.amount).toFixed(2)} ${refund.method}`,
+      summary: `${existing.reference || existing.id} ${fmt(refund.amount)} ${refund.method}`,
     });
-    await mailCustomer(existing.customer, "refund", { reference: existing.reference || existing.id.slice(-8).toUpperCase(), amount: refund.amount });
-    res.status(201).json(refund);
+    await mailCustomer(existing.customer, "refund", { reference: existing.reference || existing.id.slice(-8).toUpperCase(), amount: fmt(refund.amount) });
+    res.status(201).json(toApi("Payment", refund));
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message, errorEn: e.message });
   }

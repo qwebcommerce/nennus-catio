@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { Prisma } from "../lib/prisma-client-bundle.js";
+import { fmt, toDirhams } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
@@ -25,9 +26,10 @@ function readArea(body, partial) {
   if (body.nameEn !== undefined) data.nameEn = body.nameEn ? String(body.nameEn).trim() : null;
   if (body.city !== undefined) data.city = body.city ? String(body.city).trim() : null;
   if (!partial || body.fee !== undefined) {
-    const fee = body.fee === "" || body.fee == null ? 0 : Number(body.fee);
-    if (!Number.isFinite(fee) || fee < 0 || fee > 100000) return { error: "The delivery fee must be zero or more" };
-    data.fee = new Prisma.Decimal(fee.toFixed(2));
+    // Whole dirhams (NFR-03); at most two decimals.
+    const fee = body.fee === "" || body.fee == null ? 0 : toDirhams(body.fee);
+    if (fee == null || fee > 10000000) return { error: "The delivery fee must be zero or more, with at most 2 decimals" };
+    data.fee = fee;
   }
   if (body.isActive !== undefined) data.isActive = Boolean(body.isActive);
   return { data };
@@ -69,15 +71,15 @@ router.get("/areas", async (req, res) => {
     where: { organizationId: req.user.organizationId },
     orderBy: { name: "asc" },
   });
-  res.json(rows);
+  res.json(toApi("DeliveryArea", rows));
 });
 
 router.post("/areas", requireModule("delivery", "create"), async (req, res) => {
   const { data, error } = readArea(req.body || {}, false);
   if (error) return bad(res, error);
   const row = await prisma.deliveryArea.create({ data: { organizationId: req.user.organizationId, ...data } });
-  await writeAudit({ userId: req.user.sub, action: "DELIVERY_AREA_CREATE", entityType: "DeliveryArea", entityId: row.id, summary: `${row.name} ${row.fee}` });
-  res.status(201).json(row);
+  await writeAudit({ userId: req.user.sub, action: "DELIVERY_AREA_CREATE", entityType: "DeliveryArea", entityId: row.id, summary: `${row.name} ${fmt(row.fee)}` });
+  res.status(201).json(toApi("DeliveryArea", row));
 });
 
 router.patch("/areas/:id", requireModule("delivery", "edit"), async (req, res) => {
@@ -88,8 +90,8 @@ router.patch("/areas/:id", requireModule("delivery", "edit"), async (req, res) =
   const { data, error } = readArea(req.body || {}, true);
   if (error) return bad(res, error);
   const row = await versionedUpdate(prisma, "deliveryArea", { id: existing.id, version, data });
-  await writeAudit({ userId: req.user.sub, action: "DELIVERY_AREA_UPDATE", entityType: "DeliveryArea", entityId: row.id, summary: `${row.name} ${row.fee} ${row.isActive ? "active" : "inactive"}` });
-  res.json(row);
+  await writeAudit({ userId: req.user.sub, action: "DELIVERY_AREA_UPDATE", entityType: "DeliveryArea", entityId: row.id, summary: `${row.name} ${fmt(row.fee)} ${row.isActive ? "active" : "inactive"}` });
+  res.json(toApi("DeliveryArea", row));
 });
 
 /** Deactivates (never deletes) so past orders keep their area. */
@@ -98,7 +100,7 @@ router.delete("/areas/:id", requireModule("delivery", "delete"), async (req, res
   if (!existing) return res.status(404).json({ error: "Area not found" });
   const row = await prisma.deliveryArea.update({ where: { id: existing.id }, data: { isActive: false } });
   await writeAudit({ userId: req.user.sub, action: "DELIVERY_AREA_UPDATE", entityType: "DeliveryArea", entityId: row.id, summary: "deactivated" });
-  res.json(row);
+  res.json(toApi("DeliveryArea", row));
 });
 
 router.get("/windows", async (req, res) => {

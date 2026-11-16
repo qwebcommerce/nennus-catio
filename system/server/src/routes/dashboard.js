@@ -2,7 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { listLowStock } from "../lib/lowStock.js";
-import { dec, money, sumDec } from "../lib/money.js";
+import { d, fmt, money, sum } from "../lib/money.js";
 import { qatarDayStart, qatarDayKey, qatarMonthStart, qatarRange, qatarToday } from "../lib/qatarTime.js";
 import { COUNTED_SALE, loadServicePayments } from "../lib/financeData.js";
 
@@ -74,7 +74,7 @@ router.get("/summary", async (req, res) => {
   const serviceToday = {};
   for (const key of ["GROOMING", "RELOCATION"]) {
     const income = servicePayments.filter((row) => row.channel === key && row.kind === "PAYMENT");
-    serviceToday[key] = { total: money(sumDec(income, (row) => row.amount)), count: income.length };
+    serviceToday[key] = { total: money(sum(income, (row) => row.amount)), count: income.length };
   }
   const waitingOrders = await prisma.sale.count({
     where: {
@@ -97,7 +97,7 @@ router.get("/summary", async (req, res) => {
     where: { ...branchFilter, ...COUNTED_SALE, createdAt: { gte: startOfMonth() } },
     select: { total: true, taxAmount: true },
   });
-  const revenueMonth = sumDec(monthSalesRows, (r) => r.total).minus(sumDec(monthSalesRows, (r) => r.taxAmount));
+  const revenueMonth = sum(monthSalesRows, (r) => r.total) - sum(monthSalesRows, (r) => r.taxAmount);
 
   const itemsMonth = await prisma.saleItem.findMany({
     where: {
@@ -107,19 +107,19 @@ router.get("/summary", async (req, res) => {
   });
   // Cost recorded at sale time (location unit cost); product cost only when none was recorded.
   const costMonth = itemsMonth.reduce(
-    (acc, it) => acc.plus(it.costAmount != null ? dec(it.costAmount) : dec(it.product?.cost).mul(it.quantity || 0)),
-    dec(0),
+    (acc, it) => acc + (it.costAmount != null ? d(it.costAmount) : d(it.product?.cost) * (it.quantity || 0)),
+    0,
   );
 
   res.json({
     salesTodayCount: todaySales._count,
-    salesTodayTotal: money(todaySales._sum.total).toFixed(2),
-    salesMonthTotal: money(monthSales._sum.total).toFixed(2),
-    estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? money(revenueMonth.minus(costMonth)).toFixed(2) : null,
+    salesTodayTotal: fmt(d(todaySales._sum.total)),
+    salesMonthTotal: fmt(d(monthSales._sum.total)),
+    estimatedProfitMonth: (await hasModule(req, "finance", "view")) ? fmt(revenueMonth - costMonth) : null,
     lowStockAlerts: lowStockItems.length,
     lowStockItems,
     channelsToday: {
-      ...Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: money(row._sum.total), count: row._count }])),
+      ...Object.fromEntries(channelSales.map((row) => [row.orderChannel, { total: money(d(row._sum.total)), count: row._count }])),
       ...serviceToday,
     },
     waitingOrders,
@@ -146,7 +146,7 @@ router.get("/sales-by-product", async (req, res) => {
   const map = new Map();
   for (const it of items) {
     const name = it.product?.name || "—";
-    map.set(name, (map.get(name) || dec(0)).plus(dec(it.subtotal)));
+    map.set(name, (map.get(name) || 0) + d(it.subtotal));
   }
   const chart = [...map.entries()].map(([name, value]) => ({ name, value: money(value) }));
   chart.sort((a, b) => b.value - a.value);
@@ -178,7 +178,7 @@ router.get("/sales-by-branch", async (req, res) => {
   res.json(
     sales.map((s) => ({
       name: nameById[s.branchId] || s.branchId,
-      value: money(s._sum.total),
+      value: money(d(s._sum.total)),
     }))
   );
 });
@@ -202,16 +202,16 @@ router.get("/monthly-profit", requireModule("finance", "view"), async (req, res)
       },
       select: { id: true, total: true, taxAmount: true, items: { select: { quantity: true, costAmount: true, product: { select: { cost: true } } } } },
     });
-    const revenue = sumDec(salesInMonth, (x) => x.total).minus(sumDec(salesInMonth, (x) => x.taxAmount));
-    let cost = dec(0);
+    const revenue = sum(salesInMonth, (x) => x.total) - sum(salesInMonth, (x) => x.taxAmount);
+    let cost = 0;
     for (const sale of salesInMonth) {
       for (const it of sale.items) {
-        cost = cost.plus(it.costAmount != null ? dec(it.costAmount) : dec(it.product?.cost).mul(it.quantity || 0));
+        cost += it.costAmount != null ? d(it.costAmount) : d(it.product?.cost) * (it.quantity || 0);
       }
     }
     out.push({
       label: startDate.toISOString().slice(0, 7),
-      profit: money(revenue.minus(cost)),
+      profit: money(revenue - cost),
     });
   }
   res.json(out);
@@ -237,13 +237,13 @@ router.get("/top-products-month", async (req, res) => {
   const map = new Map();
   for (const it of items) {
     const name = it.product?.name || "—";
-    const prev = map.get(name) || { name, value: dec(0), quantity: 0 };
-    prev.value = prev.value.plus(dec(it.subtotal));
+    const prev = map.get(name) || { name, value: 0, quantity: 0 };
+    prev.value += d(it.subtotal);
     prev.quantity += it.quantity;
     map.set(name, prev);
   }
   const rows = [...map.values()]
-    .sort((a, b) => b.value.comparedTo(a.value))
+    .sort((a, b) => b.value - a.value)
     .slice(0, 10)
     .map((r, i) => ({
       rank: i + 1,
@@ -277,15 +277,15 @@ router.get("/top-customers-month", async (req, res) => {
     const prev = map.get(cid) || {
       name: label,
       phone: s.customer?.phone || null,
-      value: dec(0),
+      value: 0,
       orders: 0,
     };
-    prev.value = prev.value.plus(dec(s.total));
+    prev.value += d(s.total);
     prev.orders += 1;
     map.set(cid, prev);
   }
   const rows = [...map.values()]
-    .sort((a, b) => b.value.comparedTo(a.value))
+    .sort((a, b) => b.value - a.value)
     .slice(0, 10)
     .map((r, i) => ({
       rank: i + 1,
@@ -326,13 +326,13 @@ router.get("/top-services-month", async (req, res) => {
   for (const a of appointments) {
     const sid = a.serviceId;
     const name = a.service?.name || "—";
-    const prev = map.get(sid) || { name, count: 0, revenue: dec(0) };
+    const prev = map.get(sid) || { name, count: 0, revenue: 0 };
     prev.count += 1;
-    prev.revenue = prev.revenue.plus(dec(a.amount ?? a.service?.price));
+    prev.revenue += d(a.amount ?? a.service?.price);
     map.set(sid, prev);
   }
   const rows = [...map.values()]
-    .sort((a, b) => b.count - a.count || b.revenue.comparedTo(a.revenue))
+    .sort((a, b) => b.count - a.count || b.revenue - a.revenue)
     .slice(0, 10)
     .map((r, i) => ({
       rank: i + 1,
@@ -362,8 +362,8 @@ router.get("/sales-by-employees-month", async (req, res) => {
   const byUser = new Map();
   for (const s of sales) {
     const uid = s.userId;
-    const prev = byUser.get(uid) || { value: dec(0), orders: 0 };
-    prev.value = prev.value.plus(dec(s.total));
+    const prev = byUser.get(uid) || { value: 0, orders: 0 };
+    prev.value += d(s.total);
     prev.orders += 1;
     byUser.set(uid, prev);
   }

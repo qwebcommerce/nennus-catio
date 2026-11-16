@@ -1,4 +1,4 @@
-import { Prisma } from "./prisma-client-bundle.js";
+import { d, divRound } from "./money.js";
 
 /**
  * Every change to on-hand stock goes through here (FR-17 "movement only").
@@ -17,7 +17,7 @@ function stockError(errorAr, errorEn, status = 400) {
 
 /**
  * Make sure the balance row exists, then lock it for this transaction.
- * @returns {Promise<{ id: string; quantity: number; unitCost: Prisma.Decimal | null; minStockLevel: number }>}
+ * @returns {Promise<{ id: string; quantity: number; unitCost: number | null; minStockLevel: number }>} unitCost in whole dirhams
  */
 export async function lockStockRow(tx, { productId, variantId, branchId }) {
   if (variantId) {
@@ -48,7 +48,8 @@ export async function lockStockRow(tx, { productId, variantId, branchId }) {
  * @param {{ orgId: string; userId?: string | null; productId: string; variantId?: string | null; branchId: string;
  *   delta: number; reason: "RECEIPT"|"TRANSFER"|"SALE"|"RETURN"|"ADJUSTMENT"|"HOLD_COMMIT"|"CANCEL"; note?: string | null;
  *   receiptUnitCost?: number | null }} opts
- *   receiptUnitCost: cost of the units coming in; the location unit cost becomes the weighted average.
+ *   receiptUnitCost: cost of the units coming in, in whole dirhams; the location unit cost becomes the
+ *   weighted average, rounded half away from zero to a whole dirham (NFR-03).
  */
 export async function moveStock(tx, opts) {
   const { orgId, userId = null, productId, variantId = null, branchId, reason, note = null } = opts;
@@ -62,11 +63,10 @@ export async function moveStock(tx, opts) {
   }
   const data = { quantity: nextQty };
   if (opts.receiptUnitCost != null && delta > 0) {
-    const inCost = Number(opts.receiptUnitCost);
-    const oldCost = row.unitCost != null ? Number(row.unitCost) : inCost;
+    const inCost = d(opts.receiptUnitCost);
+    const oldCost = row.unitCost != null ? d(row.unitCost) : inCost;
     const base = Math.max(0, oldQty);
-    const avg = (base * oldCost + delta * inCost) / (base + delta);
-    data.unitCost = new Prisma.Decimal(avg.toFixed(4));
+    data.unitCost = divRound(BigInt(base) * BigInt(oldCost) + BigInt(delta) * BigInt(inCost), base + delta);
   }
   if (variantId) {
     await tx.variantStock.update({ where: { id: row.id }, data });

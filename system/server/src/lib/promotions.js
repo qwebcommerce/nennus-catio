@@ -1,8 +1,10 @@
-import { Prisma } from "./prisma-client-bundle.js";
+import { d, percentOf, shareOf, splitProportional } from "./money.js";
 
-function money(n) {
-  return Math.round(Number(n) * 100) / 100;
-}
+/**
+ * Promotions work in whole dirhams (NFR-03): line subtotals, goods, fixed amounts and every
+ * discount are integers. Percentages and free-unit values round half away from zero; spread
+ * discounts (bundle, order-level) are split with largest remainder so the lines add up exactly.
+ */
 
 function live(promo, now) {
   if (!promo.active) return false;
@@ -12,7 +14,7 @@ function live(promo, now) {
 }
 
 function lineSubtotal(line) {
-  return Number(line.subtotal);
+  return d(line.subtotal);
 }
 
 export function applyPromotions(promotions, { lines = [], goods, code, now = new Date() }) {
@@ -40,7 +42,7 @@ export function applyPromotions(promotions, { lines = [], goods, code, now = new
   const orderLevel = [];
 
   const applyOne = (promo) => {
-    const min = promo.minOrderAmount != null ? Number(promo.minOrderAmount) : 0;
+    const min = promo.minOrderAmount != null ? d(promo.minOrderAmount) : 0;
     if (goods < min) return;
     if (promo.kind === "PERCENT" && promo.percent != null) {
       // Order-level offers are worked out after the line offers, on what is left (see below).
@@ -51,8 +53,8 @@ export function applyPromotions(promotions, { lines = [], goods, code, now = new
       lines.forEach((line, index) => {
         const hit = promo.kind === "PRODUCT" ? line.productId === promo.productId : line.categoryId === promo.categoryId;
         if (!hit) return;
-        if (promo.percent != null) addLine(index, lineLeft(line, index) * Number(promo.percent) / 100, line);
-        else if (promo.amount != null) addLine(index, Number(promo.amount) * (line.sellBy === "WEIGHT" ? 1 : Number(line.quantity) || 1), line);
+        if (promo.percent != null) addLine(index, percentOf(lineLeft(line, index), promo.percent), line);
+        else if (promo.amount != null) addLine(index, d(promo.amount) * (line.sellBy === "WEIGHT" ? 1 : Number(line.quantity) || 1), line);
       });
     } else if (promo.kind === "BOGO") {
       // Buy X get Y: every complete group of X+Y units has Y free units.
@@ -68,8 +70,7 @@ export function applyPromotions(promotions, { lines = [], goods, code, now = new
         const qty = Number(line.quantity) || 0;
         const give = Math.min(free, qty);
         // Free units are valued at what is left on the line after other offers.
-        const each = qty > 0 ? lineLeft(line, index) / qty : 0;
-        addLine(index, each * give, line);
+        addLine(index, qty > 0 ? shareOf(lineLeft(line, index), give, qty) : 0, line);
         free -= give;
       });
     } else if (promo.kind === "BUNDLE" && Array.isArray(promo.bundleProductIds) && promo.bundlePrice != null) {
@@ -80,10 +81,11 @@ export function applyPromotions(promotions, { lines = [], goods, code, now = new
         .map((line, index) => ({ line, index }))
         .filter(({ line }) => idsNeeded.includes(line.productId));
       const sum = bundleLines.reduce((total, row) => total + lineSubtotal(row.line), 0);
-      const off = sum - Number(promo.bundlePrice);
+      const off = sum - d(promo.bundlePrice);
       if (off <= 0 || sum <= 0) return;
-      bundleLines.forEach(({ line, index }) => {
-        lineDiscount[index] += off * (lineSubtotal(line) / sum);
+      const parts = splitProportional(off, bundleLines.map(({ line }) => lineSubtotal(line)));
+      bundleLines.forEach(({ index }, k) => {
+        lineDiscount[index] += parts[k];
       });
     } else {
       return;
@@ -104,25 +106,23 @@ export function applyPromotions(promotions, { lines = [], goods, code, now = new
   const room = Math.max(0, goods - lineSum);
   for (const promo of orderLevel) {
     const left = Math.max(0, room - orderDiscount);
-    if (promo.kind === "PERCENT") orderDiscount += left * Number(promo.percent) / 100;
-    else orderDiscount += Math.min(left, Number(promo.amount));
+    if (promo.kind === "PERCENT") orderDiscount += percentOf(left, promo.percent);
+    else orderDiscount += Math.min(left, d(promo.amount));
   }
   orderDiscount = Math.min(Math.max(0, orderDiscount), room);
   if (orderDiscount > 0 && lines.length) {
     const bases = lines.map((line, index) => Math.max(0, lineSubtotal(line) - lineDiscount[index]));
     const baseSum = bases.reduce((total, value) => total + value, 0);
-    let left = orderDiscount;
-    bases.forEach((base, index) => {
-      const share = index === bases.length - 1 || baseSum <= 0 ? left : money(orderDiscount * (base / baseSum));
+    const shares = baseSum > 0 ? splitProportional(orderDiscount, bases) : bases.map((_, index) => (index === bases.length - 1 ? orderDiscount : 0));
+    shares.forEach((share, index) => {
       lineDiscount[index] += share;
-      left = money(left - share);
     });
   }
   const capped = lineDiscount.map((value, index) => Math.min(Math.max(0, value), lines[index] ? lineSubtotal(lines[index]) : value));
-  const discount = Math.max(0, Math.min(goods, money(capped.reduce((total, value) => total + value, 0) + (lines.length ? 0 : orderDiscount))));
+  const discount = Math.max(0, Math.min(goods, capped.reduce((total, value) => total + value, 0) + (lines.length ? 0 : orderDiscount)));
   return {
     discount,
-    lineDiscounts: capped.map((value) => money(value)),
+    lineDiscounts: capped,
     codeApplied,
     ids,
   };
@@ -139,6 +139,6 @@ export async function quotePromotions(db, { organizationId, channel, lines, good
       ],
     },
   });
-  const result = applyPromotions(rows, { lines, goods: Number(goods) || 0, code });
-  return { ...result, discountDec: new Prisma.Decimal(result.discount.toFixed(2)) };
+  // lines[].subtotal and goods are whole dirhams; the discounts come back in dirhams.
+  return applyPromotions(rows, { lines, goods: d(goods), code });
 }

@@ -2,7 +2,8 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
-import { parseMoney } from "../lib/money.js";
+import { fmt, parseMoney, riyals } from "../lib/money.js";
+import { toApi } from "../lib/moneyFields.js";
 import { qatarRange } from "../lib/qatarTime.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
@@ -41,7 +42,7 @@ router.get("/", async (req, res) => {
     take: 500,
     include: { createdBy: { select: { id: true, name: true } } },
   });
-  res.json(rows);
+  res.json(toApi("Expense", rows));
 });
 
 router.post("/", requireModule("finance", "create"), async (req, res) => {
@@ -82,14 +83,14 @@ router.post("/", requireModule("finance", "create"), async (req, res) => {
         action: "EXPENSE_CREATE",
         entityType: "Expense",
         entityId: created.id,
-        summary: `${cat} ${amt.toFixed(2)} ${source}`,
+        summary: `${cat} ${fmt(amt)} ${source}`,
       },
       tx
     );
     return created;
   });
 
-  res.status(201).json(row);
+  res.status(201).json(toApi("Expense", row));
 });
 
 router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
@@ -143,11 +144,11 @@ router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
         action: "EXPENSE_UPDATE",
         entityType: "Expense",
         entityId: existing.id,
-        summary: `${updated.category} ${Number(updated.amount)}`,
+        summary: `${updated.category} ${fmt(updated.amount)}`,
         meta: {
           before: {
             category: existing.category,
-            amount: Number(existing.amount),
+            amount: riyals(existing.amount),
             description: existing.description,
             expenseDate: existing.expenseDate,
           },
@@ -158,7 +159,7 @@ router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
     );
     return updated;
   });
-  res.json(row);
+  res.json(toApi("Expense", row));
 });
 
 router.delete("/:id", requireModule("finance", "delete"), async (req, res) => {
@@ -175,10 +176,10 @@ router.delete("/:id", requireModule("finance", "delete"), async (req, res) => {
         action: "EXPENSE_DELETE",
         entityType: "Expense",
         entityId: existing.id,
-        summary: `${existing.category} ${Number(existing.amount)}`,
+        summary: `${existing.category} ${fmt(existing.amount)}`,
         meta: {
           category: existing.category,
-          amount: Number(existing.amount),
+          amount: riyals(existing.amount),
           description: existing.description,
           expenseDate: existing.expenseDate,
         },

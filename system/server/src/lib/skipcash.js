@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { fmt } from "./money.js";
 
 const CREATE_FIELDS = [
   "Uid",
@@ -63,7 +64,8 @@ export async function refundSkipcashPayment({ id, amount }) {
   const payload = {
     Id: id,
     KeyId: process.env.SKIPCASH_KEY_ID.trim(),
-    ...(amount != null ? { Amount: Number(amount).toFixed(2) } : {}),
+    // amount is whole dirhams (NFR-03); SkipCash takes riyals with two decimals.
+    ...(amount != null ? { Amount: fmt(amount) } : {}),
   };
   const base = (process.env.SKIPCASH_API_URL || "https://api.skipcash.app/api/v1/payments").replace(/\/$/, "");
   const authorization = sign(REFUND_FIELDS, payload, process.env.SKIPCASH_SECRET.trim());

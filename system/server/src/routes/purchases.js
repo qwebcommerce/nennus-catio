@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { executeReceivePurchase } from "../lib/purchaseReceive.js";
+import { toApi } from "../lib/moneyFields.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -20,7 +21,8 @@ async function receivePurchase(req, res, payload) {
       items: payload?.items,
       updateProductCost: payload?.updateProductCost,
     });
-    return res.status(201).json(purchase);
+    const { bill, ...rest } = purchase;
+    return res.status(201).json({ ...toApi("Purchase", rest), bill: toApi("SupplierBill", bill) });
   } catch (e) {
     const status = e?.status || 400;
     const msg = e instanceof Error ? e.message : "فشل الاستلام";
@@ -44,7 +46,7 @@ router.get("/", async (req, res) => {
       user: { select: { name: true } },
     },
   });
-  res.json(rows);
+  res.json(toApi("Purchase", rows));
 });
 
 router.post("/receive", requireModule("purchasing", "create"),

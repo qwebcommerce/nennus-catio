@@ -1,5 +1,6 @@
 import { Prisma } from "./prisma-client-bundle.js";
 import { staleEditError } from "./recordVersion.js";
+import { requireDirhams } from "./money.js";
 
 export function sellByValue(raw) {
   return String(raw || "").toUpperCase() === "WEIGHT" ? "WEIGHT" : "PIECE";
@@ -26,8 +27,9 @@ export async function productExtrasData(tx, { orgId, body }) {
     data.leadTimeDays = Number.isFinite(days) && days >= 0 ? days : null;
   }
   if (body.houseDeliveryFee !== undefined) {
-    const fee = Number(body.houseDeliveryFee);
-    data.houseDeliveryFee = new Prisma.Decimal((Number.isFinite(fee) && fee >= 0 ? fee : 0).toFixed(2));
+    // Whole dirhams (NFR-03); an empty field is no fee.
+    const raw = body.houseDeliveryFee;
+    data.houseDeliveryFee = raw == null || String(raw).trim() === "" ? 0 : requireDirhams(raw, {}, "house delivery fee");
   }
   if (body.sellBy !== undefined) data.sellBy = sellByValue(body.sellBy);
   if (body.preferredSupplierId !== undefined) {
@@ -71,8 +73,8 @@ export async function syncProductLinks(tx, { orgId, productId, body }) {
   if (Array.isArray(body.variants)) {
     for (const raw of body.variants) {
       const label = String(raw?.label || raw?.labelEn || "").trim();
-      const price = Number(raw?.price);
-      if (!label || !Number.isFinite(price) || price < 0) continue;
+      if (!label || raw?.price == null || String(raw.price).trim() === "") continue;
+      const price = requireDirhams(raw.price, {}, "variant price");
       const supplierId = raw?.preferredSupplierId ? String(raw.preferredSupplierId) : null;
       if (supplierId) {
         const supplier = await tx.supplier.findFirst({ where: { id: supplierId, organizationId: orgId } });
@@ -83,7 +85,7 @@ export async function syncProductLinks(tx, { orgId, productId, body }) {
         labelEn: raw?.labelEn ? String(raw.labelEn).trim() : null,
         sku: raw?.sku ? String(raw.sku).trim() : null,
         barcode: raw?.barcode ? String(raw.barcode).trim() : null,
-        price: new Prisma.Decimal(price.toFixed(2)),
+        price,
         isActive: raw?.isActive !== false,
         packWeight:
           raw?.packWeight != null && raw.packWeight !== "" && Number.isFinite(Number(raw.packWeight))

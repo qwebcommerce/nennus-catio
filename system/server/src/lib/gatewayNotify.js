@@ -1,4 +1,3 @@
-import { Prisma } from "./prisma-client-bundle.js";
 import { prisma } from "./prisma.js";
 import { needsReview, settleGatewayPayment } from "./payments.js";
 import { commitSaleHolds, releaseSaleHolds } from "./webOrder.js";
@@ -47,7 +46,7 @@ export async function applyGatewayResult(body, { req = null, confirmAt = null } 
         ...ids,
         organizationId: booking.organizationId,
         body,
-        expected: Number(booking.amount),
+        expected: booking.amount,
         confirm: async (tx, paid) => {
           const now = new Date();
           const moved = await tx.appointment.updateMany({
@@ -90,7 +89,7 @@ export async function applyGatewayResult(body, { req = null, confirmAt = null } 
     if (!request) return { outcome: "unknown" };
     const ids = { parentKind: "relocation", parentId: request.id };
     if (statusId !== 2) return { ...ids, outcome: [3, 4, 5].includes(statusId) ? "unchanged" : "pending" };
-    const expected = Number(request.quoteAmount || 0);
+    const expected = request.quoteAmount ?? 0;
     const result = await settleGatewayPayment({
       ...ids,
       organizationId: request.organizationId,
@@ -99,7 +98,7 @@ export async function applyGatewayResult(body, { req = null, confirmAt = null } 
       confirm: async (tx, paid) => {
         const now = new Date();
         const moved = await tx.relocationRequest.updateMany({
-          where: { id: request.id, status: "QUOTE_SENT", quoteAmount: new Prisma.Decimal(expected.toFixed(2)) },
+          where: { id: request.id, status: "QUOTE_SENT", quoteAmount: expected },
           data: { status: "PAID", paymentMethod: "ONLINE", paidAt: now, amountPaid: paid },
         });
         if (!moved.count) {
@@ -133,7 +132,7 @@ export async function applyGatewayResult(body, { req = null, confirmAt = null } 
       ...ids,
       organizationId: org.organizationId,
       body,
-      expected: Number(sale.total),
+      expected: sale.total,
       confirm: async (tx) => {
         const now = new Date();
         // Guarded: only a live, unpaid order confirms; a late payment goes to staff (FR-79).
