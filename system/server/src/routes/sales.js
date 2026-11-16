@@ -136,9 +136,20 @@ router.post("/checkout", async (req, res) => {
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "السلة فارغة" });
   }
-  const pmSingle = OK_PAY.has(String(paymentMethod).toUpperCase())
-    ? String(paymentMethod).toUpperCase()
-    : "CASH";
+  const pmRaw = String(paymentMethod ?? "").trim().toUpperCase();
+  // An unknown tender is refused, never stored as cash.
+  if (
+    (pmRaw && !OK_PAY.has(pmRaw) && !(pmRaw === "SPLIT" && Array.isArray(paymentSplits))) ||
+    (!pmRaw && !Array.isArray(paymentSplits))
+  ) {
+    return res.status(400).json({
+      error: "طريقة الدفع غير معروفة",
+      errorAr: "طريقة الدفع غير معروفة",
+      errorEn: "Unknown payment method",
+      code: "PAYMENT_METHOD_INVALID",
+    });
+  }
+  const pmSingle = pmRaw && pmRaw !== "SPLIT" ? pmRaw : "CASH";
 
   if (
     pmSingle === "ON_ACCOUNT" &&
@@ -230,21 +241,31 @@ router.post("/checkout", async (req, res) => {
       const productId = line.productId;
       const product = await prisma.product.findFirst({
         where: { id: productId, organizationId: orgId },
-        include: { variants: { where: { isActive: true }, select: { id: true } } },
+        include: { variants: { select: { id: true, isActive: true } } },
       });
       if (!product) throw new Error(`منتج غير موجود: ${productId}`);
       if (product.isActive === false) throw new Error(`المنتج غير منشور: ${product.name}`);
-      const qty = product.sellBy === "WEIGHT"
-        ? Math.round(Number(line.quantity) || 0)
-        : Math.floor(Number(line.quantity) || 0);
-      if (!Number.isFinite(qty) || qty < 1) throw new Error(`كمية غير صالحة: ${product.name}`);
+      // FR-22: piece goods take a whole quantity, weight goods a weight in grams above zero.
+      const rawQty = Number(line.quantity);
+      const qty = product.sellBy === "WEIGHT" ? Math.round(rawQty) : rawQty;
+      if (!Number.isFinite(rawQty) || !Number.isInteger(qty) || qty < 1) {
+        throw new Error(
+          product.sellBy === "WEIGHT"
+            ? `وزن غير صالح: ${product.name} — Enter a weight above zero`
+            : `كمية غير صالحة: ${product.name} — Enter a whole quantity above zero`,
+        );
+      }
       let variant = null;
       if (line.variantId) {
         variant = await prisma.productVariant.findFirst({
-          where: { id: String(line.variantId), productId: product.id, organizationId: orgId, isActive: true },
+          where: { id: String(line.variantId), productId: product.id, organizationId: orgId },
         });
-        if (!variant) throw new Error(`الصنف غير متاح: ${product.name}`);
+        if (!variant || !variant.isActive) throw new Error(`الصنف غير متاح: ${product.name} — This variant cannot be sold`);
       } else if (product.variants.length) {
+        // FR-18: a product with variants is sold only through an active variant, never at the bare product price.
+        if (!product.variants.some((v) => v.isActive)) {
+          throw new Error(`الصنف غير متاح: ${product.name} — This product has no active variant`);
+        }
         throw new Error(`اختر صنفاً: ${product.name}`);
       }
       const stockRow = variant

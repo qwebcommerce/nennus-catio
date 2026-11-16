@@ -22,7 +22,10 @@ export default function Returns() {
   const [lines, setLines] = useState([{ productId: "", quantity: "1" }]);
   const [saleId, setSaleId] = useState("");
   const [note, setNote] = useState("");
-  const [restock, setRestock] = useState(true);
+  // FR-80: stock comes back only when staff tick that the goods were returned.
+  const [restock, setRestock] = useState(false);
+  const [method, setMethod] = useState("");
+  const [sale, setSale] = useState(null);
   const [list, setList] = useState([]);
   const [msg, setMsg] = useState("");
 
@@ -52,6 +55,32 @@ export default function Returns() {
       .catch(() => setProducts([]));
   }, [branchId]);
 
+  useEffect(() => {
+    const id = saleId.trim();
+    if (!id || id.length < 8) {
+      setSale(null);
+      return;
+    }
+    let cancelled = false;
+    api(`/api/sales/${encodeURIComponent(id)}`)
+      .then((row) => {
+        if (!cancelled) setSale(row && row.id ? row : null);
+      })
+      .catch(() => {
+        if (!cancelled) setSale(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [saleId]);
+
+  const lineOptions = sale?.items?.length
+    ? sale.items.map((it) => ({
+        id: it.productId,
+        label: `${it.product?.name || it.productId} — ${it.quantity}${it.product?.sellBy === "WEIGHT" ? " g" : ""}`,
+      }))
+    : products.map((p) => ({ id: p.id, label: `${p.name} ${p.sku ? `(${p.sku})` : ""}` }));
+
   const loadRefunds = () => {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setList([]);
@@ -75,6 +104,10 @@ export default function Returns() {
       setMsg(t("returns.needBranch"));
       return;
     }
+    if (!saleId.trim()) {
+      setMsg(t("returns.needSale"));
+      return;
+    }
     const items = lines
       .filter((l) => l.productId)
       .map((l) => ({
@@ -94,15 +127,18 @@ export default function Returns() {
         method: "POST",
         body: {
           branchId: bid,
-          saleId: saleId.trim() || undefined,
+          saleId: saleId.trim(),
           note: note.trim() || undefined,
           items,
           restock,
+          method: method || undefined,
         },
       });
       setLines([{ productId: "", quantity: "1" }]);
       setSaleId("");
       setNote("");
+      setRestock(false);
+      setMethod("");
       await loadRefunds();
       setMsg(t("returns.done"));
     } catch (x) {
@@ -118,8 +154,23 @@ export default function Returns() {
       <form className="card" onSubmit={submit} style={{ display: "grid", gap: 12 }}>
         <div className="page-form-grid">
           <label className="page-form-field">
-            <span>{t("returns.saleIdOptional")}</span>
-            <input value={saleId} onChange={(e) => setSaleId(e.target.value)} placeholder="cuid…" style={inp} />
+            <span>{t("returns.saleId")}</span>
+            <input required value={saleId} onChange={(e) => setSaleId(e.target.value)} placeholder="cuid…" style={inp} />
+            {sale ? (
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                {sale.invoiceNumber || sale.id} · {Number(sale.total).toFixed(2)} {t("common.currency")} · {sale.paymentMethod}
+              </span>
+            ) : null}
+          </label>
+          <label className="page-form-field">
+            <span>{t("returns.method")}</span>
+            <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ ...inp, minHeight: 44 }}>
+              <option value="">{t("returns.methodSameAsSale")}</option>
+              <option value="CASH">{t("returns.methodCash")}</option>
+              <option value="CARD">{t("returns.methodCard")}</option>
+              <option value="FAWRAN">Fawran</option>
+              <option value="PAYMENT_LINK">{t("returns.methodLink")}</option>
+            </select>
           </label>
           <label className="page-form-field">
             <span>{t("returns.note")}</span>
@@ -145,9 +196,9 @@ export default function Returns() {
               style={{ ...inp, flex: 1, minWidth: 200, minHeight: 44 }}
             >
               <option value="">{t("returns.pickProduct")}</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} {p.sku ? `(${p.sku})` : ""}
+              {lineOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
                 </option>
               ))}
             </select>

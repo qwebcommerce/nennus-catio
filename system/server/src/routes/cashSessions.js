@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
-import { computeSessionExpectedCash } from "../lib/saleCash.js";
+import { computeSessionCashUp } from "../lib/saleCash.js";
 import { authMiddleware, requireRole, requirePermission } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 
@@ -91,21 +91,30 @@ router.post("/:id/close", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
   }
 
   const closedAt = new Date();
-  const expectedNum = await computeSessionExpectedCash(prisma, session, closedAt);
-  const expected = new Prisma.Decimal(expectedNum.toFixed(2));
+  const cashUp = await computeSessionCashUp(prisma, session, closedAt);
+  const expected = new Prisma.Decimal(cashUp.expectedCash.toFixed(2));
+  const cardTotal = new Prisma.Decimal(cashUp.cardTotal.toFixed(2));
   const closingDec = new Prisma.Decimal(counted.toFixed(2));
   const variance = closingDec.sub(expected);
 
-  const updated = await prisma.cashSession.update({
-    where: { id: session.id },
+  // Close once: a second close of the same session changes nothing.
+  const closed = await prisma.cashSession.updateMany({
+    where: { id: session.id, closedAt: null },
     data: {
       closedAt,
       closedByUserId: req.user.sub,
       closingCountedCash: closingDec,
       expectedCash: expected,
       cashVariance: variance,
+      cardTotal,
       note: note != null && String(note).trim() ? String(note).trim() : null,
     },
+  });
+  if (closed.count !== 1) {
+    return res.status(400).json({ error: "الجلسة غير موجودة أو مُغلقة" });
+  }
+  const updated = await prisma.cashSession.findUnique({
+    where: { id: session.id },
     include: {
       openedBy: { select: { name: true } },
       closedBy: { select: { name: true } },
@@ -119,15 +128,37 @@ router.post("/:id/close", requireRole("ADMIN", "MANAGER", "CASHIER"), requirePer
     entityType: "CashSession",
     entityId: updated.id,
     branchId: session.branchId,
-    summary: `Close counted ${closingDec} expected ${expected} variance ${variance}`,
+    summary: `Close counted ${closingDec} expected ${expected} variance ${variance} card ${cardTotal}`,
     meta: {
       expected: expected.toString(),
       counted: closingDec.toString(),
       variance: variance.toString(),
+      cardTotal: cardTotal.toString(),
     },
   });
 
-  res.json(updated);
+  res.json({ ...updated, cashUp });
+});
+
+/** Cash-up figures for a session: opening float, cash in and out, expected cash and card total. */
+router.get("/:id/cash-up", async (req, res) => {
+  const session = await prisma.cashSession.findFirst({
+    where: {
+      id: req.params.id,
+      branch: { organizationId: req.user.organizationId },
+    },
+  });
+  if (!session) return res.status(404).json({ error: "الجلسة غير موجودة" });
+  if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== session.branchId) {
+    return res.status(403).json({ error: "غير مصرح" });
+  }
+  const cashUp = await computeSessionCashUp(prisma, session, session.closedAt || new Date());
+  res.json({
+    ...cashUp,
+    closed: Boolean(session.closedAt),
+    countedCash: session.closingCountedCash != null ? Number(session.closingCountedCash) : null,
+    difference: session.cashVariance != null ? Number(session.cashVariance) : null,
+  });
 });
 
 router.get("/", async (req, res) => {
