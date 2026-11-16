@@ -30,6 +30,8 @@ function emptyProductForm() {
     sku: "",
     barcode: "",
     stock: "",
+    stockOriginal: "",
+    stockReason: "",
     minStockLevel: "5",
     sellBy: "PIECE",
     petTypeIds: [],
@@ -192,6 +194,8 @@ export default function Products() {
       sku: p.sku || "",
       barcode: p.barcode || "",
       stock: inv?.quantity != null ? String(inv.quantity) : "",
+      stockOriginal: inv?.quantity != null ? String(inv.quantity) : "",
+      stockReason: "",
       minStockLevel: inv?.minStockLevel != null ? String(inv.minStockLevel) : "5",
       sellBy: p.sellBy || "PIECE",
       petTypeIds: Array.isArray(p.petLinks) ? p.petLinks.map((link) => link.petTypeId || link.petType?.id).filter(Boolean) : [],
@@ -210,6 +214,11 @@ export default function Products() {
             price: String(v.price ?? ""),
             packWeight: v.packWeight != null ? String(v.packWeight) : "",
             isActive: v.isActive !== false,
+            ...(() => {
+              const st = Array.isArray(v.stocks) ? v.stocks.find((row) => row.branchId === activeBranchId) : null;
+              const qty = st?.quantity != null ? String(st.quantity) : "0";
+              return { stock: qty, stockOriginal: qty, minStockLevel: st?.minStockLevel != null ? String(st.minStockLevel) : "5", minOriginal: st?.minStockLevel != null ? String(st.minStockLevel) : "5" };
+            })(),
           }))
         : [],
     });
@@ -324,10 +333,25 @@ export default function Products() {
           body: catalogBody,
         });
         const bid = activeBranchId;
-        if (bid) {
+        const reason = String(form.stockReason || "").trim();
+        const savedVariants = (form.variants || []).filter((v) => v.id);
+        if (bid && savedVariants.length) {
+          // Stock and low-stock level are kept per variant at this location (FR-17, FR-92).
+          for (const v of savedVariants) {
+            const body = {};
+            if (String(v.stock) !== String(v.stockOriginal)) body.quantity = Number(v.stock);
+            if (String(v.minStockLevel) !== String(v.minOriginal)) body.minStockLevel = Number(v.minStockLevel);
+            if (body.quantity !== undefined && !reason) throw new Error(t("products.stockReasonRequired"));
+            if (Object.keys(body).length) {
+              await api(`/api/inventory/variants/${v.id}/${bid}`, { method: "PATCH", body: { ...body, reason } });
+            }
+          }
+        } else if (bid) {
+          const stockChanged = String(form.stock) !== String(form.stockOriginal);
+          if (stockChanged && !reason) throw new Error(t("products.stockReasonRequired"));
           await api(`/api/inventory/${editId}/${bid}`, {
             method: "PATCH",
-            body: { quantity: stockQty, minStockLevel: stockThreshold },
+            body: { ...(stockChanged ? { quantity: stockQty, reason } : {}), minStockLevel: stockThreshold },
           });
         }
         showToast(t("products.toastUpdated"), "success");
@@ -682,7 +706,7 @@ export default function Products() {
             {low.slice(0, 8).map((r) => (
               <li key={r.id}>
                 {t("products.lowStockLine", {
-                  name: r.product.name,
+                  name: `${r.product?.name || "—"}${r.variant ? ` (${r.variant.label})` : ""}${r.branch && !activeBranchId ? ` · ${r.branch.name}` : ""}`,
                   qty: r.quantity,
                   min: r.minStockLevel,
                 })}
@@ -1105,6 +1129,17 @@ export default function Products() {
                   onChange={(e) => setForm({ ...form, minStockLevel: e.target.value })}
                 />
               </label>
+              {formMode === "edit" ? (
+                <label style={fld}>
+                  <span>{t("products.stockReason")}</span>
+                  <input
+                    style={inp}
+                    value={form.stockReason}
+                    placeholder={t("products.stockReasonHint")}
+                    onChange={(e) => setForm({ ...form, stockReason: e.target.value })}
+                  />
+                </label>
+              ) : null}
               <label style={fld}>
                 <span>{t("products.nameEnField")} *</span>
                 <input
@@ -1246,6 +1281,42 @@ export default function Products() {
                         }))
                       }
                     />
+                    {formMode === "edit" && variant.id && activeBranchId ? (
+                      <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
+                          <span>{t("products.variantStockHere")}</span>
+                          <input
+                            style={inp}
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={variant.stock}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                variants: f.variants.map((row, i) => (i === index ? { ...row, stock: e.target.value } : row)),
+                              }))
+                            }
+                          />
+                        </label>
+                        <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
+                          <span>{t("products.variantLowStockHere")}</span>
+                          <input
+                            style={inp}
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={variant.minStockLevel}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                variants: f.variants.map((row, i) => (i === index ? { ...row, minStockLevel: e.target.value } : row)),
+                              }))
+                            }
+                          />
+                        </label>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
                 <button

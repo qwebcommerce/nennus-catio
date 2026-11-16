@@ -239,6 +239,22 @@ export default function Dashboard() {
                 </div>
               </div>
 
+              {Array.isArray(summary.lowStockItems) && summary.lowStockItems.length ? (
+                <section className="dash-shell-card">
+                  <div className="dash-strip-head">
+                    <h3>{t("dashboard.lowStockList")}</h3>
+                  </div>
+                  <ul style={{ margin: 0, paddingInlineStart: 18, display: "grid", gap: 4, fontSize: 14 }}>
+                    {summary.lowStockItems.slice(0, 10).map((row) => (
+                      <li key={row.id}>
+                        {row.product?.name || "—"}
+                        {row.variant ? ` (${row.variant.label})` : ""} · {row.branch?.name || "—"} · {row.quantity} / {row.minStockLevel}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
               <section className="dash-shell-card dash-customers-strip">
                 <div className="dash-strip-head">
                   <h3>{t("dashboard.topCustomersMonth")}</h3>
