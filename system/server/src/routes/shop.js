@@ -3,6 +3,7 @@ import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { customerSession, endCustomerSession, startCustomerSession } from "../lib/customerSession.js";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
 import { assertStockForHolds, commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
@@ -433,7 +434,7 @@ async function requireCustomer(req, res) {
 
 function publicPet(pet) {
   // Pet notes are staff-only (FR-03) and never leave the server on a shop route.
-  return { id: pet.id, name: pet.name, breed: pet.breed, ageText: pet.ageText, petTypeId: pet.petTypeId };
+  return { id: pet.id, name: pet.name, breed: pet.breed, ageText: pet.ageText, petTypeId: pet.petTypeId, version: pet.version };
 }
 
 async function accountView(session) {
@@ -445,7 +446,8 @@ async function accountView(session) {
       email: true,
       phone: true,
       locale: true,
-      pets: { select: { id: true, name: true, breed: true, ageText: true, petTypeId: true }, orderBy: { createdAt: "asc" } },
+      version: true,
+      pets: { select: { id: true, name: true, breed: true, ageText: true, petTypeId: true, version: true }, orderBy: { createdAt: "asc" } },
       addresses: { orderBy: { createdAt: "asc" } },
     },
   });
@@ -466,6 +468,7 @@ router.patch("/me", async (req, res) => {
   const session = await requireCustomer(req, res);
   if (!session) return;
   const body = req.body || {};
+  const version = requireVersion(req);
   const data = {};
   if (body.name !== undefined) {
     const name = String(body.name || "").trim();
@@ -478,15 +481,23 @@ router.patch("/me", async (req, res) => {
     data.locale = body.locale;
   }
   if (!Object.keys(data).length) return res.status(400).json({ error: "Nothing to update" });
-  await prisma.customer.update({ where: { id: session.sub }, data });
+  await versionedUpdate(prisma, "customer", {
+    id: session.sub,
+    version,
+    data,
+    where: { organizationId: session.organizationId },
+    select: { id: true },
+  });
   res.json(await accountView(session));
 });
 
 router.patch("/me/pets/:id", async (req, res) => {
   const session = await requireCustomer(req, res);
   if (!session) return;
+  const version = requireVersion(req);
   const pet = await prisma.customerPet.findFirst({ where: { id: req.params.id, customerId: session.sub } });
   if (!pet) return res.status(404).json({ error: "Pet not found" });
+  assertVersion(pet, version);
   const data = {};
   if (req.body?.name !== undefined) {
     const name = String(req.body.name || "").trim();
@@ -497,7 +508,12 @@ router.patch("/me/pets/:id", async (req, res) => {
     if (req.body?.[key] !== undefined) data[key] = String(req.body[key] || "").trim() || null;
   }
   if (req.body?.petTypeId !== undefined) data.petTypeId = req.body.petTypeId ? String(req.body.petTypeId) : null;
-  const updated = await prisma.customerPet.update({ where: { id: pet.id }, data });
+  const updated = await versionedUpdate(prisma, "customerPet", {
+    id: pet.id,
+    version,
+    data,
+    where: { customerId: session.sub },
+  });
   res.json(publicPet(updated));
 });
 

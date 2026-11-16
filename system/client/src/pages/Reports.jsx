@@ -13,7 +13,7 @@ import {
   Pie,
   Cell,
 } from "recharts";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
@@ -150,7 +150,7 @@ export default function Reports() {
         expenseDate: `${form.expenseDate}T12:00:00+03:00`,
       };
       if (editingExpenseId) {
-        await api(`/api/expenses/${editingExpenseId}`, { method: "PATCH", body });
+        await api(`/api/expenses/${editingExpenseId}`, { method: "PATCH", body: { ...body, version: form.version } });
         setMsg(t("reports.expenseUpdated"));
         setEditingExpenseId(null);
       } else {
@@ -160,7 +160,16 @@ export default function Reports() {
       await loadExpenses();
       await loadAnalytics();
     } catch (err) {
-      setMsg(err.message || t("reports.saveFailed"));
+      setMsg(isStaleEdit(err) ? editErrorMessage(err, t) : err.message || t("reports.saveFailed"));
+      if (isStaleEdit(err) && editingExpenseId) {
+        // NFR-13: someone else saved this expense first — reload it into the form.
+        const rows = await api(`/api/expenses?${new URLSearchParams({ from, to }).toString()}`).catch(() => null);
+        if (Array.isArray(rows)) {
+          setExpenseList(rows);
+          const fresh = rows.find((row) => row.id === editingExpenseId);
+          if (fresh) startEditExpense(fresh);
+        }
+      }
     }
   };
 
@@ -172,6 +181,7 @@ export default function Reports() {
       description: row.description || "",
       expenseDate: qatarYmd(row.expenseDate || new Date()),
       paidFrom: row.paidFrom || "CASH",
+      version: row.version,
     });
     setTab("expenses");
   };

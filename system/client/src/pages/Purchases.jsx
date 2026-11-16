@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
@@ -69,15 +69,30 @@ export default function Purchases() {
 
   const startEditSupplier = (s) => {
     setEditingSupplierId(s.id);
-    setEditSupplier({ name: s.name || "", phone: s.phone || "" });
+    setEditSupplier({ name: s.name || "", phone: s.phone || "", version: s.version });
   };
 
   const saveSupplier = async () => {
     if (!editingSupplierId || !editSupplier.name.trim()) return;
-    const s = await api(`/api/suppliers/${editingSupplierId}`, {
-      method: "PATCH",
-      body: { name: editSupplier.name.trim(), phone: editSupplier.phone.trim() || null },
-    });
+    let s;
+    try {
+      s = await api(`/api/suppliers/${editingSupplierId}`, {
+        method: "PATCH",
+        body: { name: editSupplier.name.trim(), phone: editSupplier.phone.trim() || null, version: editSupplier.version },
+      });
+    } catch (err) {
+      setMsg(editErrorMessage(err, t));
+      if (isStaleEdit(err)) {
+        // NFR-13: reload the supplier someone else saved and show it in the form again.
+        const rows = await api("/api/suppliers").catch(() => null);
+        if (Array.isArray(rows)) {
+          setSuppliers(rows);
+          const fresh = rows.find((row) => row.id === editingSupplierId);
+          if (fresh) startEditSupplier(fresh);
+        }
+      }
+      return;
+    }
     setSuppliers((prev) =>
       prev.map((row) => (row.id === s.id ? s : row)).sort((a, b) => a.name.localeCompare(b.name)),
     );

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule, requireOwner } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -29,6 +30,7 @@ router.get("/", requireModule("settings", "view"), async (req, res, next) => {
         alertBooking: true,
         alertRelocation: true,
         alertLowStock: true,
+        version: true,
       },
     });
     if (!org) return res.status(404).json({ error: "Organization not found" });
@@ -49,6 +51,7 @@ router.get("/", requireModule("settings", "view"), async (req, res, next) => {
       alertBooking: org.alertBooking !== false,
       alertRelocation: org.alertRelocation !== false,
       alertLowStock: org.alertLowStock === true,
+      version: org.version,
     });
   } catch (e) {
     next(e);
@@ -59,6 +62,7 @@ router.get("/", requireModule("settings", "view"), async (req, res, next) => {
 router.patch("/", requireOwner, async (req, res, next) => {
   try {
     const b = req.body || {};
+    const version = requireVersion(req);
     const data = {};
     if (b.name !== undefined) {
       const name = String(b.name || "").trim();
@@ -115,8 +119,9 @@ router.patch("/", requireOwner, async (req, res, next) => {
         where: { id: req.user.organizationId },
         select: Object.fromEntries(keys.map((k) => [k, true])),
       });
-      const row = await tx.organization.update({
-        where: { id: req.user.organizationId },
+      const row = await versionedUpdate(tx, "organization", {
+        id: req.user.organizationId,
+        version,
         data,
         select: {
           id: true,
@@ -136,6 +141,7 @@ router.patch("/", requireOwner, async (req, res, next) => {
           alertBooking: true,
           alertRelocation: true,
           alertLowStock: true,
+          version: true,
         },
       });
       await writeAudit(
@@ -168,6 +174,7 @@ router.patch("/", requireOwner, async (req, res, next) => {
       alertBooking: org.alertBooking !== false,
       alertRelocation: org.alertRelocation !== false,
       alertLowStock: org.alertLowStock === true,
+      version: org.version,
     });
   } catch (e) {
     next(e);

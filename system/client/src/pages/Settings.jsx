@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useTheme } from "../context/ThemeContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useToast } from "../context/ToastContext.jsx";
 import PrintSettings from "./PrintSettings.jsx";
 import { LanguageSwitcher } from "../components/LanguageSwitcher.jsx";
@@ -50,31 +50,45 @@ export default function Settings() {
   const [bookingCancelHours, setBookingCancelHours] = useState("24");
   const [businessName, setBusinessName] = useState("");
   const [profile, setProfile] = useState({ phone: "", publicEmail: "", publicAddress: "", hoursText: "", hoursTextEn: "", notifyEmail: "", alertOrder: true, alertBooking: true, alertRelocation: true, alertLowStock: false });
+  /** NFR-13: the settings row version the form was loaded at; every save sends it. */
+  const [orgVersion, setOrgVersion] = useState(null);
+
+  const applySettings = (s) => {
+    setOrgVersion(s?.version ?? null);
+    setWebsiteBranchId(s?.websiteBranchId || "");
+    setWhatsappNumber(s?.whatsappNumber || "");
+    setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
+    setBookingCancelHours(s?.bookingCancelHours != null ? String(s.bookingCancelHours) : "24");
+    setBusinessName(s?.name || "");
+    setProfile({
+      phone: s?.phone || "",
+      publicEmail: s?.publicEmail || "",
+      publicAddress: s?.publicAddress || "",
+      hoursText: s?.hoursText || "",
+      hoursTextEn: s?.hoursTextEn || "",
+      notifyEmail: s?.notifyEmail || "",
+      alertOrder: s?.alertOrder !== false,
+      alertBooking: s?.alertBooking !== false,
+      alertRelocation: s?.alertRelocation !== false,
+      alertLowStock: s?.alertLowStock === true,
+    });
+  };
+
+  /** A failed settings save: on a stale copy show the notice and reload the latest settings. */
+  const settingsSaveFailed = async (err) => {
+    showToast(editErrorMessage(err, t), "error");
+    if (isStaleEdit(err)) {
+      const fresh = await api("/api/org-settings").catch(() => null);
+      if (fresh) applySettings(fresh);
+    }
+  };
 
   useEffect(() => {
     if (!isAdmin && !isManager) return undefined;
     let cancelled = false;
     api("/api/org-settings")
       .then((s) => {
-        if (!cancelled) {
-          setWebsiteBranchId(s?.websiteBranchId || "");
-          setWhatsappNumber(s?.whatsappNumber || "");
-          setHomeVisitFee(s?.homeVisitFee != null ? String(s.homeVisitFee) : "0");
-          setBookingCancelHours(s?.bookingCancelHours != null ? String(s.bookingCancelHours) : "24");
-          setBusinessName(s?.name || "");
-          setProfile({
-            phone: s?.phone || "",
-            publicEmail: s?.publicEmail || "",
-            publicAddress: s?.publicAddress || "",
-            hoursText: s?.hoursText || "",
-            hoursTextEn: s?.hoursTextEn || "",
-            notifyEmail: s?.notifyEmail || "",
-            alertOrder: s?.alertOrder !== false,
-            alertBooking: s?.alertBooking !== false,
-            alertRelocation: s?.alertRelocation !== false,
-            alertLowStock: s?.alertLowStock === true,
-          });
-        }
+        if (!cancelled) applySettings(s);
       })
       .catch(() => {});
     return () => {
@@ -183,11 +197,12 @@ export default function Settings() {
               const next = e.target.value;
               setWebsiteBranchId(next);
               try {
-                const saved = await api("/api/org-settings", { method: "PATCH", body: { websiteBranchId: next || null } });
+                const saved = await api("/api/org-settings", { method: "PATCH", body: { websiteBranchId: next || null, version: orgVersion } });
                 setWebsiteBranchId(saved.websiteBranchId || "");
+                setOrgVersion(saved.version ?? null);
                 showToast(t("common.save"), "success");
               } catch (err) {
-                showToast(err.message, "error");
+                await settingsSaveFailed(err);
               }
             }}
           >
@@ -231,15 +246,16 @@ export default function Settings() {
               try {
                 const saved = await api("/api/org-settings", {
                   method: "PATCH",
-                  body: { name: businessName, whatsappNumber, homeVisitFee: Number(homeVisitFee), bookingCancelHours: Number(bookingCancelHours), ...profile },
+                  body: { name: businessName, whatsappNumber, homeVisitFee: Number(homeVisitFee), bookingCancelHours: Number(bookingCancelHours), ...profile, version: orgVersion },
                 });
                 setBusinessName(saved.name || businessName);
                 setWhatsappNumber(saved.whatsappNumber || "");
                 setHomeVisitFee(String(saved.homeVisitFee ?? 0));
                 setBookingCancelHours(String(saved.bookingCancelHours ?? 24));
+                setOrgVersion(saved.version ?? null);
                 showToast(t("common.save"), "success");
               } catch (err) {
-                showToast(err.message, "error");
+                await settingsSaveFailed(err);
               }
             }}
           >

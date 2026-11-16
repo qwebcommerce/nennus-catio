@@ -204,6 +204,7 @@ app.use((err, _req, res, _next) => {
       errorAr: err.errorAr || err.message,
       errorEn: err.errorEn || err.message,
       ...(err.code ? { code: err.code } : {}),
+      ...(err.extra && typeof err.extra === "object" ? err.extra : {}),
     });
   }
   if (err?.status && Number(err.status) >= 400 && Number(err.status) < 500) {

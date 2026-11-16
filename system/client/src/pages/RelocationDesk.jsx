@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { formatDateTime } from "../utils/qatarDate.js";
@@ -21,6 +21,17 @@ export default function RelocationDesk() {
   const [msg, setMsg] = useState("");
   const load = () => api("/api/relocation").then(setRows).catch((e) => setMsg(e.message));
   useEffect(() => { load(); }, []);
+  /** NFR-13: edits send the version they were loaded at; a stale copy shows the notice and reloads. */
+  const editFailed = (err) => {
+    setMsg(editErrorMessage(err, t));
+    if (isStaleEdit(err)) load();
+  };
+  const saveNotes = (row, staffNotes) => {
+    if ((row.staffNotes || "") === staffNotes) return;
+    api(`/api/relocation/${row.id}/notes`, { method: "POST", body: { staffNotes, version: row.version } })
+      .then((saved) => setRows((list) => list.map((r) => (r.id === row.id ? { ...r, staffNotes: saved.staffNotes, version: saved.version } : r))))
+      .catch(editFailed);
+  };
   /**
    * Documents are downloaded through a 5-minute signed link and served as an attachment
    * (never rendered as a same-origin page).
@@ -88,11 +99,11 @@ export default function RelocationDesk() {
           {(row.documents || []).map((doc) => (
             <button key={doc.id} type="button" onClick={() => openDoc(row.id, doc.id)}>{doc.fileName}</button>
           ))}
-          <textarea placeholder={t("customers.notes")} defaultValue={row.staffNotes || ""} onBlur={(e) => api(`/api/relocation/${row.id}/notes`, { method: "POST", body: { staffNotes: e.target.value } }).catch((err) => setMsg(err.message))} />
+          <textarea key={`${row.id}-${row.version}`} placeholder={t("customers.notes")} defaultValue={row.staffNotes || ""} onBlur={(e) => saveNotes(row, e.target.value)} />
           {["UNDER_REVIEW", "QUOTE_SENT"].includes(row.status) ? (
             <div style={{ display: "flex", gap: 8 }}>
               <input type="number" min="0" step="0.01" value={quote[row.id] || ""} onChange={(e) => setQuote({ ...quote, [row.id]: e.target.value })} />
-              <button type="button" onClick={() => api(`/api/relocation/${row.id}/quote`, { method: "POST", body: { amount: Number(quote[row.id]) } }).then(load).catch((e) => setMsg(e.message))}>{t("shop.sendQuote")}</button>
+              <button type="button" onClick={() => api(`/api/relocation/${row.id}/quote`, { method: "POST", body: { amount: Number(quote[row.id]), version: row.version } }).then(load).catch(editFailed)}>{t("shop.sendQuote")}</button>
             </div>
           ) : null}
           {row.status === "QUOTE_SENT" ? (

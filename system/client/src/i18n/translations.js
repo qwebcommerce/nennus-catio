@@ -5,6 +5,11 @@ const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
   ["accounts.needLogin", "انتهت الجلسة — سجّل الدخول مجدداً.", "Session expired — please sign in again."],
   ["common.save", "حفظ", "Save"],
+  [
+    "common.staleEdit",
+    "تم تعديل هذا السجل من قِبل شخص آخر. أعدنا تحميل أحدث نسخة — راجعها ثم احفظ مرة أخرى.",
+    "This record was changed by someone else. The latest version has been reloaded — check it and save again.",
+  ],
   ["common.cancel", "إلغاء", "Cancel"],
   ["common.close", "إغلاق", "Close"],
   ["common.delete", "حذف", "Delete"],

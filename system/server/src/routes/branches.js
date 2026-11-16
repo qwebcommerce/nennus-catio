@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -51,10 +52,12 @@ router.post("/", requireModule("warehouses", "create"), async (req, res) => {
 
 router.patch("/:id", requireModule("warehouses", "edit"), async (req, res) => {
   const { name, nameEn, address, kind, isActive } = req.body || {};
+  const version = requireVersion(req);
   const existing = await prisma.branch.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Branch not found", code: "NOT_FOUND" });
+  assertVersion(existing, version);
   const data = {
     ...(name != null && { name: String(name).trim() }),
     ...(nameEn !== undefined && { nameEn: nameEn?.trim() || null }),
@@ -62,10 +65,7 @@ router.patch("/:id", requireModule("warehouses", "edit"), async (req, res) => {
     ...(kind !== undefined && { kind: locationKind(kind, existing.kind || "SHOP") }),
     ...(isActive !== undefined && { isActive: isActive !== false }),
   };
-  const b = await prisma.branch.update({
-    where: { id: existing.id },
-    data,
-  });
+  const b = await versionedUpdate(prisma, "branch", { id: existing.id, version, data });
   await writeAudit({
     userId: req.user.sub,
     action: "BRANCH_UPDATE",

@@ -4,6 +4,7 @@ import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { parseMoney } from "../lib/money.js";
 import { qatarRange } from "../lib/qatarTime.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -94,10 +95,12 @@ router.post("/", requireModule("finance", "create"), async (req, res) => {
 router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
   const orgId = req.user.organizationId;
   const { category, amount, description, expenseDate, paidFrom } = req.body || {};
+  const version = requireVersion(req);
   const existing = await prisma.expense.findFirst({
     where: { id: req.params.id, organizationId: orgId },
   });
   if (!existing) return res.status(404).json({ error: "غير موجود" });
+  assertVersion(existing, version);
 
   const data = {};
   if (category != null) {
@@ -128,8 +131,9 @@ router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
   }
 
   const row = await prisma.$transaction(async (tx) => {
-    const updated = await tx.expense.update({
-      where: { id: existing.id },
+    const updated = await versionedUpdate(tx, "expense", {
+      id: existing.id,
+      version,
       data,
       include: { createdBy: { select: { id: true, name: true } } },
     });

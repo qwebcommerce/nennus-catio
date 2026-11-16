@@ -3,6 +3,7 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -63,14 +64,16 @@ router.post("/", requireModule("promotions", "create"), async (req, res) => {
 });
 
 router.patch("/:id", requireModule("promotions", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.promotion.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Offer not found" });
+  assertVersion(existing, version);
   const data = {};
   if (req.body?.active != null) data.active = Boolean(req.body.active);
   if (req.body?.endsAt !== undefined) data.endsAt = req.body.endsAt ? new Date(req.body.endsAt) : null;
-  const row = await prisma.promotion.update({ where: { id: existing.id }, data });
+  const row = await versionedUpdate(prisma, "promotion", { id: existing.id, version, data });
   await writeAudit({
     userId: req.user.sub,
     action: "PROMOTION_UPDATE",

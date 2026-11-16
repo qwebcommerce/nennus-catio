@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import {
   validateCatalogName,
@@ -91,10 +92,12 @@ router.post("/categories", requireModule("products", "create"), async (req, res)
 });
 
 router.patch("/categories/:id", requireModule("products", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.category.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Category not found" });
+  assertVersion(existing, version);
   const { name, nameEn } = req.body || {};
   const data = {};
   if (name !== undefined) {
@@ -118,7 +121,7 @@ router.patch("/categories/:id", requireModule("products", "edit"), async (req, r
       data.nameEn = en.value;
     }
   }
-  const row = await prisma.category.update({ where: { id: existing.id }, data });
+  const row = await versionedUpdate(prisma, "category", { id: existing.id, version, data });
   await writeAudit({
     userId: req.user.sub,
     action: "CATEGORY_UPDATE",
@@ -219,10 +222,12 @@ router.post("/subcategories", requireModule("products", "create"), async (req, r
 });
 
 router.patch("/subcategories/:id", requireModule("products", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.subcategory.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Subcategory not found" });
+  assertVersion(existing, version);
   const { name, nameEn, categoryId } = req.body || {};
   const data = {};
   if (name !== undefined) {
@@ -257,8 +262,9 @@ router.patch("/subcategories/:id", requireModule("products", "edit"), async (req
     }
   }
   try {
-    const row = await prisma.subcategory.update({
-      where: { id: existing.id },
+    const row = await versionedUpdate(prisma, "subcategory", {
+      id: existing.id,
+      version,
       data,
       include: { category: { select: { id: true, name: true, nameEn: true } } },
     });
@@ -374,10 +380,12 @@ router.post("/skus", requireModule("products", "create"), async (req, res) => {
 });
 
 router.patch("/skus/:id", requireModule("products", "edit"), async (req, res) => {
+  const version = requireVersion(req);
   const existing = await prisma.catalogSku.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "SKU not found" });
+  assertVersion(existing, version);
   const { code, name, subcategoryId } = req.body || {};
   const data = {};
   if (code !== undefined) {
@@ -410,8 +418,9 @@ router.patch("/skus/:id", requireModule("products", "edit"), async (req, res) =>
     }
   }
   try {
-    const row = await prisma.catalogSku.update({
-      where: { id: existing.id },
+    const row = await versionedUpdate(prisma, "catalogSku", {
+      id: existing.id,
+      version,
       data,
       include: {
         subcategory: {

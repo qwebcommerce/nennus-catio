@@ -17,7 +17,8 @@ import {
   allocateUniqueBarcode,
   assertBarcodeAvailable,
 } from "../lib/productBarcode.js";
-import { syncProductExtras } from "../lib/catalogExtras.js";
+import { productExtrasData, syncProductExtras, syncProductLinks } from "../lib/catalogExtras.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { normalizeImage } from "../lib/imageNormalize.js";
 import { setStockCount } from "../lib/stockLedger.js";
@@ -949,6 +950,7 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
 
 router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
   const data = req.body || {};
+  const version = requireVersion(req);
   const update = {};
   if (data.nameEn !== undefined) {
     if (!String(data.nameEn || "").trim()) {
@@ -1006,6 +1008,7 @@ router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "المنتج غير موجود" });
+  assertVersion(existing, version);
 
   if (
     data.categoryId !== undefined ||
@@ -1053,15 +1056,12 @@ router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
   }
 
   try {
-    const p = await prisma.product.update({
-      where: { id: existing.id },
-      data: update,
-      include: { inventories: true },
-    });
-    await syncProductExtras(prisma, {
-      orgId: req.user.organizationId,
-      productId: p.id,
-      body: data,
+    // NFR-13: one conditional write of the product row (form fields + extras), then its links.
+    const p = await prisma.$transaction(async (tx) => {
+      const extras = await productExtrasData(tx, { orgId: req.user.organizationId, body: data });
+      await versionedUpdate(tx, "product", { id: existing.id, version, data: { ...update, ...extras } });
+      await syncProductLinks(tx, { orgId: req.user.organizationId, productId: existing.id, body: data });
+      return tx.product.findUnique({ where: { id: existing.id }, include: { inventories: true } });
     });
     if (update.imageUrl !== undefined) {
       await linkProductImage(req.user.organizationId, p.id, update.imageUrl);
@@ -1097,6 +1097,9 @@ router.patch("/:id", requireModule("products", "edit"), async (req, res) => {
       return res.status(400).json({
         error: "تعارض بيانات فريدة (SKU أو باركود أو معرّف خارجي)",
       });
+    }
+    if (e instanceof Error && e.message === "Preferred supplier was not found") {
+      return res.status(400).json({ error: e.message });
     }
     throw e;
   }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -21,6 +21,8 @@ export default function Permissions() {
   const [moduleKeys, setModuleKeys] = useState([]);
   const [moduleActions, setModuleActions] = useState([]);
   const [moduleDefaults, setModuleDefaults] = useState({ MANAGER: {}, CASHIER: {} });
+  /** NFR-13: version of the organisation row the matrix was loaded from. */
+  const [version, setVersion] = useState(null);
 
   const load = async () => {
     const data = await api("/api/permissions");
@@ -31,6 +33,7 @@ export default function Permissions() {
     setModuleKeys(data?.moduleKeys || []);
     setModuleActions(data?.moduleActions || []);
     setModuleDefaults(data?.moduleDefaults || { MANAGER: {}, CASHIER: {} });
+    setVersion(data?.version ?? null);
     setDirty(false);
     setLoadOk(true);
   };
@@ -55,16 +58,19 @@ export default function Permissions() {
     }
     setBusy(true);
     try {
-      await api("/api/permissions", {
+      const saved = await api("/api/permissions", {
         method: "PUT",
         // The module matrix is the single source of truth (FR-08); legacy keys are derived from it.
-        body: { modules },
+        body: { modules, version },
       });
+      setVersion(saved?.version ?? null);
       await refreshUser?.();
       setDirty(false);
       showToast(t("permissions.saved"), "success");
     } catch (e) {
-      showToast(e.message || t("permissions.saveFailed"), "error");
+      showToast(isStaleEdit(e) ? editErrorMessage(e, t) : e.message || t("permissions.saveFailed"), "error");
+      // Someone else changed the settings row: reload the matrix they saved.
+      if (isStaleEdit(e)) await load().catch(() => {});
     } finally {
       setBusy(false);
     }

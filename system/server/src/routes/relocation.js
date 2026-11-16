@@ -9,6 +9,7 @@ import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
 import { checkGatewayPayment, lookupOnReturn } from "../lib/paymentLookup.js";
 import { mailCustomer, mailStaff } from "../lib/mailer.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import {
   LOCK_TX,
   acceptReviewPayments,
@@ -95,6 +96,7 @@ function publicRequest(row) {
     destination: row.destination,
     petSummary: row.petSummary,
     status: row.status,
+    version: row.version,
     quoteAmount: row.quoteAmount != null ? Number(row.quoteAmount) : null,
     quoteNote: row.quoteNote,
     history: Array.isArray(row.history) ? row.history : [],
@@ -386,15 +388,20 @@ relocationStaff.post("/:id/status", async (req, res) => {
 relocationStaff.post("/:id/quote", async (req, res) => {
   const amount = Number(req.body?.amount);
   if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: "Enter a quote amount" });
+  const version = requireVersion(req);
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row) return res.status(404).json({ error: "Request not found" });
+  assertVersion(row, version);
   if (!["UNDER_REVIEW", "QUOTE_SENT"].includes(row.status)) {
     return res.status(400).json({ error: "Review the request before sending a quote" });
   }
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
+  // Conditional write: refused if the request moved on (status or version) since it was loaded.
+  const updated = await versionedUpdate(prisma, "relocationRequest", {
+    id: row.id,
+    version,
+    where: { status: { in: ["UNDER_REVIEW", "QUOTE_SENT"] } },
     data: {
       status: "QUOTE_SENT",
       quoteAmount: new Prisma.Decimal(amount.toFixed(2)),
@@ -551,15 +558,18 @@ relocationStaff.post("/:id/resolve-payment", async (req, res) => {
 });
 
 relocationStaff.post("/:id/notes", async (req, res) => {
+  const version = requireVersion(req);
   const row = await prisma.relocationRequest.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row) return res.status(404).json({ error: "Request not found" });
-  const updated = await prisma.relocationRequest.update({
-    where: { id: row.id },
+  assertVersion(row, version);
+  const updated = await versionedUpdate(prisma, "relocationRequest", {
+    id: row.id,
+    version,
     data: { staffNotes: String(req.body?.staffNotes || "").trim() || null },
   });
-  res.json({ id: updated.id, staffNotes: updated.staffNotes });
+  res.json({ id: updated.id, staffNotes: updated.staffNotes, version: updated.version });
 });
 
 /** Staff with Relocation → view get a 5-minute signed download link. */

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api } from "../../api/client.js";
+import { api, editErrorMessage, isStaleEdit } from "../../api/client.js";
 import { useI18n } from "../../context/LanguageContext.jsx";
 import { readCart, writeCart } from "../../site/cartStore.js";
 import { CartLines } from "./CartLines.jsx";
@@ -330,14 +330,17 @@ export function ShopAccount() {
             <form onSubmit={async (e) => {
               e.preventDefault();
               try {
-                const next = await shopApi("/api/shop/me", { method: "PATCH", body: profile });
+                // NFR-13: save over the version of the profile that was loaded.
+                const next = await shopApi("/api/shop/me", { method: "PATCH", body: { ...profile, version: me.version } });
                 setMe(next);
                 if (next.locale && next.locale !== locale) setLocale(next.locale);
                 setMsgOk(true);
                 setMsg(t("shop.saved"));
               } catch (err) {
                 setMsgOk(false);
-                setMsg(err.message);
+                setMsg(editErrorMessage(err, t));
+                // Changed elsewhere (another tab, or the shop): reload the latest profile.
+                if (isStaleEdit(err)) await loadMe();
               }
             }}>
               <label className="site-flow__field"><span>{t("customers.name")}</span><input required value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></label>
