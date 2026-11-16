@@ -638,6 +638,10 @@ model Customer {
   verifyTokenHash String?
   resetTokenHash  String?      @unique
   resetExpiresAt  DateTime?
+  /// Confirmation link expiry (48h after it was issued).
+  verifyExpiresAt DateTime?
+  /// Bumped on password reset so older sessions stop working.
+  sessionVersion  Int          @default(0)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   sales          Sale[]
@@ -1117,6 +1121,10 @@ model User {
   name           String
   nameEn         String?
   role           Role
+  /// Deactivated staff cannot sign in; live sessions stop at the next request.
+  active         Boolean      @default(true)
+  /// Bumped on password change / deactivation so older sessions stop working.
+  sessionVersion Int          @default(0)
   branchId       String?
   branch         Branch?      @relation(fields: [branchId], references: [id])
   sales          Sale[]
