@@ -28,15 +28,37 @@ function readUiLocale() {
   return "ar";
 }
 
-/** Prefer bilingual API error fields when present (Gulf AR/EN). */
-export function resolveApiErrorMessage(data, fallback = "Request failed") {
+const ARABIC = /[\u0600-\u06FF]/;
+const GENERIC_ERROR = { ar: "تعذّر إتمام الطلب.", en: "The request could not be completed." };
+
+/** Is `text` written in the UI language (Arabic letters for ar, none for en)? */
+function inLocale(text, locale) {
+  return locale === "ar" ? ARABIC.test(text) : !ARABIC.test(text);
+}
+
+/**
+ * The server's error message in the UI language. The API sends `errorAr` and `errorEn` with
+ * every error; `error` (one language only) is the fallback for older responses. Text in the
+ * other language is never shown: a generic message in the UI language is used instead.
+ */
+export function resolveApiErrorMessage(data, fallback) {
   const locale = readUiLocale();
   if (data && typeof data === "object") {
     if (locale === "en" && data.errorEn) return String(data.errorEn);
     if (locale === "ar" && data.errorAr) return String(data.errorAr);
-    if (data.error) return String(data.error);
+    if (data.error && inLocale(String(data.error), locale)) return String(data.error);
   }
-  return fallback;
+  if (fallback && inLocale(String(fallback), locale)) return String(fallback);
+  return GENERIC_ERROR[locale] || GENERIC_ERROR.en;
+}
+
+/** A row-level message ({ message, messageAr, messageEn }, e.g. import results) in the UI language. */
+export function resolveRowMessage(row) {
+  const locale = readUiLocale();
+  if (!row || typeof row !== "object") return "";
+  if (locale === "en" && row.messageEn) return String(row.messageEn);
+  if (locale === "ar" && row.messageAr) return String(row.messageAr);
+  return String(row.message || "");
 }
 
 /**

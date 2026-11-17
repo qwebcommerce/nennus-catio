@@ -43,7 +43,7 @@ export default function Categories() {
   };
 
   useEffect(() => {
-    load().catch((e) => setError(e.message || "Failed to load"));
+    load().catch((e) => setError(e.message || t("errors.generic")));
   }, []);
 
   const tabs = useMemo(
@@ -63,7 +63,7 @@ export default function Categories() {
       await load();
       if (successMsg) showToast(successMsg, "success");
     } catch (e) {
-      const msg = editErrorMessage(e, t) || "Request failed";
+      const msg = editErrorMessage(e, t) || t("errors.generic");
       setError(msg);
       showToast(msg, "error");
       // NFR-13: someone else saved first — reload the latest rows and close the stale editor.

@@ -269,6 +269,7 @@ const entries = [
   ["shop.address", "العنوان", "Address"],
   ["shop.area", "المنطقة", "Area"],
   ["shop.window", "نافذة التوصيل", "Delivery window"],
+  ["shop.windowFormat", "اكتب الفترة بالشكل HH:MM-HH:MM ثم عدد المقاعد", "Write the window as HH:MM-HH:MM followed by the number of seats"],
   ["shop.pay", "الدفع بالبطاقة", "Pay by card"],
   ["shop.password", "كلمة المرور", "Password"],
   ["shop.register", "إنشاء حساب", "Create account"],

@@ -23,23 +23,29 @@ export default function Promotions() {
       <h1>{t("shop.promotions")}</h1>
       <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={async (e) => {
         e.preventDefault();
-        await api("/api/promotions", {
-          method: "POST",
-          body: {
-            ...form,
-            percent: form.percent === "" ? null : Number(form.percent),
-            amount: form.amount === "" ? null : Number(form.amount),
-            productId: form.productId || null,
-            categoryId: form.categoryId || null,
-            buyQty: form.buyQty === "" ? null : Number(form.buyQty),
-            getQty: form.getQty === "" ? null : Number(form.getQty),
-            bundlePrice: form.bundlePrice === "" ? null : Number(form.bundlePrice),
-            bundleProductIds: form.bundleProductIds.split(",").map((id) => id.trim()).filter(Boolean),
-            minOrderAmount: form.minOrderAmount === "" ? null : Number(form.minOrderAmount),
-            startsAt: form.startsAt || null,
-            endsAt: form.endsAt || null,
-          },
-        });
+        setMsg("");
+        try {
+          await api("/api/promotions", {
+            method: "POST",
+            body: {
+              ...form,
+              percent: form.percent === "" ? null : Number(form.percent),
+              amount: form.amount === "" ? null : Number(form.amount),
+              productId: form.productId || null,
+              categoryId: form.categoryId || null,
+              buyQty: form.buyQty === "" ? null : Number(form.buyQty),
+              getQty: form.getQty === "" ? null : Number(form.getQty),
+              bundlePrice: form.bundlePrice === "" ? null : Number(form.bundlePrice),
+              bundleProductIds: form.bundleProductIds.split(",").map((id) => id.trim()).filter(Boolean),
+              minOrderAmount: form.minOrderAmount === "" ? null : Number(form.minOrderAmount),
+              startsAt: form.startsAt || null,
+              endsAt: form.endsAt || null,
+            },
+          });
+        } catch (err) {
+          setMsg(err.message);
+          return;
+        }
         setForm(empty);
         load();
       }}>

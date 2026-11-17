@@ -28,7 +28,7 @@ export default function PetTypes() {
     const text = window.prompt(`${t("shop.edit")}: ${row.label} (HH:MM-HH:MM seats)`, `${row.startTime}-${row.endTime} ${row.seats}`);
     if (!text) return;
     const m = /^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s+(\d+)\s*$/.exec(text);
-    if (!m) return setMsg("HH:MM-HH:MM seats");
+    if (!m) return setMsg(t("shop.windowFormat"));
     api(`/api/delivery-setup/windows/${row.id}`, { method: "PATCH", body: { startTime: m[1], endTime: m[2], seats: Number(m[3]), version: row.version } }).then(load).catch(fail);
   };
   const toggleWindow = (row) =>
@@ -47,14 +47,14 @@ export default function PetTypes() {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <h1>{t("shop.catalogueSetup")}</h1>
-      <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={(e) => { e.preventDefault(); api("/api/pet-types", { method: "POST", body: form }).then(() => { setForm({ name: "", nameEn: "" }); return load(); }); }}>
+      <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={(e) => { e.preventDefault(); setMsg(""); api("/api/pet-types", { method: "POST", body: form }).then(() => { setForm({ name: "", nameEn: "" }); return load(); }).catch(fail); }}>
         <strong>{t("products.petTypes")}</strong>
         <input required placeholder={t("products.nameArField")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         <input required placeholder={t("products.nameEnField")} value={form.nameEn} onChange={(e) => setForm({ ...form, nameEn: e.target.value })} />
         <button className="btn-touch" type="submit">{t("common.add")}</button>
         {rows.map((row) => <div key={row.id}>{row.name} · {row.nameEn}</div>)}
       </form>
-      <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={(e) => { e.preventDefault(); api("/api/delivery-setup/areas", { method: "POST", body: { ...area, fee: Number(area.fee) } }).then(() => load()).catch(fail); }}>
+      <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={(e) => { e.preventDefault(); setMsg(""); api("/api/delivery-setup/areas", { method: "POST", body: { ...area, fee: Number(area.fee) } }).then(() => load()).catch(fail); }}>
         <strong>{t("shop.area")}</strong>
         <input required placeholder={t("products.nameArField")} value={area.name} onChange={(e) => setArea({ ...area, name: e.target.value })} />
         <input placeholder={t("products.nameEnField")} value={area.nameEn} onChange={(e) => setArea({ ...area, nameEn: e.target.value })} />
@@ -69,7 +69,7 @@ export default function PetTypes() {
           </div>
         ))}
       </form>
-      <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={(e) => { e.preventDefault(); api("/api/delivery-setup/windows", { method: "POST", body: { ...windowForm, seats: Number(windowForm.seats), weekday: windowForm.weekday === "" ? null : Number(windowForm.weekday) } }).then(() => load()).catch(fail); }}>
+      <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={(e) => { e.preventDefault(); setMsg(""); api("/api/delivery-setup/windows", { method: "POST", body: { ...windowForm, seats: Number(windowForm.seats), weekday: windowForm.weekday === "" ? null : Number(windowForm.weekday) } }).then(() => load()).catch(fail); }}>
         <strong>{t("shop.window")}</strong>
         <input required value={windowForm.label} onChange={(e) => setWindowForm({ ...windowForm, label: e.target.value })} placeholder={t("products.nameArField")} />
         <input value={windowForm.labelEn} onChange={(e) => setWindowForm({ ...windowForm, labelEn: e.target.value })} placeholder={t("products.nameEnField")} />

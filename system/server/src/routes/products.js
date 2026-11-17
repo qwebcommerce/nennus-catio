@@ -1231,40 +1231,70 @@ async function deleteStoredProductImages(tx, orgId, product) {
 }
 
 router.delete("/:id", requireModule("products", "delete"), async (req, res) => {
-  try {
-    const existing = await prisma.product.findFirst({
-      where: { id: req.params.id, organizationId: req.user.organizationId },
-    });
-    if (!existing) return res.status(404).json({ error: "المنتج غير موجود" });
-    await prisma.$transaction(async (tx) => {
-      await deleteStoredProductImages(tx, req.user.organizationId, existing);
-      await tx.product.delete({ where: { id: existing.id } });
-    });
-    await removeUnusedProductImages(req.user.organizationId, existing, null);
-    await writeAudit({
-      userId: req.user.sub,
-      action: "PRODUCT_DELETE",
-      entityType: "Product",
-      entityId: existing.id,
-      branchId: req.user.branchId || null,
-      summary: `Deleted product "${existing.nameEn || existing.name}" (SKU: ${existing.sku || "—"})`,
-      meta: {
-        sku: existing.sku,
-        barcode: existing.barcode,
-        price: Number(existing.price) / 100,
-        categoryId: existing.categoryId,
-        subcategoryId: existing.subcategoryId,
-      },
-    });
-    res.status(204).send();
-  } catch (e) {
-    if (e?.code === "P2003") {
-      return res.status(400).json({
-        error: "لا يمكن حذف المنتج لأنه مرتبط بمبيعات/مرتجعات/مشتريات",
-      });
-    }
-    throw e;
+  const existing = await prisma.product.findFirst({
+    where: { id: req.params.id, organizationId: req.user.organizationId },
+    include: { variants: { select: { id: true } } },
+  });
+  if (!existing) {
+    return res.status(404).json({ error: "المنتج غير موجود", errorAr: "المنتج غير موجود", errorEn: "Product not found" });
   }
+  const variantIds = existing.variants.map((v) => v.id);
+  // Trading history (sales, refunds, purchases, website holds, stock received or moved) is kept:
+  // such a product is deactivated instead. Opening stock and stock counts are only adjustments.
+  const [sales, refunds, purchases, poLines, holds, movedStock] = await Promise.all([
+    prisma.saleItem.count({ where: { productId: existing.id } }),
+    prisma.refundItem.count({ where: { productId: existing.id } }),
+    prisma.purchaseItem.count({ where: { productId: existing.id } }),
+    variantIds.length ? prisma.purchaseOrderLine.count({ where: { variantId: { in: variantIds } } }) : 0,
+    prisma.stockHold.count({ where: { productId: existing.id } }),
+    prisma.stockMovement.count({ where: { productId: existing.id, reason: { not: "ADJUSTMENT" } } }),
+  ]);
+  if (sales + refunds + purchases + poLines + holds + movedStock > 0) {
+    return res.status(409).json({
+      error: "لا يمكن حذف هذا المنتج لأن له مبيعات أو مرتجعات أو مشتريات أو حركة مخزون. أوقفه بدلاً من ذلك.",
+      errorAr: "لا يمكن حذف هذا المنتج لأن له مبيعات أو مرتجعات أو مشتريات أو حركة مخزون. أوقفه بدلاً من ذلك.",
+      errorEn: "This product has sales, refunds, purchases or stock activity, so it can't be deleted. Deactivate it instead.",
+      code: "PRODUCT_HAS_HISTORY",
+    });
+  }
+  let removedAdjustments = 0;
+  let stockOnHand = [];
+  await prisma.$transaction(async (tx) => {
+    stockOnHand = [
+      ...(await tx.inventory.findMany({ where: { productId: existing.id, quantity: { not: 0 } }, select: { branchId: true, quantity: true } })),
+      ...(variantIds.length
+        ? await tx.variantStock.findMany({ where: { variantId: { in: variantIds }, quantity: { not: 0 } }, select: { variantId: true, branchId: true, quantity: true } })
+        : []),
+    ];
+    // Opening stock / count adjustments belong to this product only; the audit row below keeps what was on hand.
+    removedAdjustments = (await tx.stockMovement.deleteMany({ where: { productId: existing.id, reason: "ADJUSTMENT" } })).count;
+    await tx.purchaseDraftItem.deleteMany({ where: { productId: existing.id } });
+    await tx.promoDraftItem.deleteMany({ where: { productId: existing.id } });
+    await deleteStoredProductImages(tx, req.user.organizationId, existing);
+    await tx.product.delete({ where: { id: existing.id } });
+    await writeAudit(
+      {
+        userId: req.user.sub,
+        action: "PRODUCT_DELETE",
+        entityType: "Product",
+        entityId: existing.id,
+        branchId: req.user.branchId || null,
+        summary: `Deleted product "${existing.nameEn || existing.name}" (SKU: ${existing.sku || "—"})`,
+        meta: {
+          sku: existing.sku,
+          barcode: existing.barcode,
+          price: Number(existing.price) / 100,
+          categoryId: existing.categoryId,
+          subcategoryId: existing.subcategoryId,
+          stockOnHand,
+          removedAdjustments,
+        },
+      },
+      tx
+    );
+  });
+  await removeUnusedProductImages(req.user.organizationId, existing, null);
+  res.status(204).send();
 });
 
 export default router;
