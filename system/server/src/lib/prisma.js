@@ -19,6 +19,12 @@ if (!globalForPrisma.prisma) {
       user: { passwordHash: true, resetTokenHash: true },
       customer: { passwordHash: true, verifyTokenHash: true, resetTokenHash: true },
     },
+    /**
+     * Interactive transactions: Prisma's 5 s default is too short on Vercel, where every query is a
+     * network round trip to Supabase (a product with variants and opening stock needs dozens).
+     * Stays well inside the 60 s function limit; transactions that pass their own options keep them.
+     */
+    transactionOptions: { maxWait: 10000, timeout: 30000 },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
     ...(datasourceUrl
       ? { datasources: { db: { url: datasourceUrl } } }
