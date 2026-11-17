@@ -87,6 +87,16 @@ Second pass (18 November 2026), also fixed and merged:
 - Server-side SkipCash payment lookup (customer return, staff "check payment status", before a hold expires). The lookup URL is unverified against SkipCash's docs; a failed lookup changes nothing.
 - Uploaded product images are re-encoded (auto-orient, metadata stripped, max 1600 px, WebP).
 
+Third pass (screen-by-screen use and a full business day), also fixed:
+- Every staff screen and the website were used in the browser (desktop, phone, Arabic) and about 50 bugs fixed, among them:
+  weight goods billed 1000x on purchase orders, transfers losing unit cost, till total ignoring offers and coupons until
+  the sale was saved, refunds hitting the wrong variant, resumed held carts staying on the held list, deletes of used
+  categories, suppliers and locations, a deadlock between a till sale and a website payment, and the low-stock list.
+- A scripted business day across all modules (purchase, transfer, till, refund, cash-up, van, website order, grooming,
+  price change, cashier, end-of-day finance) checks that every connected screen agrees: 323 of 323 checks pass.
+- Remaining small gaps: vehicles and promotions can only be paused, not edited; the website checkout does not show the
+  offer discount before the card page (the amount charged is correct).
+
 Still open:
 - Confirm the SkipCash payment-lookup endpoint against SkipCash's API documentation.
 
