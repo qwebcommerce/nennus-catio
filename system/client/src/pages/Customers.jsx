@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -30,10 +30,15 @@ export default function Customers() {
   const [record, setRecord] = useState(null);
   const [petForm, setPetForm] = useState({ name: "", breed: "", ageText: "", notes: "" });
 
+  // Searching sends a request per keystroke: only the newest reply may fill the table.
+  const loadSeq = useRef(0);
   const load = () => {
+    const seq = ++loadSeq.current;
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
-    return api(`/api/customers?${params.toString()}`).then(setList);
+    return api(`/api/customers?${params.toString()}`).then((rows) => {
+      if (seq === loadSeq.current) setList(rows);
+    });
   };
 
   useEffect(() => {

@@ -110,7 +110,11 @@ export default function Products() {
     });
   };
 
+  /** Only the newest list request may fill the table: on a slow line an older reply (say the full
+   *  list from before a search was typed) can arrive last and would overwrite the search results. */
+  const loadSeq = useRef(0);
   const load = async () => {
+    const seq = ++loadSeq.current;
     setListLoading(true);
     try {
       const bid = activeBranchId;
@@ -127,6 +131,7 @@ export default function Products() {
         api(`/api/products${q}`),
         api(`/api/inventory/low-stock${bid ? `?branchId=${bid}` : ""}`),
       ]);
+      if (seq !== loadSeq.current) return res && Array.isArray(res.items) ? res.items : Array.isArray(res) ? res : [];
       if (res && Array.isArray(res.items)) {
         setList(res.items);
         setTotal(res.total ?? 0);
