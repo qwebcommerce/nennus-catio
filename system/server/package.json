@@ -14,7 +14,8 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "node prisma/seed.js",
-    "db:deploy:build": "node scripts/migrate-on-deploy.mjs"
+    "db:deploy:build": "node scripts/migrate-on-deploy.mjs",
+    "check:errors": "node scripts/check-error-messages.mjs"
   },
   "dependencies": {
     "@prisma/client": "6.19.0",

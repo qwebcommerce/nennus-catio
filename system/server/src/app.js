@@ -53,6 +53,7 @@ import {
   schemaDriftMessage,
 } from "./lib/dbErrors.js";
 import { databaseUrlFingerprint } from "./lib/databaseUrlFingerprint.js";
+import { bilingualError, bilingualErrors } from "./lib/errorMessages.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -72,6 +73,8 @@ if (process.env.VERCEL) {
   });
 }
 
+/** Every JSON error response carries both errorAr and errorEn (lib/errorMessages.js). */
+app.use(bilingualErrors);
 app.use(helmetMiddleware);
 /**
  * Sessions are httpOnly cookies, so cross-origin credentialed requests are limited to
@@ -170,6 +173,11 @@ app.use("/api/online-orders", onlineOrderRoutes);
 app.use("/api/delivery-setup", deliverySetupRoutes);
 app.use("/api/cron", cronRoutes);
 
+/** Unknown API paths answer JSON (bilingual) instead of Express's HTML page. */
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "غير موجود", errorAr: "غير موجود", errorEn: "Not found" });
+});
+
 /**
  * Local single-process mode: serve the Vite build from the same Express port.
  * Used by `npm start` from system/ (after client build). Skipped on Vercel
@@ -202,20 +210,19 @@ app.use((err, _req, res, _next) => {
   }
   if (err?.errorAr || err?.errorEn) {
     const status = Number(err.status) || 400;
+    const { ar, en } = bilingualError(err.message, { ar: err.errorAr, en: err.errorEn });
     return res.status(status).json({
       error: err.errorAr || err.message,
-      errorAr: err.errorAr || err.message,
-      errorEn: err.errorEn || err.message,
+      errorAr: ar,
+      errorEn: en,
       ...(err.code ? { code: err.code } : {}),
       ...(err.extra && typeof err.extra === "object" ? err.extra : {}),
     });
   }
   if (err?.status && Number(err.status) >= 400 && Number(err.status) < 500) {
-    return res.status(Number(err.status)).json({
-      error: err.message || "طلب غير صالح",
-      errorAr: err.message || "طلب غير صالح",
-      errorEn: err.message || "Bad request",
-    });
+    const message = err.message || "طلب غير صالح";
+    const { ar, en } = bilingualError(message);
+    return res.status(Number(err.status)).json({ error: message, errorAr: ar, errorEn: en });
   }
   if (isDbUnavailableError(err)) {
     console.error("[db]", err.message);
