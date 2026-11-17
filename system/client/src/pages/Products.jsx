@@ -1607,6 +1607,9 @@ export default function Products() {
             inset: 0,
             zIndex: 70,
             display: "grid",
+            // One shrinkable column: an auto track grew to the table's width on a phone and
+            // pushed "Save as drafts" off the screen.
+            gridTemplateColumns: "minmax(0, 1fr)",
             placeItems: "center",
             padding: 16,
             background: "rgba(15, 23, 42, 0.55)",
@@ -1619,6 +1622,8 @@ export default function Products() {
             className="card"
             style={{
               width: "min(960px, 100%)",
+              minWidth: 0,
+              boxSizing: "border-box",
               maxHeight: "90vh",
               margin: 0,
               display: "flex",
