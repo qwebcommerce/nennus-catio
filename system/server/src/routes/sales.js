@@ -7,8 +7,11 @@ import { writeAudit } from "../lib/auditLog.js";
 import { mailStaff } from "../lib/mailer.js";
 import { saleRequiresOpenCashSession } from "../lib/saleCash.js";
 import {
+  BUSY_RETRY,
   dbUnavailableMessage,
   isDbUnavailableError,
+  isDeadlockError,
+  stockRowKey,
 } from "../lib/dbErrors.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
@@ -530,7 +533,9 @@ router.post("/checkout", async (req, res) => {
         include: saleInclude,
       });
 
-      for (const l of lineData) {
+      // Stock rows are taken in one fixed order (as website payments do) so a till sale and a
+      // payment touching the same rows cannot deadlock.
+      for (const l of [...lineData].sort((a, b) => stockRowKey({ ...a, branchId: bid }).localeCompare(stockRowKey({ ...b, branchId: bid })))) {
         if (l.variantId) {
           const updated = await tx.variantStock.updateMany({
             where: { variantId: l.variantId, branchId: bid, quantity: { gte: l.quantity } },
@@ -598,7 +603,7 @@ router.post("/checkout", async (req, res) => {
       const row = line.variantId
         ? await prisma.variantStock.findUnique({ where: { variantId_branchId: { variantId: line.variantId, branchId: bid } } })
         : await prisma.inventory.findUnique({ where: { productId_branchId: { productId: line.productId, branchId: bid } } });
-      if (row && row.quantity <= row.minStockLevel) lowNames.push(line.productId);
+      if (row && row.minStockLevel > 0 && row.quantity <= row.minStockLevel) lowNames.push(line.productId);
     }
     if (lowNames.length) {
       // Queued only; an email problem never fails the saved sale.
@@ -613,6 +618,10 @@ router.post("/checkout", async (req, res) => {
     }
     if (isDbUnavailableError(e)) {
       return res.status(503).json({ error: dbUnavailableMessage });
+    }
+    if (isDeadlockError(e)) {
+      // Nothing was saved (the transaction rolled back): the cashier just presses again.
+      return res.status(409).json(BUSY_RETRY);
     }
     if (
       clientMutationId &&

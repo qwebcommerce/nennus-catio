@@ -1,3 +1,4 @@
+import { stockRowKey } from "./dbErrors.js";
 import { prisma } from "./prisma.js";
 import { lookupExpiredPayments } from "./paymentLookup.js";
 
@@ -134,7 +135,9 @@ async function takeStock(tx, { organizationId, productId, variantId, branchId, q
  * swept) the payment is late and this throws HOLD_RELEASED so the caller rolls back.
  */
 export async function commitSaleHolds(tx, sale) {
-  const holds = await tx.stockHold.findMany({ where: { saleId: sale.id, status: { in: ["HELD", "RELEASED"] } } });
+  // Same row order as the till (stockRowKey) so two sales never wait on each other in a cycle.
+  const holds = (await tx.stockHold.findMany({ where: { saleId: sale.id, status: { in: ["HELD", "RELEASED"] } } }))
+    .sort((a, b) => stockRowKey(a).localeCompare(stockRowKey(b)));
   for (const hold of holds) {
     const claimed = await tx.stockHold.updateMany({
       where: { id: hold.id, status: "HELD" },
@@ -160,7 +163,8 @@ export async function commitSaleHolds(tx, sale) {
  * A later cancel then restores it through restoreCommittedHolds as usual.
  */
 export async function recommitReleasedHolds(tx, sale) {
-  const holds = await tx.stockHold.findMany({ where: { saleId: sale.id, status: { in: ["HELD", "RELEASED"] } } });
+  const holds = (await tx.stockHold.findMany({ where: { saleId: sale.id, status: { in: ["HELD", "RELEASED"] } } }))
+    .sort((a, b) => stockRowKey(a).localeCompare(stockRowKey(b)));
   for (const hold of holds) {
     const claimed = await tx.stockHold.updateMany({
       where: { id: hold.id, status: hold.status },
@@ -183,7 +187,8 @@ export async function releaseSaleHolds(tx, saleId) {
 
 /** Puts committed stock back exactly once per hold (guarded COMMITTED -> RELEASED). */
 export async function restoreCommittedHolds(tx, saleId) {
-  const holds = await tx.stockHold.findMany({ where: { saleId, status: "COMMITTED" } });
+  const holds = (await tx.stockHold.findMany({ where: { saleId, status: "COMMITTED" } }))
+    .sort((a, b) => stockRowKey(a).localeCompare(stockRowKey(b)));
   const now = new Date();
   for (const hold of holds) {
     const claimed = await tx.stockHold.updateMany({

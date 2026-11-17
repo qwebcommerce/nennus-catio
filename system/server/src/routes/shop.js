@@ -6,6 +6,7 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { customerSession, endCustomerSession, startCustomerSession } from "../lib/customerSession.js";
+import { isDeadlockError } from "../lib/dbErrors.js";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
 import { assertStockForHolds, commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
 import { LOCK_TX, statusError } from "../lib/payments.js";
@@ -1079,9 +1080,21 @@ router.post("/payments/skipcash", async (req, res) => {
   }
   try {
     // Same guarded confirm path as the server's own payment lookup (lib/gatewayNotify.js).
-    const result = await applyGatewayResult(body, { req });
+    // A deadlock with a till sale on the same stock rolls back cleanly: try again a few times.
+    let result;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        result = await applyGatewayResult(body, { req });
+        break;
+      } catch (err) {
+        if (!isDeadlockError(err) || attempt >= 3) throw err;
+        await new Promise((r) => setTimeout(r, 100 * attempt));
+      }
+    }
     res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
   } catch (e) {
+    // Still contended after retries: 503 so the gateway sends the webhook again later.
+    if (isDeadlockError(e)) return res.status(503).json({ error: "Busy, retry later" });
     res.status(e.status || 500).json({ error: e.message || "Could not update the order" });
   }
 });
