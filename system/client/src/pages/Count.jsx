@@ -20,6 +20,7 @@ export default function Count() {
   const [products, setProducts] = useState([]);
   const [counts, setCounts] = useState({});
   const [msg, setMsg] = useState("");
+  const [filter, setFilter] = useState("");
 
   useEffect(() => {
     const bid = branchId;
@@ -35,7 +36,7 @@ export default function Count() {
           if (vs.length) {
             for (const v of vs) {
               const st = (v.stocks || []).find((row) => row.branchId === bid);
-              rows.push({ key: `${p.id}::${v.id}`, productId: p.id, variantId: v.id, product: p, label: v.label, qty: st?.quantity ?? 0 });
+              rows.push({ key: `${p.id}::${v.id}`, productId: p.id, variantId: v.id, product: p, label: locale === "en" ? v.labelEn || v.label : v.label, qty: st?.quantity ?? 0 });
             }
           } else {
             rows.push({ key: p.id, productId: p.id, variantId: null, product: p, label: "", qty: p.inventories?.[0]?.quantity ?? 0 });
@@ -84,6 +85,14 @@ export default function Count() {
       <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>{t("count.intro")}</p>
 
       <form className="card" onSubmit={submit}>
+        <input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder={t("products.searchPlaceholder")}
+          aria-label={t("products.searchPlaceholder")}
+          style={{ ...inp, width: "100%", boxSizing: "border-box", marginBottom: 10 }}
+        />
         <div style={{ overflowX: "auto", maxHeight: "60vh" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
@@ -93,7 +102,12 @@ export default function Count() {
               </tr>
             </thead>
             <tbody>
-              {products.map((p) => (
+              {products.filter((p) => {
+                const needle = filter.trim().toLowerCase();
+                if (!needle) return true;
+                const hay = [p.product?.name, p.product?.nameEn, p.product?.sku, p.product?.barcode, p.label].filter(Boolean).join(" ").toLowerCase();
+                return hay.includes(needle);
+              }).map((p) => (
                 <tr key={p.key}>
                   <td style={td}>
                     {productDisplayName(p.product, locale)}
@@ -104,6 +118,7 @@ export default function Count() {
                       type="number"
                       min={0}
                       step={1}
+                      aria-label={`${productDisplayName(p.product, locale)}${p.label ? ` — ${p.label}` : ""}`}
                       value={counts[p.key] ?? "0"}
                       onChange={(e) => setCounts({ ...counts, [p.key]: e.target.value })}
                       style={{ ...inp, width: 100 }}
