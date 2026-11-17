@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useOffline } from "../context/OfflineContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { productDisplayName } from "../utils/productName.js";
@@ -284,7 +285,7 @@ export default function Returns() {
           <tbody>
             {list.map((r) => (
               <tr key={r.id}>
-                <td style={td}>{new Date(r.createdAt).toLocaleString()}</td>
+                <td style={td}>{formatDateTime(r.createdAt, locale)}</td>
                 <td style={td}>
                   {Number(r.total).toFixed(2)} {t("common.currency")}
                 </td>

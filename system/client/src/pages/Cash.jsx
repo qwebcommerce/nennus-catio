@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 
 const inp = {
@@ -13,7 +14,7 @@ const inp = {
 };
 
 export default function Cash() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { can } = useAuth();
   const branchId = useActiveBranchId();
   const canOperate = can("cashSession");
@@ -108,7 +109,7 @@ export default function Cash() {
         {openSession ? (
           <div style={{ marginTop: 8 }}>
             <div>
-              {t("cash.openSince")} {new Date(openSession.openedAt).toLocaleString()}
+              {t("cash.openSince")} {formatDateTime(openSession.openedAt, locale)}
             </div>
             <div>
               {t("cash.openingFloat")} {Number(openSession.openingFloat).toFixed(2)} {t("common.currency")}
@@ -222,11 +223,11 @@ export default function Cash() {
             {sessions.map((s) => (
               <tr key={s.id}>
                 <td style={td}>
-                  {new Date(s.openedAt).toLocaleString()}
+                  {formatDateTime(s.openedAt, locale)}
                   {s.closedAt ? (
                     <>
                       <br />
-                      <span style={{ fontSize: 12, color: "var(--muted)" }}>→ {new Date(s.closedAt).toLocaleString()}</span>
+                      <span style={{ fontSize: 12, color: "var(--muted)" }}>→ {formatDateTime(s.closedAt, locale)}</span>
                     </>
                   ) : null}
                 </td>

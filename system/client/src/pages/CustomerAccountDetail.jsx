@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 
 export default function CustomerAccountDetail() {
   const { customerId } = useParams();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [data, setData] = useState(null);
   const [msg, setMsg] = useState("");
   const [payAmount, setPayAmount] = useState("");
@@ -166,7 +167,7 @@ export default function CustomerAccountDetail() {
                 ) : (
                   (entries || []).map((row) => (
                     <tr key={row.id}>
-                      <td className="ca-detail-table__nowrap">{new Date(row.createdAt).toLocaleString()}</td>
+                      <td className="ca-detail-table__nowrap">{formatDateTime(row.createdAt, locale)}</td>
                       <td>
                         <span className={`ca-type ca-type--${String(row.entryType || "").toLowerCase()}`}>
                           {typeLabel(row.entryType)}

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 
 const inp = {
@@ -392,7 +393,7 @@ export default function Purchases() {
           <tbody>
             {list.map((p) => (
               <tr key={p.id}>
-                <td style={td}>{new Date(p.createdAt).toLocaleString()}</td>
+                <td style={td}>{formatDateTime(p.createdAt, locale)}</td>
                 <td style={td}>{p.supplier?.name || "—"}</td>
                 <td style={td}>
                   {p.items?.map((it) => `${nameOf(it.product) || "?"} ×${it.quantity} @${Number(it.unitCost).toFixed(2)}`).join(locale === "en" ? ", " : "، ")}
