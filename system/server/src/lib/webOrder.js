@@ -8,6 +8,9 @@ import { lookupExpiredPayments } from "./paymentLookup.js";
  * still to come (or in flight on another instance) are left for the next sweep.
  */
 export async function sweepExpiredHolds() {
+  // The demo-data loader (scripts/demo-data.mjs) must not touch other orders' holds or ask the
+  // payment gateway about them.
+  if (process.env.NC_DEMO_LOADER === "1") return;
   let deferred = { saleIds: [], appointmentIds: [] };
   try {
     deferred = await lookupExpiredPayments();
