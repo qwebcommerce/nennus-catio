@@ -867,7 +867,8 @@ router.post("/checkout", async (req, res) => {
             where: { productId_branchId: { productId: product.id, branchId: branch.id } },
           });
       const onHand = stockRow?.quantity ?? 0;
-      unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : 0;
+      // No cost recorded at the website location yet: the product cost, never a silent 0.
+      unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : !variant && product.cost != null ? d(product.cost) : 0;
         const held = await heldQuantity(prisma, {
           branchId: branch.id,
           productId: product.id,
