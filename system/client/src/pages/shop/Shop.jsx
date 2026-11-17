@@ -117,6 +117,7 @@ export function ShopProduct() {
       name: product.name,
       nameEn: product.nameEn,
       variantLabel: variant?.label || "",
+      variantLabelEn: variant?.labelEn || "",
       sellBy: product.sellBy,
       houseDeliveryFee: product.isPetHouse ? Number(product.houseDeliveryFee || 0) : 0,
       price,
@@ -241,7 +242,7 @@ export function ShopCheckout() {
                     {(meta?.areas || []).map((area) => <option key={area.id} value={area.id}>{[area.city, locale === "en" ? area.nameEn || area.name : area.name].filter(Boolean).join(" · ")} · {money(area.fee)}</option>)}
                   </select>
                 </label>
-                <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required value={form.deliveryDate} onChange={(e) => setForm({ ...form, deliveryDate: e.target.value, windowId: "" })} /></label>
+                <label className="site-flow__field"><span>{t("shop.deliveryDay")}</span><input type="date" required value={form.deliveryDate} onChange={(e) => setForm({ ...form, deliveryDate: e.target.value, windowId: "" })} /></label>
               </div>
               <label className="site-flow__field"><span>{t("shop.window")}</span>
                 <select required value={form.windowId} onChange={set("windowId")}>
@@ -361,7 +362,19 @@ export function ShopAccount() {
             <div className="site-flow__list">
               {(me.pets || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.name}</span><span>{[row.breed, row.ageText].filter(Boolean).join(" · ")}</span><button type="button" onClick={() => shopApi(`/api/shop/me/pets/${row.id}`, { method: "DELETE" }).then(loadMe).catch((err) => { setMsgOk(false); setMsg(err.message); })}>{t("common.delete")}</button></div>)}
             </div>
-            <form onSubmit={async (e) => { e.preventDefault(); await shopApi("/api/shop/me/pets", { method: "POST", body: pet }); setPet({ name: "", breed: "", ageText: "" }); await loadMe(); }}>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await shopApi("/api/shop/me/pets", { method: "POST", body: pet });
+                setPet({ name: "", breed: "", ageText: "" });
+                await loadMe();
+                setMsgOk(true);
+                setMsg(t("shop.saved"));
+              } catch (err) {
+                setMsgOk(false);
+                setMsg(err.message);
+              }
+            }}>
               <label className="site-flow__field"><span>{t("shop.petName")}</span><input required value={pet.name} onChange={(e) => setPet({ ...pet, name: e.target.value })} /></label>
               <div className="site-flow__pair">
                 <label className="site-flow__field"><span>{t("shop.breed")}</span><input value={pet.breed} onChange={(e) => setPet({ ...pet, breed: e.target.value })} /></label>
@@ -375,7 +388,19 @@ export function ShopAccount() {
             <div className="site-flow__list">
               {(me.addresses || []).map((row) => <div className="site-flow__item" key={row.id}><span>{row.line1}</span><span>{row.area}</span><button type="button" onClick={() => shopApi(`/api/shop/me/addresses/${row.id}`, { method: "DELETE" }).then(loadMe).catch((err) => { setMsgOk(false); setMsg(err.message); })}>{t("common.delete")}</button></div>)}
             </div>
-            <form onSubmit={async (e) => { e.preventDefault(); await shopApi("/api/shop/me/addresses", { method: "POST", body: address }); setAddress({ line1: "", area: "", city: "Doha" }); await loadMe(); }}>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await shopApi("/api/shop/me/addresses", { method: "POST", body: address });
+                setAddress({ line1: "", area: "", city: "Doha" });
+                await loadMe();
+                setMsgOk(true);
+                setMsg(t("shop.saved"));
+              } catch (err) {
+                setMsgOk(false);
+                setMsg(err.message);
+              }
+            }}>
               <label className="site-flow__field"><span>{t("shop.address")}</span><input required value={address.line1} onChange={(e) => setAddress({ ...address, line1: e.target.value })} /></label>
               <label className="site-flow__field"><span>{t("shop.area")}</span><input value={address.area} onChange={(e) => setAddress({ ...address, area: e.target.value })} /></label>
               <button className="button button--primary" type="submit">{t("common.add")}</button>
@@ -470,9 +495,15 @@ export function ShopOrders() {
     else shopApi("/api/shop/orders").then(setRows).catch((e) => setMsg(e.message));
   }, [id]);
   const cancel = async () => {
-    await shopApi(`/api/shop/orders/${id}/cancel`, { method: "POST", body: {} });
-    const next = await shopApi(`/api/shop/orders/${id}`);
-    setOne(next);
+    if (!window.confirm(t("shop.confirmCancel"))) return;
+    setMsg("");
+    try {
+      await shopApi(`/api/shop/orders/${id}/cancel`, { method: "POST", body: {} });
+      const next = await shopApi(`/api/shop/orders/${id}`);
+      setOne(next);
+    } catch (e) {
+      setMsg(e.message);
+    }
   };
   if (id) {
     return (
@@ -484,9 +515,10 @@ export function ShopOrders() {
             {one.createdAt ? <div>{formatDateTime(one.createdAt, locale)}</div> : null}
             <div>{money(one.total)} QAR · {statusLabel("fulfillment", one.fulfillment, locale)}</div>
             {(one.items || []).map((item, index) => (
-              <div key={index}>{locale === "en" ? item.nameEn || item.name : item.name} · {item.sellBy === "WEIGHT" ? `${item.quantity / 1000} kg` : item.quantity}</div>
+              <div key={index}>{locale === "en" ? item.nameEn || item.name : item.name}{item.variant ? ` · ${locale === "en" ? item.variantEn || item.variant : item.variant}` : ""} · {item.sellBy === "WEIGHT" ? `${item.quantity / 1000} kg` : item.quantity}</div>
             ))}
-            {one.status === "CONFIRMED" ? <button type="button" onClick={cancel}>{t("shop.cancelOrder")}</button> : null}
+            {one.status === "CONFIRMED" && !one.guest ? <button type="button" className="button button--secondary" onClick={cancel}>{t("shop.cancelOrder")}</button> : null}
+            {msg ? <div className="site-flow__alert">{msg}</div> : null}
           </>
         ) : <p>{msg || t("common.loading")}</p>}
         <Link to="/shop/orders">{t("shop.orders")}</Link>

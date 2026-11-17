@@ -591,6 +591,22 @@ router.get("/orders", async (req, res) => {
 });
 
 router.get("/orders/:id", async (req, res) => {
+  // A guest coming back from the card page has no account session: the gateway payment id on the
+  // return URL (known only to whoever paid) shows that one order's confirmation, without the address.
+  const returnPaymentId = String(req.query.paymentId || "").trim();
+  if (returnPaymentId && !(await customerSession(req, res))) {
+    const guest = await prisma.sale.findFirst({
+      where: { id: req.params.id, orderChannel: "WEBSITE", gatewayPaymentId: returnPaymentId },
+      select: { id: true, webStatus: true, gatewayPaymentId: true },
+    });
+    if (!guest) return res.status(404).json({ error: "Order not found" });
+    await lookupOnReturn(req, "sale", guest, guest.webStatus === "PENDING_PAYMENT");
+    const sale = await prisma.sale.findUnique({
+      where: { id: guest.id },
+      include: { items: { include: { product: { select: { name: true, nameEn: true, sellBy: true } }, variant: true } } },
+    });
+    return res.json({ ...publicOrder(sale), deliveryAddress: null, guest: true });
+  }
   const session = await requireCustomer(req, res);
   if (!session) return;
   const owned = await prisma.sale.findFirst({
@@ -620,6 +636,7 @@ function publicOrder(sale) {
       name: item.product?.name,
       nameEn: item.product?.nameEn,
       variant: item.variant?.label || null,
+      variantEn: item.variant?.labelEn || null,
       sellBy: item.product?.sellBy,
       quantity: item.quantity,
       unitPrice: riyals(item.unitPrice),

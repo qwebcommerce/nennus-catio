@@ -79,13 +79,13 @@ export function ShopGroomingBook() {
           <button type="button" className={form.visitKind === "HOME" ? "is-active" : ""} onClick={() => setForm({ ...form, visitKind: "HOME" })}>{t("shop.homeVisit")}</button>
         </div>
         <div className="site-flow__pair">
-          <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required min={qatarToday()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
-          <label className="site-flow__field"><span>{t("shop.window")}</span>
+          <label className="site-flow__field"><span>{t("shop.bookDate")}</span><input type="date" required min={qatarToday()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
+          <label className="site-flow__field"><span>{t("shop.bookTime")}</span>
             <select required value={form.startAt} onChange={(e) => {
               const slot = slots.find((row) => row.startAt === e.target.value);
               setForm({ ...form, startAt: slot?.startAt || "", endAt: slot?.endAt || "" });
             }}>
-              <option value="">{t("shop.window")}</option>
+              <option value="">{slots.length || !form.date ? t("shop.bookTime") : t("shop.noTimes")}</option>
               {slots.map((slot) => <option key={slot.startAt} value={slot.startAt}>{qatarTime(slot.startAt, locale)} · {slot.seatsLeft}</option>)}
             </select>
           </label>

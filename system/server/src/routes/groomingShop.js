@@ -139,9 +139,13 @@ router.get("/bookings", async (req, res) => {
 router.get("/bookings/:id", async (req, res) => {
   const session = await customerSession(req, res);
   const org = await shopOrg();
-  if (!session || !org) return res.status(401).json({ error: "Sign in to see bookings" });
+  // A guest back from the card page proves the booking with the gateway payment id on the return URL.
+  const returnPaymentId = String(req.query.paymentId || "").trim();
+  if (!org || (!session && !returnPaymentId)) return res.status(401).json({ error: "Sign in to see bookings" });
   let row = await prisma.appointment.findFirst({
-    where: { id: req.params.id, organizationId: org.id, customerId: session.sub },
+    where: session
+      ? { id: req.params.id, organizationId: org.id, customerId: session.sub }
+      : { id: req.params.id, organizationId: org.id, gatewayPaymentId: returnPaymentId },
     include: { service: true },
   });
   if (!row) return res.status(404).json({ error: "Booking not found" });
@@ -149,7 +153,7 @@ router.get("/bookings/:id", async (req, res) => {
   if (await lookupOnReturn(req, "appointment", row, row.status === "PENDING_PAYMENT")) {
     row = await prisma.appointment.findUnique({ where: { id: row.id }, include: { service: true } });
   }
-  res.json(publicBooking(row, org));
+  res.json(session ? publicBooking(row, org) : { ...publicBooking(row, org), canCancel: false, guest: true });
 });
 
 router.post("/bookings/:id/cancel", async (req, res) => {
