@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
 
 const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "", creditApproved: false, creditLimit: "" });
 
@@ -16,7 +17,7 @@ function editFormOf(c) {
 }
 
 export default function Customers() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { isAdmin, isManager, can } = useAuth();
   const showReceivable = can("receivables");
   const showOpeningBalance = isManager;
@@ -146,17 +147,20 @@ export default function Customers() {
         <div className="customers-form__grid">
           <input
             placeholder={t("customers.name")}
+            aria-label={t("customers.name")}
             required
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
           />
           <input
             placeholder={t("customers.phone")}
+            aria-label={t("customers.phone")}
             value={form.phone}
             onChange={(e) => setForm({ ...form, phone: e.target.value })}
           />
           <input
             placeholder={t("customers.email")}
+            aria-label={t("customers.email")}
             type="email"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -164,6 +168,7 @@ export default function Customers() {
           {showOpeningBalance ? (
             <input
               placeholder={t("customers.balancePlaceholder")}
+            aria-label={t("customers.balancePlaceholder")}
               type="number"
               min={0}
               step="0.01"
@@ -173,15 +178,17 @@ export default function Customers() {
           ) : null}
           <input
             placeholder={t("customers.notes")}
+            aria-label={t("customers.notes")}
             value={form.notes}
             onChange={(e) => setForm({ ...form, notes: e.target.value })}
           />
-          <label>
+          <label className="customers-check">
             <input type="checkbox" checked={Boolean(form.creditApproved)} onChange={(e) => setForm({ ...form, creditApproved: e.target.checked })} />
             {t("shop.credit")}
           </label>
           <input
             placeholder={t("shop.creditLimit")}
+            aria-label={t("shop.creditLimit")}
             value={form.creditLimit}
             onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
           />
@@ -197,6 +204,7 @@ export default function Customers() {
         <section className="card" style={{ display: "grid", gap: 8 }}>
           <strong>{t("shop.pets")}</strong>
           <select
+            aria-label={t("customers.name")}
             value={recordId}
             onChange={(e) => {
               const id = e.target.value;
@@ -212,12 +220,12 @@ export default function Customers() {
             <div key={pet.id}>{pet.name} · {pet.breed || "—"} · {pet.ageText || "—"}{pet.notes ? ` · ${pet.notes}` : ""}</div>
           ))}
           {(record?.addresses || []).map((row) => <div key={row.id}>{row.line1} {row.area} {row.city}</div>)}
-          {(record?.sales || []).map((row) => <div key={row.id}>{row.reference || row.invoiceNumber || row.id.slice(0, 8)} · {row.orderChannel || ""} · {Number(row.total).toFixed(2)}</div>)}
-          {(record?.appointments || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.service?.name || t("shop.grooming")} · {row.status}</div>)}
-          {(record?.relocationRequests || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.destination} · {row.status}</div>)}
+          {(record?.sales || []).map((row) => <div key={row.id}>{row.reference || row.invoiceNumber || row.id.slice(0, 8)} · {statusLabel("channel", row.orderChannel, locale)} · {Number(row.total).toFixed(2)}</div>)}
+          {(record?.appointments || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.service?.name || t("shop.grooming")} · {statusLabel("booking", row.status, locale)}</div>)}
+          {(record?.relocationRequests || []).map((row) => <div key={row.id}>{row.reference ? `${row.reference} · ` : ""}{row.destination} · {statusLabel("relocation", row.status, locale)}</div>)}
           {recordId && record ? (
             <form onSubmit={saveTags} style={{ display: "flex", gap: 8 }}>
-              <input placeholder={t("shop.tags")} value={record.tags || ""} onChange={(e) => setRecord({ ...record, tags: e.target.value })} />
+              <input placeholder={t("shop.tags")} aria-label={t("shop.tags")} value={record.tags || ""} onChange={(e) => setRecord({ ...record, tags: e.target.value })} />
               <button className="btn-touch" type="submit">{t("common.save")}</button>
             </form>
           ) : null}
@@ -226,14 +234,20 @@ export default function Customers() {
               style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
               onSubmit={async (e) => {
                 e.preventDefault();
-                await api(`/api/customers/${recordId}/pets`, { method: "POST", body: petForm });
-                setPetForm({ name: "", breed: "", ageText: "", notes: "" });
-                setRecord(await api(`/api/customers/${recordId}/record`));
+                setMsg("");
+                try {
+                  await api(`/api/customers/${recordId}/pets`, { method: "POST", body: petForm });
+                  setPetForm({ name: "", breed: "", ageText: "", notes: "" });
+                  setRecord(await api(`/api/customers/${recordId}/record`));
+                  setMsg(t("customers.saved"));
+                } catch (x) {
+                  setMsg(x.message || t("customers.saveFailed"));
+                }
               }}
             >
-              <input required placeholder={t("shop.petName")} value={petForm.name} onChange={(e) => setPetForm({ ...petForm, name: e.target.value })} />
-              <input placeholder={t("shop.breed")} value={petForm.breed} onChange={(e) => setPetForm({ ...petForm, breed: e.target.value })} />
-              <input placeholder={t("shop.age")} value={petForm.ageText} onChange={(e) => setPetForm({ ...petForm, ageText: e.target.value })} />
+              <input required placeholder={t("shop.petName")} aria-label={t("shop.petName")} value={petForm.name} onChange={(e) => setPetForm({ ...petForm, name: e.target.value })} />
+              <input placeholder={t("shop.breed")} aria-label={t("shop.breed")} value={petForm.breed} onChange={(e) => setPetForm({ ...petForm, breed: e.target.value })} />
+              <input placeholder={t("shop.age")} aria-label={t("shop.age")} value={petForm.ageText} onChange={(e) => setPetForm({ ...petForm, ageText: e.target.value })} />
               <input placeholder={t("customers.notes")} value={petForm.notes} onChange={(e) => setPetForm({ ...petForm, notes: e.target.value })} />
               <button className="btn-touch" type="submit">{t("common.add")}</button>
             </form>
@@ -297,7 +311,7 @@ export default function Customers() {
                         value={editing.notes || ""}
                         onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
                       />
-                      <label>
+                      <label className="customers-check">
                         <input type="checkbox" checked={Boolean(editing.creditApproved)} onChange={(e) => setEditing({ ...editing, creditApproved: e.target.checked })} />
                         {t("shop.credit")}
                       </label>

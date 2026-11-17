@@ -3154,8 +3154,8 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.65rem;
 }
-.customers-form__grid input,
-.customers-table input {
+.customers-form__grid input:not([type="checkbox"]),
+.customers-table input:not([type="checkbox"]) {
   width: 100%;
   box-sizing: border-box;
   padding: 0.65rem 0.75rem;
@@ -3164,6 +3164,20 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+/* Checkbox with its text on one line, as tall as the inputs beside it. */
+.customers-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  cursor: pointer;
+}
+.customers-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: 0 0 auto;
 }
 .customers-form__submit {
   background: var(--accent);
