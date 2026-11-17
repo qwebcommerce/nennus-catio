@@ -47,7 +47,7 @@ function emptyProductForm() {
 }
 
 export default function Products() {
-  const { user, isAdmin, can } = useAuth();
+  const { user, isAdmin, can, canModule } = useAuth();
   const { t, locale } = useI18n();
   const { showToast } = useToast();
   const { classFor } = usePrintSettings();
@@ -167,7 +167,8 @@ export default function Products() {
         setPetTypes([]);
         setPetTypesError(true);
       });
-    api("/api/suppliers").then(setSuppliers).catch(() => setSuppliers([]));
+    // The preferred-supplier list needs Purchasing → view; without it the field just stays empty.
+    if (canModule("purchasing", "view")) api("/api/suppliers").then(setSuppliers).catch(() => setSuppliers([]));
   }, []);
 
   useEffect(() => {
