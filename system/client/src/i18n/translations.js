@@ -1093,6 +1093,8 @@ const entries = [
   ["shop.confirmCancel", "إلغاء هذا الطلب؟ سيقوم المتجر بإعادة المبلغ المدفوع.", "Cancel this order? The shop will refund what you paid."],
   ["shop.requestSent", "تم إرسال الطلب. سنراجع المستندات ونرسل لك عرض السعر.", "Request sent. We will review the documents and send you a quote."],
   ["shop.confirmCancelBooking", "إلغاء هذا الحجز؟", "Cancel this booking?"],
+  ["reports.expenseAdded", "تم تسجيل المصروف", "Expense recorded"],
+  ["settings.business", "بيانات النشاط", "Business details"],
   ["groom.duration", "المدة (دقيقة)", "Duration (minutes)"],
   ["groom.capacity", "عدد الحجوزات في نفس الوقت", "Bookings at the same time"],
   ["groom.pricePrompt", "السعر الجديد (ر.ق)", "New price (QAR)"],
