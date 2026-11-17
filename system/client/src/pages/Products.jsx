@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, apiBlob, apiUploadExcel, apiUploadImage, editErrorMessage, isStaleEdit } from "../api/client.js";
+import { api, apiBlob, apiUploadExcel, apiUploadImage, editErrorMessage, isStaleEdit, resolveRowMessage } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
@@ -572,7 +572,7 @@ export default function Products() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      showToast(e.message || "Download failed", "error");
+      showToast(e.message || t("errors.generic"), "error");
     } finally {
       setExcelBusy(false);
     }
@@ -596,7 +596,7 @@ export default function Products() {
       URL.revokeObjectURL(url);
       showToast(t("products.toastExported"), "success");
     } catch (e) {
-      showToast(e.message || "Export failed", "error");
+      showToast(e.message || t("errors.generic"), "error");
     } finally {
       setExcelBusy(false);
     }
@@ -619,7 +619,7 @@ export default function Products() {
       }
       setImportRows(rows);
     } catch (err) {
-      showToast(err.message || "Import failed", "error");
+      showToast(err.message || t("errors.generic"), "error");
     } finally {
       setExcelBusy(false);
     }
@@ -656,14 +656,14 @@ export default function Products() {
         r.errors?.length > 0
           ? `\n${r.errors
               .slice(0, 5)
-              .map((x) => (locale === "en" ? `Row ${x.row}: ${x.message}` : `صف ${x.row}: ${x.message}`))
+              .map((x) => (locale === "en" ? `Row ${x.row}: ${resolveRowMessage(x)}` : `صف ${x.row}: ${resolveRowMessage(x)}`))
               .join("\n")}${r.errors.length > 5 ? "\n…" : ""}`
           : "";
       showToast(msg + detail, (r.errorCount ?? 0) > 0 ? "info" : "success", { duration: 5000 });
       setImportRows(null);
       await load();
     } catch (err) {
-      showToast(err.message || "Import failed", "error");
+      showToast(err.message || t("errors.generic"), "error");
     } finally {
       setImportBusy(false);
     }

@@ -19,7 +19,13 @@ export default function Vehicles() {
       <h1>{t("shop.vehicles")}</h1>
       <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={async (e) => {
         e.preventDefault();
-        await api("/api/vehicles", { method: "POST", body: { ...form, branchId: form.branchId || null } });
+        setMsg("");
+        try {
+          await api("/api/vehicles", { method: "POST", body: { ...form, branchId: form.branchId || null } });
+        } catch (err) {
+          setMsg(err.message);
+          return;
+        }
         setForm({ name: "", plate: "", branchId: "", notes: "" });
         load();
       }}>

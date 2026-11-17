@@ -41,7 +41,7 @@ export default function Permissions() {
   useEffect(() => {
     load().catch((e) => {
       setLoadOk(false);
-      showToast(e.message || "Failed to load", "error");
+      showToast(e.message || t("errors.generic"), "error");
     });
   }, []);
 

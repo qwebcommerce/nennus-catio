@@ -240,7 +240,7 @@ export function ShopRelocation() {
       const dataBase64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = () => reject(new Error("Could not read the file"));
+        reader.onerror = () => reject(new Error(t("shop.docUploadFailed")));
         reader.readAsDataURL(file);
       });
       docs.push({ fileName: file.name, mime: file.type || "application/octet-stream", dataBase64 });

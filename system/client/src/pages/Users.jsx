@@ -63,8 +63,8 @@ export default function Users() {
       await refreshUser?.();
       showToast(t("users.toastCreated"), "success");
     } catch (err) {
-      setFormError(err.message || "Failed");
-      showToast(err.message || "Failed", "error");
+      setFormError(err.message || t("errors.generic"));
+      showToast(err.message || t("errors.generic"), "error");
     } finally {
       setBusy(false);
     }
@@ -77,7 +77,7 @@ export default function Users() {
       await load();
     } catch (err) {
       // A stale copy (NFR-13) shows the bilingual notice; the reload brings the latest values.
-      showToast(editErrorMessage(err, t) || "Failed", "error");
+      showToast(editErrorMessage(err, t) || t("errors.generic"), "error");
       await load();
     }
   };
@@ -96,7 +96,7 @@ export default function Users() {
       });
       await load();
     } catch (err) {
-      showToast(editErrorMessage(err, t) || "Failed", "error");
+      showToast(editErrorMessage(err, t) || t("errors.generic"), "error");
       await load();
     }
   };
@@ -111,7 +111,7 @@ export default function Users() {
       await refreshUser?.();
       showToast(t("shop.saved"), "success");
     } catch (err) {
-      showToast(err.message || "Failed", "error");
+      showToast(err.message || t("errors.generic"), "error");
     }
   };
 
