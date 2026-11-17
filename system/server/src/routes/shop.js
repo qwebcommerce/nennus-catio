@@ -164,8 +164,14 @@ router.get("/meta", async (req, res) => {
       }
     }
     const runs = date && (w.weekday == null || weekdayOf(date) === w.weekday);
-    windowDates.set(w.id, { date, used: runs && branch ? await seatsUsed(w.id, date) : null, runs });
+    windowDates.set(w.id, { date, used: null, runs });
   }
+  // Seat counts for all windows at once instead of one round trip after another.
+  await Promise.all(
+    [...windowDates.entries()].map(async ([id, row]) => {
+      if (row.runs && branch) row.used = await seatsUsed(id, row.date);
+    }),
+  );
   res.json({
     location: branch ? { id: branch.id, name: branch.name, nameEn: branch.nameEn } : null,
     petTypes,
@@ -223,10 +229,12 @@ router.get("/catalog", async (req, res) => {
       },
     ];
   }
+  // Every published product (the shop filters and pages in the browser); a cap of 80 hid the rest
+  // of the catalogue from the website once the shop had more products.
   const rows = await prisma.product.findMany({
     where,
     orderBy: { nameEn: "asc" },
-    take: 80,
+    take: 2000,
     include: {
       productCategory: { select: { id: true, name: true, nameEn: true } },
       petLinks: { include: { petType: true } },
@@ -234,20 +242,24 @@ router.get("/catalog", async (req, res) => {
       variants: { where: { isActive: true }, include: { stocks: { where: { branchId: branch.id } } } },
     },
   });
+  // Live website holds for all these products in one query (one query per product and variant
+  // made the page take seconds over the network to the database).
+  const held = new Map();
+  if (rows.length) {
+    const sums = await prisma.stockHold.groupBy({
+      by: ["productId", "variantId"],
+      where: { branchId: branch.id, productId: { in: rows.map((r) => r.id) }, status: "HELD", expiresAt: { gt: new Date() } },
+      _sum: { quantity: true },
+    });
+    for (const row of sums) held.set(`${row.productId}:${row.variantId || ""}`, Number(row._sum.quantity || 0));
+  }
   const out = [];
   for (const product of rows) {
     const dto = publicProduct(product, branch.id);
     if (dto.variants.length) {
-      for (const variant of dto.variants) {
-        variant.available -= await heldQuantity(prisma, {
-          branchId: branch.id,
-          productId: product.id,
-          variantId: variant.id,
-        });
-      }
-      dto.variants = dto.variants.filter((v) => v.available > 0 || true);
+      for (const variant of dto.variants) variant.available -= held.get(`${product.id}:${variant.id}`) || 0;
     } else {
-      dto.available -= await heldQuantity(prisma, { branchId: branch.id, productId: product.id, variantId: null });
+      dto.available -= held.get(`${product.id}:`) || 0;
     }
     out.push(dto);
   }
