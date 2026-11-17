@@ -152,7 +152,7 @@ export function ChangePassword() {
         <p style={{ fontSize: 13, opacity: 0.75, margin: "0 0 12px" }}>{t("pw.minLength")}</p>
         {err ? <div className="mkt-error" role="alert">{err}</div> : null}
         {msg ? <div role="status" style={{ color: "var(--ok, #1e3e2f)", marginBottom: 12 }}>{msg}</div> : null}
-        <button type="submit" className="btn btn-primary" disabled={busy}>{t("pw.save")}</button>
+        <button type="submit" className="btn-touch" style={{ background: "var(--accent)", color: "#fff" }} disabled={busy}>{t("pw.save")}</button>
       </form>
     </div>
   );

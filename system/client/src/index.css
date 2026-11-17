@@ -116,6 +116,98 @@ select {
   transform: scale(0.97);
 }
 
+/*
+ * Staff screens: one field look (the Products form style) for every input, select, textarea and
+ * plain button that has no style of its own. :where() keeps these at zero specificity, so a page's
+ * own class (POS till, finance tables...) or inline style always wins; checkboxes, radios and file
+ * pickers keep their native look. Logical properties only, so RTL is unaffected.
+ */
+:where(.app-main-content)
+  :where(
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):not([type="color"]):not([type="hidden"]),
+    select,
+    textarea
+  ) {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 42px;
+  padding: 0.55rem 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+:where(.app-main-content) :where(select[multiple]) {
+  min-height: 120px;
+}
+:where(.app-main-content) :where(textarea) {
+  min-height: 84px;
+  resize: vertical;
+}
+:where(.app-main-content) :where(input, select, textarea, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+:where(.app-main-content) :where(input, select, textarea):disabled {
+  opacity: 0.6;
+}
+:where(.app-main-content) :where(button:not([class])) {
+  min-height: 36px;
+  padding: 0.45rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+:where(.app-main-content) :where(button:not([class])):disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* A touch button without its own colour gets the secondary look instead of the browser grey. */
+:where(.btn-touch) {
+  background: var(--surface2);
+  color: var(--text);
+}
+/* ...and a form's submit button the primary look. */
+:where(.app-main-content) :where(button.btn-touch[type="submit"]) {
+  background: var(--accent);
+  color: #fff;
+}
+/* Password field with its show/hide toggle (Change password screen). */
+.app-main-content .mkt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 0.9rem;
+}
+.app-main-content .mkt-password-wrap {
+  position: relative;
+}
+.app-main-content .mkt-password-wrap input {
+  width: 100%;
+  padding-inline-end: 2.8rem;
+}
+.app-main-content .mkt-password-toggle {
+  position: absolute;
+  top: 50%;
+  inset-inline-end: 0.35rem;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
 /* أزرار ثانوية بلون surface2 — أوضح عندما لا يكون الوضع فاتحاً */
 html:not([data-theme="light"]) button.btn-touch[style*="surface2"]:not(:disabled) {
   background: var(--btn-secondary-bg) !important;

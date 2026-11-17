@@ -141,7 +141,7 @@ export default function PurchaseOrders() {
         })}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" onClick={() => setLines((prev) => [...prev, emptyLine()])}>{t("po.addLine")}</button>
-          <button className="btn-touch" type="submit" disabled={busy}>{t("po.create")}</button>
+          <button className="btn-touch" type="submit" disabled={busy} style={{ background: "var(--accent)", color: "#fff" }}>{t("po.create")}</button>
         </div>
       </form>
       {orders.map((order) => {
