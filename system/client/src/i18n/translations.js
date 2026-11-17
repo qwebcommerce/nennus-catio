@@ -1078,6 +1078,10 @@ const entries = [
   ["setup.weekday", "اليوم", "Day"],
   ["setup.added", "تمت الإضافة", "Added"],
   ["setup.inactive", "غير نشط", "Inactive"],
+  ["users.setPassword", "تعيين كلمة مرور", "Set password"],
+  ["users.passwordPrompt", "كلمة المرور الجديدة لـ {{name}} (6 أحرف على الأقل). سيتم تسجيل خروجه من كل الأجهزة.", "New password for {{name}} (at least 6 characters). They will be signed out everywhere."],
+  ["users.passwordSet", "تم تغيير كلمة المرور", "Password changed"],
+  ["users.saved", "تم الحفظ", "Saved"],
   ["setup.renamePrompt", "الاسم بالعربية", "Arabic name"],
   ["setup.renamePromptEn", "الاسم بالإنجليزية", "English name"],
 ];
