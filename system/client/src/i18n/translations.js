@@ -1077,6 +1077,7 @@ const entries = [
   ["setup.seats", "عدد الطلبات المتاحة", "Orders per window"],
   ["setup.weekday", "اليوم", "Day"],
   ["setup.added", "تمت الإضافة", "Added"],
+  ["setup.inactive", "غير نشط", "Inactive"],
   ["setup.renamePrompt", "الاسم بالعربية", "Arabic name"],
   ["setup.renamePromptEn", "الاسم بالإنجليزية", "English name"],
 ];
