@@ -4,8 +4,12 @@ import { api } from "../api/client.js";
 import { useOffline } from "../context/OfflineContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
+import { productDisplayName } from "../utils/productName.js";
 
 const inp = {
+  boxSizing: "border-box",
+  minWidth: 0,
   padding: 12,
   borderRadius: 12,
   border: "1px solid var(--border)",
@@ -14,7 +18,7 @@ const inp = {
 };
 
 export default function Returns() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const location = useLocation();
   const { online } = useOffline();
   const branchId = useActiveBranchId();
@@ -37,7 +41,7 @@ export default function Returns() {
     if (Array.isArray(st.items) && st.items.length) {
       setLines(
         st.items.map((it) => ({
-          productId: String(it.productId || ""),
+          productId: it.saleItemId ? `item:${it.saleItemId}` : String(it.productId || ""),
           quantity: String(it.quantity || "1"),
         })),
       );
@@ -57,7 +61,7 @@ export default function Returns() {
 
   useEffect(() => {
     const id = saleId.trim();
-    if (!id || id.length < 8) {
+    if (!id || id.length < 6) {
       setSale(null);
       return;
     }
@@ -74,12 +78,28 @@ export default function Returns() {
     };
   }, [saleId]);
 
+  // With the sale loaded, each option is one sale line (so the right variant and price are refunded).
   const lineOptions = sale?.items?.length
-    ? sale.items.map((it) => ({
-        id: it.productId,
-        label: `${it.product?.name || it.productId} — ${it.quantity}${it.product?.sellBy === "WEIGHT" ? " g" : ""}`,
-      }))
-    : products.map((p) => ({ id: p.id, label: `${p.name} ${p.sku ? `(${p.sku})` : ""}` }));
+    ? sale.items.map((it) => {
+        const variant = it.variant ? ` · ${locale === "en" ? it.variant.labelEn || it.variant.label : it.variant.label}` : "";
+        return {
+          id: `item:${it.id}`,
+          label: `${productDisplayName(it.product, locale) || it.productId}${variant} — ${it.quantity}${it.product?.sellBy === "WEIGHT" ? " g" : ""}`,
+        };
+      })
+    : products.map((p) => ({ id: p.id, label: `${productDisplayName(p, locale)} ${p.sku ? `(${p.sku})` : ""}` }));
+
+  // Lines picked by product before the sale loaded point at that product's first line on the sale.
+  useEffect(() => {
+    if (!sale?.items?.length) return;
+    setLines((prev) =>
+      prev.map((l) => {
+        if (!l.productId || l.productId.startsWith("item:")) return l;
+        const hit = sale.items.find((it) => it.productId === l.productId);
+        return hit ? { ...l, productId: `item:${hit.id}` } : l;
+      }),
+    );
+  }, [sale]);
 
   const loadRefunds = () => {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
@@ -110,10 +130,15 @@ export default function Returns() {
     }
     const items = lines
       .filter((l) => l.productId)
-      .map((l) => ({
-        productId: l.productId,
-        quantity: Math.max(1, parseInt(String(l.quantity), 10) || 1),
-      }));
+      .map((l) => {
+        const quantity = Math.max(1, parseInt(String(l.quantity), 10) || 1);
+        if (l.productId.startsWith("item:")) {
+          const saleItemId = l.productId.slice(5);
+          const it = sale?.items?.find((row) => row.id === saleItemId);
+          return { saleItemId, productId: it?.productId, quantity };
+        }
+        return { productId: l.productId, quantity };
+      });
     if (!items.length) {
       setMsg(t("returns.needLines"));
       return;
@@ -127,7 +152,8 @@ export default function Returns() {
         method: "POST",
         body: {
           branchId: bid,
-          saleId: saleId.trim(),
+          // The typed receipt number resolves to the sale it names.
+          saleId: sale?.id || saleId.trim(),
           note: note.trim() || undefined,
           items,
           restock,
@@ -155,10 +181,10 @@ export default function Returns() {
         <div className="page-form-grid">
           <label className="page-form-field">
             <span>{t("returns.saleId")}</span>
-            <input required value={saleId} onChange={(e) => setSaleId(e.target.value)} placeholder="cuid…" style={inp} />
+            <input required value={saleId} onChange={(e) => setSaleId(e.target.value)} placeholder={t("returns.saleIdPh")} style={inp} />
             {sale ? (
               <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                {sale.invoiceNumber || sale.id} · {Number(sale.total).toFixed(2)} {t("common.currency")} · {sale.paymentMethod}
+                {sale.invoiceNumber || sale.id} · {Number(sale.total).toFixed(2)} {t("common.currency")} · {statusLabel("payment", sale.paymentMethod, locale)}
               </span>
             ) : null}
           </label>

@@ -98,6 +98,49 @@ router.post("/payment-link", async (req, res) => {
   res.json({ id: payment.id, payUrl: payment.payUrl, qr });
 });
 
+/**
+ * Till price check: the offers (automatic and coupon) the checkout below would apply to this cart,
+ * so the till shows the same total the sale will record before the customer pays. Read-only.
+ */
+router.post("/quote", async (req, res) => {
+  const orgId = req.user.organizationId;
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 200) : [];
+  const couponCode = String(req.body?.couponCode || "").trim().toUpperCase().replace(/\s+/g, "") || null;
+  const productIds = [...new Set(items.map((line) => String(line?.productId || "")).filter(Boolean))];
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds }, organizationId: orgId },
+    select: { id: true, price: true, sellBy: true, categoryId: true, variants: { select: { id: true, price: true } } },
+  });
+  const byId = new Map(products.map((p) => [p.id, p]));
+  const lines = [];
+  for (const line of items) {
+    const product = byId.get(String(line?.productId || ""));
+    const qty = Math.round(Number(line?.quantity));
+    if (!product || !Number.isFinite(qty) || qty < 1) continue;
+    const variant = line.variantId ? product.variants.find((v) => v.id === String(line.variantId)) : null;
+    const unitPrice = variant ? d(variant.price) : d(product.price);
+    lines.push({ productId: product.id, categoryId: product.categoryId, quantity: qty, sellBy: product.sellBy, subtotal: lineAmount(unitPrice, qty, product.sellBy) });
+  }
+  const subtotal = lines.reduce((sum, line) => sum + line.subtotal, 0);
+  let manual = 0;
+  if (req.body?.discountAmount != null && String(req.body.discountAmount).trim() !== "") {
+    manual = Math.min(toDirhams(req.body.discountAmount) ?? 0, subtotal);
+  }
+  let promo;
+  try {
+    promo = await quotePromotions(prisma, { organizationId: orgId, channel: "TILL", lines, goods: subtotal - manual, code: couponCode });
+  } catch (e) {
+    return res.json({ subtotal: fmt(subtotal), promotionDiscount: fmt(0), total: fmt(subtotal - manual), couponValid: false });
+  }
+  const total = Math.max(0, subtotal - manual - promo.discount);
+  res.json({
+    subtotal: fmt(subtotal),
+    promotionDiscount: fmt(promo.discount),
+    total: fmt(total),
+    couponValid: couponCode ? Boolean(promo.codeApplied) : null,
+  });
+});
+
 router.post("/checkout", async (req, res) => {
   const {
     branchId,
@@ -654,13 +697,15 @@ router.get("/", async (req, res) => {
 });
 
 router.get("/:id", async (req, res) => {
+  // Staff can type the receipt (invoice) number or the order reference printed for the customer.
+  const key = String(req.params.id || "").trim();
   const sale = await prisma.sale.findFirst({
     where: {
-      id: req.params.id,
+      OR: [{ id: key }, { invoiceNumber: key }, { reference: key.toUpperCase() }],
       branch: { organizationId: req.user.organizationId },
     },
     include: {
-      items: { include: { product: true } },
+      items: { include: { product: true, variant: { select: { id: true, label: true, labelEn: true } } } },
       branch: true,
       customer: true,
       user: { select: { id: true, name: true, nameEn: true, role: true, email: true } },

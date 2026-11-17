@@ -125,6 +125,7 @@ export default function SalesHistory() {
         .filter((it) => it.productId || it.product?.id)
         .map((it) => ({
           productId: it.productId || it.product?.id,
+          saleItemId: it.id,
           quantity: String(it.quantity || 1),
         }));
       navigate("/returns", {
