@@ -137,7 +137,10 @@ export function ShopBookings() {
     else shopApi("/api/shop/grooming/bookings").then(setRows).catch((e) => setMsg(e.message));
   };
   useEffect(() => { load(); }, [id]);
-  const cancel = (bookingId) => shopApi(`/api/shop/grooming/bookings/${bookingId}/cancel`, { method: "POST", body: {} }).then(load).catch((e) => setMsg(e.message));
+  const cancel = (bookingId) => {
+    if (!window.confirm(t("shop.confirmCancelBooking"))) return;
+    shopApi(`/api/shop/grooming/bookings/${bookingId}/cancel`, { method: "POST", body: {} }).then(load).catch((e) => setMsg(e.message));
+  };
   return (
     <div className="nc-shell" style={{ padding: "28px 0 48px", display: "grid", gap: 10 }}>
       <h1>{t("shop.myBookings")}</h1>
@@ -151,7 +154,7 @@ export function ShopBookings() {
           {one.canCancel ? (
             <>
               <div>{t("shop.cancelUntil")} {qatarDateTime(one.cancelUntil, locale)}</div>
-              <button type="button" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button>
+              <button type="button" className="button button--secondary" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button>
             </>
           ) : null}
           {one.status === "CANCELLED" && one.paid ? <div>{t("shop.refundDue")}</div> : null}
@@ -281,6 +284,7 @@ export function ShopRelocation() {
       setFiles([]);
       e.target.reset?.();
       load();
+      setMsg(t("shop.requestSent"));
     } catch (err) {
       setMsg(err.message);
     } finally {

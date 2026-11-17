@@ -77,7 +77,7 @@ export default function RelocationDesk() {
           {row.createdAt ? <div>{formatDateTime(row.createdAt, locale)}</div> : null}
           {(row.payments || []).map((p) => (
             <div key={p.id} style={{ fontSize: 13, color: "var(--muted)" }}>
-              {p.kind} · {p.method} · {Number(p.amount).toFixed(2)} QAR · {p.status}{p.reference ? ` · ${p.reference}` : ""}
+              {statusLabel("txType", p.kind, locale)} · {statusLabel("payment", p.method, locale)} · {Number(p.amount).toFixed(2)} QAR · {statusLabel("payStatus", p.status, locale)}{p.reference ? ` · ${p.reference}` : ""}
             </div>
           ))}
           {row.gatewayPaymentId && (row.status === "QUOTE_SENT" || row.paymentReview) ? (
