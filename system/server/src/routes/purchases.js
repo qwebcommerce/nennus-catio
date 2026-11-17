@@ -40,7 +40,7 @@ router.get("/", async (req, res) => {
     orderBy: { createdAt: "desc" },
     take: Math.min(200, Math.max(1, parseInt(String(limit), 10) || 50)),
     include: {
-      items: { include: { product: { select: { id: true, name: true, sku: true } } } },
+      items: { include: { product: { select: { id: true, name: true, nameEn: true, sku: true } } } },
       branch: { select: { name: true } },
       supplier: { select: { id: true, name: true } },
       user: { select: { name: true } },

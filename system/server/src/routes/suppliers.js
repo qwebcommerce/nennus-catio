@@ -61,6 +61,21 @@ router.delete("/:id", requireModule("purchasing", "delete"), async (req, res) =>
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!row) return res.status(404).end();
+  // Past purchases would lose their supplier (SetNull) and orders/bills fail the delete:
+  // a supplier with history is deactivated instead.
+  const [purchases, orders, bills] = await Promise.all([
+    prisma.purchase.count({ where: { supplierId: row.id } }),
+    prisma.purchaseOrder.count({ where: { supplierId: row.id } }),
+    prisma.supplierBill.count({ where: { supplierId: row.id } }),
+  ]);
+  if (purchases + orders + bills > 0) {
+    return res.status(409).json({
+      error: "لا يمكن حذف هذا المورد لأن له مشتريات أو أوامر شراء أو فواتير. أوقفه بدلاً من ذلك.",
+      errorAr: "لا يمكن حذف هذا المورد لأن له مشتريات أو أوامر شراء أو فواتير. أوقفه بدلاً من ذلك.",
+      errorEn: "This supplier has purchases, purchase orders or bills, so it can't be deleted. Deactivate it instead.",
+      code: "SUPPLIER_HAS_HISTORY",
+    });
+  }
   try {
     await prisma.supplier.delete({ where: { id: row.id } });
     res.status(204).end();

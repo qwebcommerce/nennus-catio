@@ -5,6 +5,8 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 
 const inp = {
+  boxSizing: "border-box",
+  minWidth: 0,
   padding: 12,
   borderRadius: 12,
   border: "1px solid var(--border)",
@@ -13,8 +15,9 @@ const inp = {
 };
 
 export default function Purchases() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { user } = useAuth();
+  const nameOf = (row) => (locale === "en" ? row?.nameEn || row?.name : row?.name || row?.nameEn) || "";
   const branchId = useActiveBranchId();
   const [suppliers, setSuppliers] = useState([]);
   const [supplierId, setSupplierId] = useState("");
@@ -58,13 +61,33 @@ export default function Purchases() {
   const addSupplier = async (e) => {
     e.preventDefault();
     if (!newSupplier.name.trim()) return;
-    const s = await api("/api/suppliers", {
-      method: "POST",
-      body: { name: newSupplier.name.trim(), phone: newSupplier.phone.trim() || undefined },
-    });
-    setSuppliers((prev) => [...prev, s].sort((a, b) => a.name.localeCompare(b.name)));
-    setSupplierId(s.id);
-    setNewSupplier({ name: "", phone: "" });
+    setMsg("");
+    try {
+      const s = await api("/api/suppliers", {
+        method: "POST",
+        body: { name: newSupplier.name.trim(), phone: newSupplier.phone.trim() || undefined },
+      });
+      setSuppliers((prev) => [...prev, s].sort((a, b) => a.name.localeCompare(b.name)));
+      setSupplierId(s.id);
+      setNewSupplier({ name: "", phone: "" });
+      setMsg(t("purchases.supplierAdded"));
+    } catch (err) {
+      setMsg(err.message || t("purchases.failed"));
+    }
+  };
+
+  /** A supplier with purchase history cannot be deleted: it is paused instead (and hidden from new purchases). */
+  const toggleSupplier = async (s) => {
+    setMsg("");
+    try {
+      const row = await api(`/api/suppliers/${s.id}`, { method: "PATCH", body: { isActive: s.isActive === false, version: s.version } });
+      setSuppliers((prev) => prev.map((x) => (x.id === row.id ? row : x)));
+      if (row.isActive === false && supplierId === row.id) setSupplierId("");
+      setMsg(t("purchases.supplierUpdated"));
+    } catch (err) {
+      setMsg(editErrorMessage(err, t));
+      if (isStaleEdit(err)) api("/api/suppliers").then(setSuppliers).catch(() => {});
+    }
   };
 
   const startEditSupplier = (s) => {
@@ -102,7 +125,13 @@ export default function Purchases() {
 
   const deleteSupplier = async (id) => {
     if (!window.confirm(t("purchases.deleteSupplierConfirm"))) return;
-    await api(`/api/suppliers/${id}`, { method: "DELETE" });
+    setMsg("");
+    try {
+      await api(`/api/suppliers/${id}`, { method: "DELETE" });
+    } catch (err) {
+      setMsg(err.message || t("purchases.failed"));
+      return;
+    }
     setSuppliers((prev) => prev.filter((s) => s.id !== id));
     if (supplierId === id) setSupplierId("");
     if (editingSupplierId === id) setEditingSupplierId("");
@@ -165,17 +194,20 @@ export default function Purchases() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h1 style={{ margin: 0 }}>{t("purchases.title")}</h1>
       <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>{t("purchases.intro")}</p>
+      {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
 
       <form className="card" onSubmit={addSupplier} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
         <strong style={{ width: "100%" }}>{t("purchases.newSupplier")}</strong>
         <input
           placeholder={t("purchases.supplierName")}
+          aria-label={t("purchases.supplierName")}
           value={newSupplier.name}
           onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })}
           style={{ ...inp, flex: 1, minWidth: 160 }}
         />
         <input
           placeholder={t("customers.phone")}
+          aria-label={t("customers.phone")}
           value={newSupplier.phone}
           onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
           style={{ ...inp, width: 160 }}
@@ -219,11 +251,17 @@ export default function Purchases() {
                     </>
                   ) : (
                     <>
-                      <td style={{ padding: 6 }}>{s.name}</td>
+                      <td style={{ padding: 6, opacity: s.isActive === false ? 0.55 : 1 }}>
+                        {s.name}
+                        {s.isActive === false ? ` · ${t("setup.inactive")}` : ""}
+                      </td>
                       <td style={{ padding: 6 }}>{s.phone || "—"}</td>
                       <td style={{ padding: 6, whiteSpace: "nowrap" }}>
                         <button type="button" className="btn-touch" onClick={() => startEditSupplier(s)} style={{ marginInlineEnd: 6 }}>
                           {t("common.edit")}
+                        </button>
+                        <button type="button" className="btn-touch" onClick={() => toggleSupplier(s)} style={{ marginInlineEnd: 6 }}>
+                          {s.isActive === false ? t("shop.activate") : t("shop.deactivate")}
                         </button>
                         <button
                           type="button"
@@ -249,7 +287,7 @@ export default function Purchases() {
             <span>{t("purchases.supplier")}</span>
             <select required value={supplierId} onChange={(e) => setSupplierId(e.target.value)} style={{ ...inp, minHeight: 44 }}>
               <option value="">{t("common.none")}</option>
-              {suppliers.map((s) => (
+              {suppliers.filter((s) => s.isActive !== false).map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
@@ -284,12 +322,12 @@ export default function Purchases() {
                       .filter((v) => v.isActive !== false)
                       .map((v) => (
                         <option key={`${p.id}::${v.id}`} value={`${p.id}::${v.id}`}>
-                          {p.name} — {v.label}
+                          {nameOf(p)} — {locale === "en" ? v.labelEn || v.label : v.label}
                         </option>
                       ))
                   : [
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {nameOf(p)}
                       </option>,
                     ],
               )}
@@ -339,7 +377,6 @@ export default function Purchases() {
         <button type="submit" className="btn-touch" style={{ background: "var(--accent)", color: "#fff", maxWidth: 320 }}>
           {t("purchases.submit")}
         </button>
-        {msg ? <div style={{ color: "var(--muted)" }}>{msg}</div> : null}
       </form>
 
       <div className="card" style={{ overflowX: "auto" }}>
@@ -358,7 +395,7 @@ export default function Purchases() {
                 <td style={td}>{new Date(p.createdAt).toLocaleString()}</td>
                 <td style={td}>{p.supplier?.name || "—"}</td>
                 <td style={td}>
-                  {p.items?.map((it) => `${it.product?.name || "?"} ×${it.quantity} @${Number(it.unitCost).toFixed(2)}`).join("، ")}
+                  {p.items?.map((it) => `${nameOf(it.product) || "?"} ×${it.quantity} @${Number(it.unitCost).toFixed(2)}`).join(locale === "en" ? ", " : "، ")}
                 </td>
               </tr>
             ))}
