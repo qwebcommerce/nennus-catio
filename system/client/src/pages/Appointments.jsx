@@ -313,7 +313,7 @@ export default function Appointments() {
                   <td style={td}>
                     {a.customer?.name || t("appointments.walkIn")} {a.petName ? `• ${a.petName}` : ""}
                   </td>
-                  <td style={td}>{a.service?.name || "—"}</td>
+                  <td style={td}>{(locale === "en" ? a.service?.nameEn || a.service?.name : a.service?.name) || "—"}</td>
                   <td style={td}>
                     {statusLabel("booking", a.status, locale)}
                     {Number(a.amountPaid) > 0 ? <div style={{ color: "var(--muted)" }}>{t("shop.paid")} {Number(a.amountPaid).toFixed(2)}</div> : null}

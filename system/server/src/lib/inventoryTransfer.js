@@ -1,6 +1,32 @@
 import { prisma } from "./prisma.js";
-import { fmt } from "./money.js";
+import { d, divRound, fmt } from "./money.js";
+import { lockStockRow } from "./stockLedger.js";
 import { writeAudit } from "./auditLog.js";
+
+/**
+ * Adds transferred units at the destination. The destination unit cost becomes the weighted
+ * average of what is there (qty x cost) and what arrives (qty x source cost), rounded half away
+ * from zero to a whole dirham like a receipt. Before, an existing row (e.g. made by setting a
+ * low-stock level) kept a null cost, so later sales there recorded a cost of 0.
+ */
+async function addAtDestination(tx, { productId, variantId, branchId, qty, unitCost }) {
+  // A row made here by the transfer starts with the usual low-stock level of 5.
+  if (variantId) {
+    await tx.variantStock.upsert({ where: { variantId_branchId: { variantId, branchId } }, create: { variantId, branchId, quantity: 0, minStockLevel: 5 }, update: {} });
+  } else {
+    await tx.inventory.upsert({ where: { productId_branchId: { productId, branchId } }, create: { productId, branchId, quantity: 0, minStockLevel: 5 }, update: {} });
+  }
+  const row = await lockStockRow(tx, { productId, variantId, branchId });
+  const oldQty = Math.max(0, Number(row.quantity) || 0);
+  let nextCost = row.unitCost != null ? d(row.unitCost) : null;
+  if (unitCost != null) {
+    const inCost = d(unitCost);
+    nextCost = nextCost == null || oldQty === 0 ? inCost : divRound(BigInt(oldQty) * BigInt(nextCost) + BigInt(qty) * BigInt(inCost), oldQty + qty);
+  }
+  const data = { quantity: (Number(row.quantity) || 0) + qty, unitCost: nextCost };
+  if (variantId) await tx.variantStock.update({ where: { id: row.id }, data });
+  else await tx.inventory.update({ where: { id: row.id }, data });
+}
 
 /**
  * Immediate multi-line stock transfer between two org branches.
@@ -137,17 +163,7 @@ export async function executeInventoryTransfer({
             err.status = 400;
             throw err;
           }
-          await tx.variantStock.upsert({
-            where: { variantId_branchId: { variantId, branchId: to } },
-            create: {
-              variantId,
-              branchId: to,
-              quantity: qty,
-              minStockLevel: 5,
-              unitCost: line.unitCost ?? null,
-            },
-            update: { quantity: { increment: qty } },
-          });
+          await addAtDestination(tx, { productId, variantId, branchId: to, qty, unitCost: line.unitCost });
         } else {
           const moved = await tx.inventory.updateMany({
             where: { productId, branchId: from, quantity: { gte: qty } },
@@ -159,11 +175,7 @@ export async function executeInventoryTransfer({
             err.status = 400;
             throw err;
           }
-          await tx.inventory.upsert({
-            where: { productId_branchId: { productId, branchId: to } },
-            create: { productId, branchId: to, quantity: qty, minStockLevel: 5, unitCost: line.unitCost ?? null },
-            update: { quantity: { increment: qty } },
-          });
+          await addAtDestination(tx, { productId, variantId: null, branchId: to, qty, unitCost: line.unitCost });
         }
         await tx.stockMovement.create({
           data: {

@@ -216,7 +216,7 @@ router.get("/", async (req, res) => {
       include: {
         payments: { select: { id: true, kind: true, method: true, status: true, amount: true, reviewReason: true, createdAt: true } },
         customer: { select: { id: true, name: true, phone: true } },
-        service: { select: { id: true, name: true, durationMin: true, price: true } },
+        service: { select: { id: true, name: true, nameEn: true, durationMin: true, price: true } },
         branch: { select: { id: true, name: true } },
       },
       orderBy: [{ startAt: "asc" }],
@@ -318,7 +318,7 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
       },
       include: {
         customer: { select: { id: true, name: true, phone: true } },
-        service: { select: { id: true, name: true, durationMin: true, price: true } },
+        service: { select: { id: true, name: true, nameEn: true, durationMin: true, price: true } },
       },
       });
     }, LOCK_TX);

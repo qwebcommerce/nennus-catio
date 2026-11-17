@@ -1098,6 +1098,8 @@ const entries = [
   ["common.noAccessTitle", "لا يمكنك فتح هذه الشاشة", "You can't open this screen"],
   ["common.noAccess", "ليس لديك صلاحية لهذه الشاشة. اطلب من المالك منحك الصلاحية إن احتجت إليها.", "You don't have permission for this screen. Ask the owner to give you access if you need it."],
   ["common.backToDashboard", "العودة إلى لوحة التحكم", "Back to dashboard"],
+  ["products.variantActive", "متاح للبيع", "On sale (active)"],
+  ["po.grams", "غرام", "grams"],
   ["groom.duration", "المدة (دقيقة)", "Duration (minutes)"],
   ["groom.capacity", "عدد الحجوزات في نفس الوقت", "Bookings at the same time"],
   ["groom.pricePrompt", "السعر الجديد (ر.ق)", "New price (QAR)"],

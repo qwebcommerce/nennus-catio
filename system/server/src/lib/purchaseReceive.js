@@ -1,5 +1,5 @@
 import { prisma } from "./prisma.js";
-import { d, fmt, toDirhams } from "./money.js";
+import { d, fmt, lineAmount, toDirhams } from "./money.js";
 import { writeAudit } from "./auditLog.js";
 import { moveStock } from "./stockLedger.js";
 
@@ -56,6 +56,11 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
   let receivedCost = 0; // whole dirhams
   let anyLeft = false;
   const received = [];
+  // Weight goods are ordered in grams at a cost per kg: a line costs cost/kg x grams / 1000.
+  const sellBy = new Map(
+    (await tx.product.findMany({ where: { id: { in: order.lines.map((l) => l.productId) } }, select: { id: true, sellBy: true } }))
+      .map((p) => [p.id, p.sellBy]),
+  );
   for (const line of order.lines) {
     const remaining = line.quantity - line.quantityReceived;
     // With a list of lines, a line left out receives nothing; with none, everything still on order.
@@ -71,7 +76,7 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
       if (remaining > 0) anyLeft = true;
       continue;
     }
-    receivedCost += d(line.unitCost) * qty;
+    receivedCost += lineAmount(line.unitCost, qty, sellBy.get(line.productId));
     await moveStock(tx, {
       orgId,
       userId,
@@ -199,7 +204,8 @@ export async function executeReceivePurchase({
       throw poError(`Choose a variant for ${product.nameEn || product.name}`, 400, `اختر الحجم لـ ${product.name}`);
     }
     const unitCost = uc;
-    const subtotal = unitCost * qty;
+    // Weight goods: quantity in grams, cost per kg.
+    const subtotal = lineAmount(unitCost, qty, product.sellBy);
     total += subtotal;
     lineData.push({ productId, variantId, quantity: qty, unitCost, subtotal });
   }

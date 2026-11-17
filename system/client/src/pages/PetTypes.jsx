@@ -93,7 +93,7 @@ export default function PetTypes() {
         </div>
         {areas.map((row) => (
           <div key={row.id} style={{ ...rowStyle, opacity: row.isActive ? 1 : 0.55 }}>
-            <span>{row.city ? `${row.city} · ` : ""}{row.name} · {Number(row.fee).toFixed(2)}{row.isActive ? "" : ` · ${t("shop.inactive")}`}</span>
+            <span>{row.city ? `${row.city} · ` : ""}{locale === "en" ? row.nameEn || row.name : row.name} · {Number(row.fee).toFixed(2)}{row.isActive ? "" : ` · ${t("shop.inactive")}`}</span>
             <button type="button" onClick={() => editArea(row)}>{t("shop.edit")}</button>
             <button type="button" onClick={() => toggleArea(row)}>{row.isActive ? t("shop.deactivate") : t("shop.activate")}</button>
           </div>
@@ -117,7 +117,7 @@ export default function PetTypes() {
         </div>
         {windows.map((row) => (
           <div key={row.id} style={{ ...rowStyle, opacity: row.isActive ? 1 : 0.55 }}>
-            <span>{row.label} · {row.weekday == null ? t("shop.anyDay") : days[row.weekday]} · {row.startTime}-{row.endTime} · {row.seats}{row.isActive ? "" : ` · ${t("shop.inactive")}`}</span>
+            <span>{locale === "en" ? row.labelEn || row.label : row.label} · {row.weekday == null ? t("shop.anyDay") : days[row.weekday]} · {row.startTime}-{row.endTime} · {row.seats}{row.isActive ? "" : ` · ${t("shop.inactive")}`}</span>
             <button type="button" onClick={() => editWindow(row)}>{t("shop.edit")}</button>
             <button type="button" onClick={() => toggleWindow(row)}>{row.isActive ? t("shop.deactivate") : t("shop.activate")}</button>
           </div>

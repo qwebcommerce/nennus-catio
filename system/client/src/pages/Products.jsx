@@ -922,8 +922,18 @@ export default function Products() {
                       <div className="products-table__sub">{catalogLabel(p.productSubcategory)}</div>
                     ) : null}
                   </td>
-                  <td className="products-table__num">{Number(p.price).toFixed(2)}</td>
-                  <td className="products-table__num">{inv?.quantity ?? t("common.none")}</td>
+                  <td className="products-table__num">{Number(p.price).toFixed(2)}{p.sellBy === "WEIGHT" ? ` ${t("pos.perKg")}` : ""}</td>
+                  <td className="products-table__num">
+                    {(() => {
+                      // Stock at this location: the variants' sum for a variant product, kg for weight goods.
+                      const vs = Array.isArray(p.variants) ? p.variants : [];
+                      const qty = vs.length
+                        ? vs.reduce((sum, v) => sum + Number((v.stocks || []).find((row) => !activeBranchId || row.branchId === activeBranchId)?.quantity ?? 0), 0)
+                        : inv?.quantity;
+                      if (qty == null) return t("common.none");
+                      return p.sellBy === "WEIGHT" ? `${(Number(qty) / 1000).toFixed(3)} kg` : qty;
+                    })()}
+                  </td>
                   <td>{p.isActive ? t("products.statusActive") : t("products.statusInactive")}</td>
                   <td className="products-table__actions">
                     <div className="products-table__btns">
@@ -1416,6 +1426,13 @@ export default function Products() {
                       ) : (
                         <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>{t("products.variantStockAfterSave")}</span>
                       )}
+                      {variant.id ? (
+                        // A saved variant is switched off rather than removed (it has stock and sales history).
+                        <label style={checkRow}>
+                          <input type="checkbox" style={checkBox} checked={variant.isActive !== false} onChange={(e) => setVariant({ isActive: e.target.checked })} />
+                          <span>{t("products.variantActive")}</span>
+                        </label>
+                      ) : null}
                       {!variant.id ? (
                         <button
                           type="button"

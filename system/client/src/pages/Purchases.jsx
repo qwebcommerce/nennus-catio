@@ -336,7 +336,7 @@ export default function Purchases() {
             <input
               type="number"
               min={1}
-              placeholder={t("invoice.colQty")}
+              placeholder={`${t("invoice.colQty")}${products.find((p) => p.id === String(line.productId).split("::")[0])?.sellBy === "WEIGHT" ? ` (${t("po.grams")})` : ""}`}
               value={line.quantity}
               onChange={(e) => {
                 const next = [...lines];
@@ -348,7 +348,7 @@ export default function Purchases() {
             <input
               type="text"
               inputMode="decimal"
-              placeholder={t("purchases.unitCost")}
+              placeholder={`${t("purchases.unitCost")}${products.find((p) => p.id === String(line.productId).split("::")[0])?.sellBy === "WEIGHT" ? ` (${t("pos.perKg")})` : ""}`}
               value={line.unitCost}
               onChange={(e) => {
                 const next = [...lines];

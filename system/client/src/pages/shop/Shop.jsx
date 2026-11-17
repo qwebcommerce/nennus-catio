@@ -517,7 +517,7 @@ export function ShopOrders() {
             {(one.items || []).map((item, index) => (
               <div key={index}>{locale === "en" ? item.nameEn || item.name : item.name}{item.variant ? ` · ${locale === "en" ? item.variantEn || item.variant : item.variant}` : ""} · {item.sellBy === "WEIGHT" ? `${item.quantity / 1000} kg` : item.quantity}</div>
             ))}
-            {one.status === "CONFIRMED" && !one.guest ? <button type="button" className="button button--secondary" onClick={cancel}>{t("shop.cancelOrder")}</button> : null}
+            {["CONFIRMED", "PENDING_PAYMENT"].includes(one.status) && !one.guest ? <button type="button" className="button button--secondary" onClick={cancel}>{t("shop.cancelOrder")}</button> : null}
             {msg ? <div className="site-flow__alert">{msg}</div> : null}
           </>
         ) : <p>{msg || t("common.loading")}</p>}

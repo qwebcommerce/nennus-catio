@@ -670,6 +670,21 @@ router.post("/orders/:id/cancel", async (req, res) => {
         err.status = 404;
         throw err;
       }
+      if (row.webStatus === "PENDING_PAYMENT") {
+        // Not paid yet: cancel and free the held stock, guarded exactly like a failed payment,
+        // so only one of this, the expiry sweep or a payment result wins.
+        const moved = await tx.sale.updateMany({
+          where: { id: row.id, webStatus: "PENDING_PAYMENT" },
+          data: { webStatus: "CANCELLED", invoiceStatus: "CANCELLED" },
+        });
+        if (!moved.count) {
+          const err = new Error("This order can only be cancelled before it is being prepared");
+          err.status = 400;
+          throw err;
+        }
+        await releaseSaleHolds(tx, row.id);
+        return tx.sale.findUnique({ where: { id: row.id } });
+      }
       if (row.webStatus !== "CONFIRMED") {
         const err = new Error("This order can only be cancelled before it is being prepared");
         err.status = 400;

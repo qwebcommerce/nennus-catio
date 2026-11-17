@@ -126,11 +126,11 @@ export default function PurchaseOrders() {
                 </label>
               ) : null}
               <label style={fld}>
-                <span>{t("po.quantity")}</span>
+                <span>{t("po.quantity")}{product?.sellBy === "WEIGHT" ? ` (${t("po.grams")})` : ""}</span>
                 <input style={inp} required type="number" min="1" step="1" value={line.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} />
               </label>
               <label style={fld}>
-                <span>{t("po.unitCost")}</span>
+                <span>{t("po.unitCost")}{product?.sellBy === "WEIGHT" ? ` (${t("pos.perKg")})` : ""}</span>
                 <input style={inp} required type="number" min="0" step="0.01" value={line.unitCost} onChange={(e) => setLine(i, { unitCost: e.target.value })} />
               </label>
               {lines.length > 1 ? (
@@ -152,7 +152,10 @@ export default function PurchaseOrders() {
             <div>{order.branch ? branchDisplayName(order.branch, locale) : ""}</div>
             {order.lines.map((line) => (
               <div key={line.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ flex: "1 1 200px" }}>{lineName(line)} · {line.quantityReceived}/{line.quantity} · {Number(line.unitCost).toFixed(2)}</span>
+                <span style={{ flex: "1 1 200px" }}>
+                  {lineName(line)} · {line.quantityReceived}/{line.quantity}
+                  {productOf(line.productId)?.sellBy === "WEIGHT" ? ` g · ${Number(line.unitCost).toFixed(2)} ${t("pos.perKg")}` : ` · ${Number(line.unitCost).toFixed(2)}`}
+                </span>
                 {open && line.quantity > line.quantityReceived ? (
                   <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                     <span>{t("po.receiveNow")}</span>
