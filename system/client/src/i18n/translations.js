@@ -1072,6 +1072,13 @@ const entries = [
   ["expense.cat.INTERNET", "إنترنت", "Internet"],
   ["expense.cat.OTHER", "أخرى", "Other"],
   ["pos.couponCode", "كوبون (اختياري)", "Coupon (optional)"],
+  ["setup.startTime", "من الساعة", "From"],
+  ["setup.endTime", "إلى الساعة", "To"],
+  ["setup.seats", "عدد الطلبات المتاحة", "Orders per window"],
+  ["setup.weekday", "اليوم", "Day"],
+  ["setup.added", "تمت الإضافة", "Added"],
+  ["setup.renamePrompt", "الاسم بالعربية", "Arabic name"],
+  ["setup.renamePromptEn", "الاسم بالإنجليزية", "English name"],
 ];
 
 const ROOT = {};
