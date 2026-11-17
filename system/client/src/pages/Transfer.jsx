@@ -5,6 +5,8 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { branchDisplayName } from "../utils/displayLabels.js";
 
 const inp = {
+  boxSizing: "border-box",
+  minWidth: 0,
   padding: 12,
   borderRadius: 12,
   border: "1px solid var(--border)",
@@ -87,7 +89,7 @@ export default function Transfer() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
           <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("transfer.from")}</span>
-            <select value={fromId} onChange={(e) => setFromId(e.target.value)} style={{ ...inp, minHeight: 44 }}>
+            <select value={fromId} onChange={(e) => { setFromId(e.target.value); setLines([{ productId: "", variantId: "", quantity: "1" }]); }} style={{ ...inp, minHeight: 44 }}>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {branchDisplayName(b, locale)}
@@ -116,12 +118,16 @@ export default function Transfer() {
                 next[i] = { ...next[i], productId: e.target.value, variantId: "" };
                 setLines(next);
               }}
+              aria-label={t("returns.pickProduct")}
               style={{ ...inp, flex: 1, minWidth: 200, minHeight: 44 }}
             >
               <option value="">{t("returns.pickProduct")}</option>
               {products.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({t("productCard.stock")} {p.variants?.length ? p.variants.length : p.inventories?.[0]?.quantity ?? 0})
+                  {locale === "en" ? p.nameEn || p.name : p.name || p.nameEn} ({t("productCard.stock")}{" "}
+                  {p.variants?.length
+                    ? p.variants.reduce((sum, v) => sum + (v.stocks?.[0]?.quantity ?? 0), 0)
+                    : p.inventories?.[0]?.quantity ?? 0})
                 </option>
               ))}
             </select>
@@ -135,10 +141,10 @@ export default function Transfer() {
                 }}
                 style={{ ...inp, minWidth: 160, minHeight: 44 }}
               >
-                <option value="">{t("shop.offerProduct")}</option>
+                <option value="">{t("pos.variant")}</option>
                 {products.find((p) => p.id === line.productId).variants.map((variant) => (
                   <option key={variant.id} value={variant.id}>
-                    {variant.label} · {variant.stocks?.[0]?.quantity ?? 0}
+                    {locale === "en" ? variant.labelEn || variant.label : variant.label} · {variant.stocks?.[0]?.quantity ?? 0}
                   </option>
                 ))}
               </select>
@@ -147,6 +153,7 @@ export default function Transfer() {
               type="number"
               min={1}
               placeholder={t("invoice.colQty")}
+              aria-label={t("invoice.colQty")}
               value={line.quantity}
               onChange={(e) => {
                 const next = [...lines];

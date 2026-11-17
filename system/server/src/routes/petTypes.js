@@ -19,6 +19,20 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
   const name = String(req.body?.name || "").trim();
   const nameEn = String(req.body?.nameEn || "").trim();
   if (!name || !nameEn) return res.status(400).json({ error: "Arabic and English names are required" });
+  const duplicate = await prisma.catalogPetType.findFirst({
+    where: {
+      organizationId: req.user.organizationId,
+      OR: [{ name: { equals: name, mode: "insensitive" } }, { nameEn: { equals: nameEn, mode: "insensitive" } }],
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    return res.status(409).json({
+      error: "يوجد نوع حيوان بهذا الاسم بالفعل",
+      errorAr: "يوجد نوع حيوان بهذا الاسم بالفعل",
+      errorEn: "A pet type with this name already exists",
+    });
+  }
   const row = await prisma.catalogPetType.create({
     data: {
       organizationId: req.user.organizationId,

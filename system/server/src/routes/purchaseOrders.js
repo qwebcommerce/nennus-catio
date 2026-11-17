@@ -301,11 +301,16 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
         include: { payments: true, supplier: { select: { id: true, name: true } } },
       });
     });
+    // The location of the order the bill came from, so the payment shows in that location's audit log.
+    const billOrder = bill.purchaseOrderId
+      ? await prisma.purchaseOrder.findUnique({ where: { id: bill.purchaseOrderId }, select: { branchId: true } })
+      : null;
     await writeAudit({
       userId: req.user.sub,
       action: "SUPPLIER_PAYMENT",
       entityType: "SupplierBill",
       entityId: bill.id,
+      branchId: billOrder?.branchId || req.user.branchId || null,
       summary: `${fmt(amount)} ${method} → ${fmt(bill.amountPaid)}`,
     });
     const { owedDirhams, ...view } = billView(bill);

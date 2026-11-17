@@ -43,7 +43,7 @@ function initials(name) {
 
 export default function Dashboard() {
   const { sizes } = usePrintSettings();
-  const { user } = useAuth();
+  const { user, canModule } = useAuth();
   const { t, locale } = useI18n();
   const { format: cur } = useOrgCurrency();
   const navigate = useNavigate();
@@ -67,7 +67,8 @@ export default function Dashboard() {
       const p = await api(`/api/dashboard/sales-by-product${q}`);
       setByProduct(p);
       // Profit needs Finance → view on the server; other cards still load without it.
-      const m = await api(`/api/dashboard/monthly-profit${q}`).catch(() => []);
+      // Not asked for without Finance → view (it would only fail with a 403 on every visit).
+      const m = canModule("finance", "view") ? await api(`/api/dashboard/monthly-profit${q}`).catch(() => []) : [];
       setMonthly(m);
       const [tp, tc] = await Promise.all([
         api(`/api/dashboard/top-products-month${q}`),

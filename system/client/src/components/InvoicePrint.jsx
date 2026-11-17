@@ -28,7 +28,10 @@ export function InvoicePrint({ sale, branchName }) {
   const linesSubtotal =
     sale.items ? riyals(sale.items.reduce((s, it) => s + toDirhams(it.subtotal), 0)) : Number(sale.total);
   const disc = Number(sale.discountAmount ?? 0);
+  const offers = Number(sale.promotionDiscount ?? 0);
   const cur = t("common.currency");
+  /** Weight lines are stored in grams: print them as kg. */
+  const qtyText = (it) => (it.product?.sellBy === "WEIGHT" ? `${(Number(it.quantity) / 1000).toFixed(3)} kg` : it.quantity);
 
   return (
     <div>
@@ -97,7 +100,7 @@ export function InvoicePrint({ sale, branchName }) {
           {sale.items?.map((it) => (
             <tr key={it.id} style={{ borderBottom: "1px solid #eee" }}>
               <td style={{ padding: 8 }}>{productDisplayName(it.product, locale)}</td>
-              <td style={{ padding: 8, textAlign: "center" }}>{it.quantity}</td>
+              <td style={{ padding: 8, textAlign: "center" }}>{qtyText(it)}</td>
               <td style={{ padding: 8 }}>{Number(it.subtotal).toFixed(2)}</td>
             </tr>
           ))}
@@ -110,6 +113,11 @@ export function InvoicePrint({ sale, branchName }) {
         {disc > 0 ? (
           <div>
             {t("invoice.discount")} −{disc.toFixed(2)} {cur}
+          </div>
+        ) : null}
+        {offers > 0 ? (
+          <div>
+            {t("pos.offers")} −{offers.toFixed(2)} {cur}
           </div>
         ) : null}
       </div>

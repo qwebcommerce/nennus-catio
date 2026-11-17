@@ -48,3 +48,22 @@ export function isSchemaDriftError(e) {
 
 export const schemaDriftMessage =
   "مخطط قاعدة البيانات غير متزامن مع التطبيق (جدول أو عمود ناقص). على الخادم نفّذ: npx prisma migrate deploy. إذا توقفت الترحيلات بخطأ، راجع prisma migrate status ثم أصلح التعارض (مثلاً prisma migrate resolve) قبل إعادة المحاولة.";
+
+/** Postgres aborted the transaction to break a deadlock or a write conflict (P2034 / 40P01 / 40001). */
+export function isDeadlockError(e) {
+  if (!e || typeof e !== "object") return false;
+  if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2034") return true;
+  return /40P01|40001|deadlock detected|could not serialize access|write conflict/i.test(String(e.message || ""));
+}
+
+/** One stable order for stock rows (variant or product at a location), so concurrent writers lock them alike. */
+export function stockRowKey(row) {
+  return `${row.branchId || ""}|${row.variantId || ""}|${row.productId || ""}`;
+}
+
+export const BUSY_RETRY = {
+  error: "النظام مشغول بعملية أخرى على نفس المخزون. حاول مرة أخرى.",
+  errorAr: "النظام مشغول بعملية أخرى على نفس المخزون. حاول مرة أخرى.",
+  errorEn: "Another sale was updating the same stock at the same moment. Please try again.",
+  code: "TRY_AGAIN",
+};

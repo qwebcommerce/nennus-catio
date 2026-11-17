@@ -22,7 +22,7 @@ export function CartLines({ cart, onChange }) {
     <div className="site-cart-lines">
       {cart.map((line, index) => {
         const weight = line.sellBy === "WEIGHT";
-        const name = `${locale === "en" ? line.nameEn || line.name : line.name}${line.variantLabel ? ` · ${line.variantLabel}` : ""}`;
+        const name = `${locale === "en" ? line.nameEn || line.name : line.name}${line.variantLabel ? ` · ${locale === "en" ? line.variantLabelEn || line.variantLabel : line.variantLabel}` : ""}`;
         return (
           <div className="site-flow__line site-cart-line" key={`${line.productId}-${line.variantId}-${index}`}>
             <span className="site-cart-line__name">{name}</span>

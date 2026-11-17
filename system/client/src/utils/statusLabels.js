@@ -65,6 +65,14 @@ const LABELS = {
     ON_ACCOUNT: ["On account", "على الحساب"],
     BANK: ["Bank", "البنك"],
   },
+  payStatus: {
+    PENDING: ["Pending", "قيد الانتظار"],
+    CAPTURED: ["Received", "مستلم"],
+    REJECTED: ["Rejected", "مرفوض"],
+    REVIEW: ["Needs review", "بحاجة لمراجعة"],
+    FAILED: ["Failed", "فشل"],
+    REFUNDED: ["Refunded", "مسترد"],
+  },
   txType: {
     SALE: ["Sale", "بيع"],
     REFUND: ["Refund", "استرجاع"],

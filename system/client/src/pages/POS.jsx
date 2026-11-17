@@ -119,8 +119,41 @@ export default function POS() {
     Math.max(0, Number.parseFloat(String(discountInput).replace(",", ".")) || 0),
     cartSubtotal
   );
+  /**
+   * Offers (automatic ones and the coupon) are priced by the server exactly as the checkout will
+   * apply them, so the total on screen is the total the sale records and the customer is charged.
+   */
+  const [promoQuote, setPromoQuote] = useState({ key: "", discount: 0, couponValid: null });
+  const quoteKey = JSON.stringify([
+    items.map((i) => [i.productId, i.variantId || "", i.quantity]),
+    couponInput.trim(),
+    discountNum,
+  ]);
+  const fetchQuote = useCallback(async () => {
+    if (!items.length) return { key: quoteKey, discount: 0, couponValid: null };
+    const r = await api("/api/sales/quote", {
+      method: "POST",
+      body: {
+        items: items.map((i) => ({ productId: i.productId, variantId: i.variantId || undefined, quantity: i.quantity })),
+        couponCode: couponInput.trim() || undefined,
+        discountAmount: discountNum > 0 ? discountNum : undefined,
+      },
+    });
+    return { key: quoteKey, discount: Number(r?.promotionDiscount) || 0, couponValid: r?.couponValid ?? null };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey]);
+  useEffect(() => {
+    let live = true;
+    const timer = setTimeout(() => {
+      fetchQuote()
+        .then((q) => { if (live) setPromoQuote(q); })
+        .catch(() => {});
+    }, 250);
+    return () => { live = false; clearTimeout(timer); };
+  }, [fetchQuote]);
+  const promoDiscount = promoQuote.key === quoteKey ? promoQuote.discount : 0;
   // NFR-03: what is due is worked out in whole dirhams.
-  const afterDisc = riyals(Math.max(0, toDirhams(cartSubtotal) - toDirhams(discountNum)));
+  const afterDisc = riyals(Math.max(0, toDirhams(cartSubtotal) - toDirhams(discountNum) - toDirhams(promoDiscount)));
   const amountDue = afterDisc;
   const clearCart = useCartStore((s) => s.clear);
   const setBranchCart = useCartStore((s) => s.setBranchId);
@@ -470,6 +503,10 @@ export default function POS() {
     } else {
       setSplitEnabled(false);
     }
+    // Resuming takes the cart off the held list: left there it could be resumed and sold twice,
+    // and resumed carts piled up until holding was refused (per-user limit).
+    await api(`/api/held-carts/${row.id}`, { method: "DELETE" }).catch(() => {});
+    await loadHeldCarts();
     await loadProducts();
     setMsg(t("pos.heldRestored"));
   };
@@ -507,6 +544,23 @@ export default function POS() {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setMsg(t("pos.offlineBlocked"));
       return;
+    }
+    // The total on screen must include the offers the sale will apply before anyone is charged.
+    try {
+      const fresh = await fetchQuote();
+      // Only stop when the offers change what is on screen (a quote still on its way is fine
+      // as long as the amount shown is already right).
+      setPromoQuote(fresh);
+      if (Math.abs(fresh.discount - promoDiscount) > 0.001) {
+        setMsg(t("pos.totalChanged"));
+        return;
+      }
+      if (fresh.couponValid === false) {
+        setMsg(t("pos.couponInvalid"));
+        return;
+      }
+    } catch {
+      /* the checkout below reports any real problem */
     }
     for (const line of items) {
       const onHand = Number(line.maxStock ?? 0);
@@ -1386,6 +1440,17 @@ export default function POS() {
                   −{discountNum.toFixed(2)} {currencyLabel}
                 </span>
               </div>
+            ) : null}
+            {promoDiscount > 0 ? (
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 14, color: "var(--muted)" }}>
+                <span>{t("pos.offers")}</span>
+                <span>
+                  −{promoDiscount.toFixed(2)} {currencyLabel}
+                </span>
+              </div>
+            ) : null}
+            {promoQuote.key === quoteKey && promoQuote.couponValid === false ? (
+              <div style={{ marginBottom: 6, fontSize: 13, color: "var(--danger)" }}>{t("pos.couponInvalid")}</div>
             ) : null}
           </div>
 

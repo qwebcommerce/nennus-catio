@@ -79,13 +79,13 @@ export function ShopGroomingBook() {
           <button type="button" className={form.visitKind === "HOME" ? "is-active" : ""} onClick={() => setForm({ ...form, visitKind: "HOME" })}>{t("shop.homeVisit")}</button>
         </div>
         <div className="site-flow__pair">
-          <label className="site-flow__field"><span>{t("shop.window")}</span><input type="date" required min={qatarToday()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
-          <label className="site-flow__field"><span>{t("shop.window")}</span>
+          <label className="site-flow__field"><span>{t("shop.bookDate")}</span><input type="date" required min={qatarToday()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value, startAt: "", endAt: "" })} /></label>
+          <label className="site-flow__field"><span>{t("shop.bookTime")}</span>
             <select required value={form.startAt} onChange={(e) => {
               const slot = slots.find((row) => row.startAt === e.target.value);
               setForm({ ...form, startAt: slot?.startAt || "", endAt: slot?.endAt || "" });
             }}>
-              <option value="">{t("shop.window")}</option>
+              <option value="">{slots.length || !form.date ? t("shop.bookTime") : t("shop.noTimes")}</option>
               {slots.map((slot) => <option key={slot.startAt} value={slot.startAt}>{qatarTime(slot.startAt, locale)} · {slot.seatsLeft}</option>)}
             </select>
           </label>
@@ -137,7 +137,10 @@ export function ShopBookings() {
     else shopApi("/api/shop/grooming/bookings").then(setRows).catch((e) => setMsg(e.message));
   };
   useEffect(() => { load(); }, [id]);
-  const cancel = (bookingId) => shopApi(`/api/shop/grooming/bookings/${bookingId}/cancel`, { method: "POST", body: {} }).then(load).catch((e) => setMsg(e.message));
+  const cancel = (bookingId) => {
+    if (!window.confirm(t("shop.confirmCancelBooking"))) return;
+    shopApi(`/api/shop/grooming/bookings/${bookingId}/cancel`, { method: "POST", body: {} }).then(load).catch((e) => setMsg(e.message));
+  };
   return (
     <div className="nc-shell" style={{ padding: "28px 0 48px", display: "grid", gap: 10 }}>
       <h1>{t("shop.myBookings")}</h1>
@@ -151,7 +154,7 @@ export function ShopBookings() {
           {one.canCancel ? (
             <>
               <div>{t("shop.cancelUntil")} {qatarDateTime(one.cancelUntil, locale)}</div>
-              <button type="button" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button>
+              <button type="button" className="button button--secondary" onClick={() => cancel(one.id)}>{t("shop.cancelOrder")}</button>
             </>
           ) : null}
           {one.status === "CANCELLED" && one.paid ? <div>{t("shop.refundDue")}</div> : null}
@@ -281,6 +284,7 @@ export function ShopRelocation() {
       setFiles([]);
       e.target.reset?.();
       load();
+      setMsg(t("shop.requestSent"));
     } catch (err) {
       setMsg(err.message);
     } finally {

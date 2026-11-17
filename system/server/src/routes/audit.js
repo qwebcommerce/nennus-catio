@@ -25,7 +25,9 @@ router.get("/", async (req, res) => {
     if (!req.user.branchId) return res.json([]);
     andParts.push({ branchId: req.user.branchId });
   } else if (branchId) {
-    andParts.push({ branchId: String(branchId) });
+    // The owner looking at one location still sees organisation-wide rows (settings, staff,
+    // permissions, catalogue...), which have no location; before, they never appeared.
+    andParts.push({ OR: [{ branchId: String(branchId) }, { branchId: null }] });
   }
   if (action) andParts.push({ action: String(action) });
   const where = { AND: andParts };

@@ -75,13 +75,16 @@ export function buildReceiptPlainText(sale, branchName, locale) {
   lines.push("---");
   for (const it of sale.items || []) {
     const nm = productDisplayName(it.product, locale);
-    lines.push(`${nm} ×${it.quantity} = ${Number(it.subtotal).toFixed(2)} ${cur}`);
+    const qty = it.product?.sellBy === "WEIGHT" ? `${(Number(it.quantity) / 1000).toFixed(3)} kg` : it.quantity;
+    lines.push(`${nm} ×${qty} = ${Number(it.subtotal).toFixed(2)} ${cur}`);
   }
   lines.push("---");
   const sub = sale.items?.reduce((s, it) => s + Number(it.subtotal), 0) ?? Number(sale.total);
   lines.push(`${locale === "en" ? "Subtotal" : "المجموع"}: ${sub.toFixed(2)} ${cur}`);
   const disc = Number(sale.discountAmount ?? 0);
   if (disc > 0) lines.push(`${locale === "en" ? "Discount" : "الخصم"}: -${disc.toFixed(2)} ${cur}`);
+  const offers = Number(sale.promotionDiscount ?? 0);
+  if (offers > 0) lines.push(`${locale === "en" ? "Offers" : "العروض"}: -${offers.toFixed(2)} ${cur}`);
   lines.push(`${locale === "en" ? "TOTAL" : "الإجمالي"}: ${Number(sale.total).toFixed(2)} ${cur}`);
   const dueLine = Number(sale.amountDue ?? 0);
   if (dueLine > 0.001) {

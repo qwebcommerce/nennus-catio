@@ -1,6 +1,7 @@
 /**
  * FR-92: every balance (variant at a location, or a product without variants at a location)
- * at or below its low-stock level. Inactive variants, products and locations are left out.
+ * at or below its low-stock level. Inactive variants, products and locations are left out, and so
+ * are made-to-order goods and balances whose level is 0 (no alert wanted).
  */
 export async function listLowStock(db, organizationId, branchId = null) {
   const branchWhere = {
@@ -12,8 +13,10 @@ export async function listLowStock(db, organizationId, branchId = null) {
     db.variantStock.findMany({
       where: {
         quantity: { lte: db.variantStock.fields.minStockLevel },
+        // A level of 0 means "no alert"; made-to-order goods (takesStock=false) never run low.
+        minStockLevel: { gt: 0 },
         branch: branchWhere,
-        variant: { isActive: true, organizationId, product: { isActive: true } },
+        variant: { isActive: true, organizationId, product: { isActive: true, takesStock: true } },
       },
       include: {
         branch: { select: { id: true, name: true, nameEn: true, kind: true } },
@@ -33,8 +36,9 @@ export async function listLowStock(db, organizationId, branchId = null) {
     db.inventory.findMany({
       where: {
         quantity: { lte: db.inventory.fields.minStockLevel },
+        minStockLevel: { gt: 0 },
         branch: branchWhere,
-        product: { organizationId, isActive: true, variants: { none: {} } },
+        product: { organizationId, isActive: true, takesStock: true, variants: { none: {} } },
       },
       include: {
         branch: { select: { id: true, name: true, nameEn: true, kind: true } },

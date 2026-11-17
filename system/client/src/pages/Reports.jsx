@@ -52,6 +52,7 @@ export default function Reports() {
   const [analytics, setAnalytics] = useState(null);
   const [expenseList, setExpenseList] = useState([]);
   const [msg, setMsg] = useState("");
+  const [msgOk, setMsgOk] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState({
@@ -66,6 +67,7 @@ export default function Reports() {
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
     setMsg("");
+    setMsgOk(false);
     try {
       const q = new URLSearchParams();
       q.set("from", from);
@@ -137,6 +139,7 @@ export default function Reports() {
   const addExpense = async (e) => {
     e.preventDefault();
     setMsg("");
+    let done = "";
     try {
       const amountText = String(form.amount).replace(",", ".").trim();
       const amt = Number(amountText);
@@ -151,15 +154,20 @@ export default function Reports() {
       };
       if (editingExpenseId) {
         await api(`/api/expenses/${editingExpenseId}`, { method: "PATCH", body: { ...body, version: form.version } });
-        setMsg(t("reports.expenseUpdated"));
+        done = t("reports.expenseUpdated");
         setEditingExpenseId(null);
       } else {
         await api("/api/expenses", { method: "POST", body });
+        done = t("reports.expenseAdded");
       }
       setForm((f) => ({ ...f, amount: "", description: "", category: "OTHER", expenseDate: toYMD(new Date()), paidFrom: "CASH" }));
       await loadExpenses();
       await loadAnalytics();
+      // After the reload (which clears the message), so the confirmation stays on screen.
+      setMsg(done);
+      setMsgOk(true);
     } catch (err) {
+      setMsgOk(false);
       setMsg(isStaleEdit(err) ? editErrorMessage(err, t) : err.message || t("reports.saveFailed"));
       if (isStaleEdit(err) && editingExpenseId) {
         // NFR-13: someone else saved this expense first — reload it into the form.
@@ -254,7 +262,7 @@ export default function Reports() {
         </div>
       </div>
 
-      {msg ? <p style={{ color: "var(--danger)" }}>{msg}</p> : null}
+      {msg ? <p role="status" style={{ color: msgOk ? "var(--success, #15803d)" : "var(--danger)" }}>{msg}</p> : null}
 
       {tab === "charts" && analytics ? (
         <>

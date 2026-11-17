@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { formatDateTime } from "../utils/qatarDate.js";
 
 export default function Audit() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const branchId = useActiveBranchId();
   const [rows, setRows] = useState([]);
   const [msg, setMsg] = useState("");
@@ -70,7 +71,7 @@ export default function Audit() {
             ) : (
               rows.map((r) => (
                 <tr key={r.id}>
-                  <td className="audit-table__date">{new Date(r.createdAt).toLocaleString()}</td>
+                  <td className="audit-table__date">{formatDateTime(r.createdAt, locale)}</td>
                   <td>
                     <code className="audit-table__action">{r.action}</code>
                   </td>

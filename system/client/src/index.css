@@ -1690,6 +1690,27 @@ a.app-sidebar-link.is-active .app-sidebar-badge {
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
 }
 
+.settings-fields {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+}
+.settings-fields > label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.settings-fields > label > input:not([type="checkbox"]) {
+  width: 100%;
+}
+.settings-fields > label.settings-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+}
 .settings-card h2 {
   margin: 0 0 0.85rem;
   font-size: 0.98rem;
@@ -3246,8 +3267,8 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.65rem;
 }
-.customers-form__grid input,
-.customers-table input {
+.customers-form__grid input:not([type="checkbox"]),
+.customers-table input:not([type="checkbox"]) {
   width: 100%;
   box-sizing: border-box;
   padding: 0.65rem 0.75rem;
@@ -3256,6 +3277,20 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+/* Checkbox with its text on one line, as tall as the inputs beside it. */
+.customers-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  cursor: pointer;
+}
+.customers-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: 0 0 auto;
 }
 .customers-form__submit {
   background: var(--accent);

@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./context/AuthContext.jsx";
 import { useI18n } from "./context/LanguageContext.jsx";
 import { AppLayout } from "./components/layout/AppLayout.jsx";
@@ -60,15 +60,21 @@ function Protected({ children, roles, permission, anyPermission }) {
   }
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== "ADMIN") {
-    if (roles && !roles.includes(user.role)) {
-      return <Navigate to="/dashboard" replace />;
-    }
-    if (permission && !can(permission)) {
-      return <Navigate to="/dashboard" replace />;
-    }
-    if (Array.isArray(anyPermission) && anyPermission.length > 0) {
-      const ok = anyPermission.some((key) => can(key));
-      if (!ok) return <Navigate to="/dashboard" replace />;
+    // A screen this role may not use says so (a silent jump to the dashboard looked like a fault).
+    const denied =
+      (roles && !roles.includes(user.role)) ||
+      (permission && !can(permission)) ||
+      (Array.isArray(anyPermission) && anyPermission.length > 0 && !anyPermission.some((key) => can(key)));
+    if (denied) {
+      return (
+        <div className="card" role="alert" style={{ maxWidth: 520, margin: "24px auto", display: "grid", gap: 12 }}>
+          <strong>{t("common.noAccessTitle")}</strong>
+          <span>{t("common.noAccess")}</span>
+          <Link to="/dashboard" className="btn-touch" style={{ background: "var(--accent)", color: "#fff", textDecoration: "none", textAlign: "center", maxWidth: 220 }}>
+            {t("common.backToDashboard")}
+          </Link>
+        </div>
+      );
     }
   }
   return children;

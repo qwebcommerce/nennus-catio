@@ -70,13 +70,14 @@ export default function RelocationDesk() {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <h1>{t("shop.relocation")}</h1>
+      {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
       {rows.map((row) => (
         <article key={row.id} className="card" style={{ display: "grid", gap: 6 }}>
           <strong>{row.reference || row.id} · {row.customer?.name} · {row.destination} · {statusLabel("relocation", row.status, locale)}</strong>
           {row.createdAt ? <div>{formatDateTime(row.createdAt, locale)}</div> : null}
           {(row.payments || []).map((p) => (
             <div key={p.id} style={{ fontSize: 13, color: "var(--muted)" }}>
-              {p.kind} · {p.method} · {Number(p.amount).toFixed(2)} QAR · {p.status}{p.reference ? ` · ${p.reference}` : ""}
+              {statusLabel("txType", p.kind, locale)} · {statusLabel("payment", p.method, locale)} · {Number(p.amount).toFixed(2)} QAR · {statusLabel("payStatus", p.status, locale)}{p.reference ? ` · ${p.reference}` : ""}
             </div>
           ))}
           {row.gatewayPaymentId && (row.status === "QUOTE_SENT" || row.paymentReview) ? (
@@ -130,7 +131,6 @@ export default function RelocationDesk() {
           </div>
         </article>
       ))}
-      {msg ? <div>{msg}</div> : null}
     </div>
   );
 }
