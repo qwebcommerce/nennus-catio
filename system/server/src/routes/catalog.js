@@ -139,6 +139,22 @@ router.delete("/categories/:id", requireModule("products", "delete"), async (req
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Category not found" });
+  // Deleting would silently strip the category from its products (and their subcategories) and
+  // from category offers: refuse while anything still uses it.
+  const [usedByProducts, usedByOffers] = await Promise.all([
+    prisma.product.count({
+      where: { organizationId: req.user.organizationId, OR: [{ categoryId: existing.id }, { productSubcategory: { categoryId: existing.id } }] },
+    }),
+    prisma.promotion.count({ where: { categoryId: existing.id } }),
+  ]);
+  if (usedByProducts + usedByOffers > 0) {
+    return res.status(409).json({
+      error: "لا يمكن حذف هذه الفئة لأنها مستخدمة في منتجات أو عروض. انقل المنتجات إلى فئة أخرى أولاً.",
+      errorAr: "لا يمكن حذف هذه الفئة لأنها مستخدمة في منتجات أو عروض. انقل المنتجات إلى فئة أخرى أولاً.",
+      errorEn: "This category is used by products or offers, so it can't be deleted. Move those products to another category first.",
+      code: "CATEGORY_IN_USE",
+    });
+  }
   await prisma.category.delete({ where: { id: existing.id } });
   await writeAudit({
     userId: req.user.sub,
@@ -291,6 +307,15 @@ router.delete("/subcategories/:id", requireModule("products", "delete"), async (
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });
   if (!existing) return res.status(404).json({ error: "Subcategory not found" });
+  const usedByProducts = await prisma.product.count({ where: { organizationId: req.user.organizationId, subcategoryId: existing.id } });
+  if (usedByProducts > 0) {
+    return res.status(409).json({
+      error: "لا يمكن حذف هذه الفئة الفرعية لأنها مستخدمة في منتجات. انقل المنتجات أولاً.",
+      errorAr: "لا يمكن حذف هذه الفئة الفرعية لأنها مستخدمة في منتجات. انقل المنتجات أولاً.",
+      errorEn: "This subcategory is used by products, so it can't be deleted. Move those products first.",
+      code: "SUBCATEGORY_IN_USE",
+    });
+  }
   await prisma.subcategory.delete({ where: { id: existing.id } });
   await writeAudit({
     userId: req.user.sub,
