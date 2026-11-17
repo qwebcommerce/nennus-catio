@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, apiBlob, apiUploadExcel, apiUploadImage, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
@@ -52,6 +53,7 @@ export default function Products() {
   const { classFor } = usePrintSettings();
   const [list, setList] = useState([]);
   const [petTypes, setPetTypes] = useState([]);
+  const [petTypesError, setPetTypesError] = useState(false);
   const [suppliers, setSuppliers] = useState([]);
   const [listLoading, setListLoading] = useState(true);
   const [printProduct, setPrintProduct] = useState(null);
@@ -63,6 +65,13 @@ export default function Products() {
   const [formError, setFormError] = useState("");
   const [formBusy, setFormBusy] = useState(false);
   const [imageUploading, setImageUploading] = useState(false);
+  /** Picked image, previewed locally and uploaded only when the form is saved. */
+  const [pendingImage, setPendingImage] = useState(null);
+  const clearPendingImage = () =>
+    setPendingImage((cur) => {
+      if (cur?.previewUrl) URL.revokeObjectURL(cur.previewUrl);
+      return null;
+    });
   const imageFileRef = useRef(null);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
@@ -149,7 +158,15 @@ export default function Products() {
 
   useEffect(() => {
     loadCatalog().catch(() => {});
-    api("/api/pet-types").then(setPetTypes).catch(() => setPetTypes([]));
+    api("/api/pet-types")
+      .then((rows) => {
+        setPetTypes(Array.isArray(rows) ? rows : []);
+        setPetTypesError(false);
+      })
+      .catch(() => {
+        setPetTypes([]);
+        setPetTypesError(true);
+      });
     api("/api/suppliers").then(setSuppliers).catch(() => setSuppliers([]));
   }, []);
 
@@ -158,6 +175,7 @@ export default function Products() {
   }, [activeBranchId, page, pageSize, search, statusFilter]);
 
   const closeFormModal = () => {
+    clearPendingImage();
     setFormMode(null);
     setEditId("");
     setFormError("");
@@ -247,7 +265,7 @@ export default function Products() {
     }
     const img = String(data.imageUrl || "").trim();
     const publishing = data.status === "published";
-    if (publishing && !img) return t("products.imageRequired");
+    if (publishing && !img && !pendingImage) return t("products.imageRequired");
     if (img && !/^https?:\/\/\S+/i.test(img) && !img.startsWith("/")) return t("products.errImageUrl");
     if (data.stock !== "" && data.stock != null) {
       const stock = Number(data.stock);
@@ -256,6 +274,13 @@ export default function Products() {
     if (data.minStockLevel !== "" && data.minStockLevel != null) {
       const threshold = Number(data.minStockLevel);
       if (Number.isNaN(threshold) || threshold < 0 || !Number.isInteger(threshold)) return t("products.errMinStock");
+    }
+    for (const v of data.variants || []) {
+      for (const key of ["stock", "minStockLevel"]) {
+        if (v[key] === "" || v[key] == null) continue;
+        const n = Number(v[key]);
+        if (Number.isNaN(n) || n < 0 || !Number.isInteger(n)) return t("products.errStock");
+      }
     }
     return "";
   };
@@ -270,13 +295,31 @@ export default function Products() {
     }
     setFormBusy(true);
     try {
+      let imageUrl = String(form.imageUrl || "").trim();
+      if (pendingImage?.file) {
+        setImageUploading(true);
+        try {
+          const res = await apiUploadImage(
+            "/api/products/upload-image",
+            pendingImage.file,
+            formMode === "edit" && editId ? { productId: editId } : {}
+          );
+          if (!res?.url) throw new Error(t("products.imageUploadFailed"));
+          imageUrl = res.url;
+          // Uploaded now: a retry after a later error must not upload it again.
+          clearPendingImage();
+          setForm((f) => ({ ...f, imageUrl }));
+        } finally {
+          setImageUploading(false);
+        }
+      }
       const catalogBody = {
         name: form.name.trim(),
         nameEn: form.nameEn.trim(),
         price: Number(form.price),
         categoryId: form.categoryId || null,
         subcategoryId: form.subcategoryId || null,
-        imageUrl: String(form.imageUrl || "").trim(),
+        imageUrl,
         shortTitle: form.shortTitle.trim(),
         shortTitleEn: form.shortTitleEn.trim(),
         description: form.description.trim(),
@@ -309,8 +352,15 @@ export default function Products() {
             labelEn: v.labelEn,
             sku: v.sku || null,
             price: Number(v.price),
-            packWeight: v.packWeight === "" ? null : Number(v.packWeight),
+            packWeight: v.packWeight === "" || v.packWeight == null ? null : Number(v.packWeight),
             isActive: v.isActive !== false,
+            // New variants on a new product: opening stock and low-stock level at this location.
+            ...(formMode === "create"
+              ? {
+                  initialStock: v.stock === "" || v.stock == null ? 0 : Number(v.stock),
+                  ...(v.minStockLevel === "" || v.minStockLevel == null ? {} : { minStockLevel: Number(v.minStockLevel) }),
+                }
+              : {}),
           })),
       };
       const stockQty = form.stock === "" ? 0 : Number(form.stock);
@@ -327,7 +377,8 @@ export default function Products() {
             ...catalogBody,
             branchId: bid,
             petType: "OTHER",
-            initialStock: stockQty,
+            // With variants, stock is kept per variant (sent on each variant above).
+            initialStock: catalogBody.variants.length ? 0 : stockQty,
             minStockLevel: stockThreshold,
           },
         });
@@ -964,7 +1015,8 @@ export default function Products() {
             onSubmit={submitProductForm}
             noValidate
             style={{
-              width: "min(720px, 100%)",
+              width: "min(880px, 100%)",
+              boxSizing: "border-box",
               maxHeight: "90vh",
               overflow: "auto",
               margin: 0,
@@ -1007,7 +1059,7 @@ export default function Products() {
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   disabled={formBusy || imageUploading}
-                  onChange={async (e) => {
+                  onChange={(e) => {
                     const file = e.target.files?.[0];
                     e.target.value = "";
                     if (!file) return;
@@ -1015,34 +1067,42 @@ export default function Products() {
                       setFormError(t("products.imageTooLarge"));
                       return;
                     }
-                    setFormError("");
-                    setImageUploading(true);
-                    try {
-                      const res = await apiUploadImage(
-                        "/api/products/upload-image",
-                        file,
-                        formMode === "edit" && editId ? { productId: editId } : {}
-                      );
-                      if (!res?.url) throw new Error(t("products.imageUploadFailed"));
-                      setForm((f) => ({ ...f, imageUrl: res.url }));
-                      showToast(t("products.imageUploaded"), "success");
-                    } catch (err) {
-                      setFormError(err.message || t("products.imageUploadFailed"));
-                    } finally {
-                      setImageUploading(false);
+                    if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) {
+                      setFormError(t("products.imageUploadFailed"));
+                      return;
                     }
+                    setFormError("");
+                    clearPendingImage();
+                    setPendingImage({ file, previewUrl: URL.createObjectURL(file) });
                   }}
                 />
                 <span style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-                  {imageUploading ? t("products.imageUploading") : t("products.imageFileHint")}
+                  {imageUploading
+                    ? t("products.imageUploading")
+                    : pendingImage
+                      ? t("products.imagePendingHint")
+                      : t("products.imageFileHint")}
                 </span>
               </label>
-              {String(form.imageUrl || "").trim() ? (
-                <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "flex-start", gap: 12 }}>
-                  <ProductImagePreview url={form.imageUrl} alt="" width={140} height={140} />
+              {pendingImage || String(form.imageUrl || "").trim() ? (
+                <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                  {pendingImage ? (
+                    <img
+                      src={pendingImage.previewUrl}
+                      alt=""
+                      width={140}
+                      height={140}
+                      style={{ objectFit: "cover", borderRadius: 12, border: "1px solid var(--border)" }}
+                    />
+                  ) : (
+                    <ProductImagePreview url={form.imageUrl} alt="" width={140} height={140} />
+                  )}
                   <button
                     type="button"
-                    onClick={() => setForm((f) => ({ ...f, imageUrl: "" }))}
+                    onClick={() => {
+                      clearPendingImage();
+                      setForm((f) => ({ ...f, imageUrl: "" }));
+                    }}
                     style={{ ...btnSm, background: "var(--surface2)" }}
                   >
                     {t("products.removeImage")}
@@ -1122,6 +1182,12 @@ export default function Products() {
                   ) : null}
                 </div>
               </label>
+              {(form.variants || []).length ? (
+                <p style={{ gridColumn: "1 / -1", margin: 0, fontSize: 13, color: "var(--muted)" }}>
+                  {t("products.stockPerVariant")}
+                </p>
+              ) : (
+              <>
               <label style={fld}>
                 <span>{t("products.stockValue")}</span>
                 <input
@@ -1146,6 +1212,8 @@ export default function Products() {
                   onChange={(e) => setForm({ ...form, minStockLevel: e.target.value })}
                 />
               </label>
+              </>
+              )}
               {formMode === "edit" ? (
                 <label style={fld}>
                   <span>{t("products.stockReason")}</span>
@@ -1200,12 +1268,16 @@ export default function Products() {
                   ))}
                 </select>
               </label>
-              <label style={fld}>
+              <label style={checkRow}>
+                <input type="checkbox" style={checkBox} checked={Boolean(form.isPetHouse)} onChange={(e) => setForm({ ...form, isPetHouse: e.target.checked })} />
                 <span>{t("shop.petHouse")}</span>
-                <input type="checkbox" checked={Boolean(form.isPetHouse)} onChange={(e) => setForm({ ...form, isPetHouse: e.target.checked })} />
               </label>
               {form.isPetHouse ? (
                 <>
+                  <label style={checkRow}>
+                    <input type="checkbox" style={checkBox} checked={form.takesStock !== false} onChange={(e) => setForm({ ...form, takesStock: e.target.checked })} />
+                    <span>{t("shop.takesStock")}</span>
+                  </label>
                   <label style={fld}>
                     <span>{t("shop.leadTime")}</span>
                     <input style={inp} type="number" min="0" value={form.leadTimeDays} onChange={(e) => setForm({ ...form, leadTimeDays: e.target.value })} />
@@ -1213,10 +1285,6 @@ export default function Products() {
                   <label style={fld}>
                     <span>{t("shop.houseFee")}</span>
                     <input style={inp} type="number" min="0" step="0.01" value={form.houseDeliveryFee} onChange={(e) => setForm({ ...form, houseDeliveryFee: e.target.value })} />
-                  </label>
-                  <label style={fld}>
-                    <span>{t("shop.takesStock")}</span>
-                    <input type="checkbox" checked={form.takesStock !== false} onChange={(e) => setForm({ ...form, takesStock: e.target.checked })} />
                   </label>
                 </>
               ) : null}
@@ -1227,28 +1295,51 @@ export default function Products() {
                   <option value="WEIGHT">{t("products.sellWeight")}</option>
                 </select>
               </label>
-              <label style={fld}>
-                <span>{t("products.petTypes")}</span>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {petTypes.filter((row) => row.isActive !== false).map((row) => (
-                    <label key={row.id} style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={(form.petTypeIds || []).includes(row.id)}
-                        onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            petTypeIds: e.target.checked
-                              ? [...(f.petTypeIds || []), row.id]
-                              : (f.petTypeIds || []).filter((id) => id !== row.id),
-                          }))
-                        }
-                      />
-                      <span>{locale === "en" ? row.nameEn || row.name : row.name}</span>
-                    </label>
-                  ))}
-                </div>
-              </label>
+              <fieldset style={{ ...fld, gridColumn: "1 / -1", border: 0, padding: 0, margin: 0 }}>
+                <legend style={{ padding: 0, marginBottom: 6 }}>{t("products.petTypes")}</legend>
+                {petTypes.filter((row) => row.isActive !== false).length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {petTypes.filter((row) => row.isActive !== false).map((row) => {
+                      const on = (form.petTypeIds || []).includes(row.id);
+                      return (
+                        <label
+                          key={row.id}
+                          style={{
+                            ...checkRow,
+                            minHeight: 0,
+                            padding: "6px 12px",
+                            borderRadius: 999,
+                            border: `1px solid ${on ? "var(--accent, #1e3e2f)" : "var(--border)"}`,
+                            background: on ? "var(--surface2)" : "transparent",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            style={checkBox}
+                            checked={on}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                petTypeIds: e.target.checked
+                                  ? [...(f.petTypeIds || []), row.id]
+                                  : (f.petTypeIds || []).filter((id) => id !== row.id),
+                              }))
+                            }
+                          />
+                          <span>{locale === "en" ? row.nameEn || row.name : row.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--muted)" }}>
+                    {petTypesError ? t("products.petTypesLoadFailed") : t("products.noPetTypes")}{" "}
+                    {!petTypesError ? <Link to="/pet-types">{t("products.managePetTypes")}</Link> : null}
+                  </p>
+                )}
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("products.petTypesHint")}</span>
+              </fieldset>
               <label style={fld}>
                 <span>{t("products.gallery")}</span>
                 <textarea
@@ -1258,92 +1349,82 @@ export default function Products() {
                   placeholder={t("products.galleryHint")}
                 />
               </label>
-              <div style={fld}>
-                <span>{t("products.variants")}</span>
-                {(form.variants || []).map((variant, index) => (
-                  <div key={variant.id || index} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 6, marginTop: 6 }}>
-                    <input
-                      style={inp}
-                      placeholder={t("products.variantLabel")}
-                      value={variant.label}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          variants: f.variants.map((row, i) => (i === index ? { ...row, label: e.target.value } : row)),
-                        }))
-                      }
-                    />
-                    <input
-                      style={inp}
-                      placeholder={t("products.variantLabelEn")}
-                      value={variant.labelEn}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          variants: f.variants.map((row, i) => (i === index ? { ...row, labelEn: e.target.value } : row)),
-                        }))
-                      }
-                    />
-                    <input
-                      style={inp}
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      placeholder={t("products.price")}
-                      value={variant.price}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          variants: f.variants.map((row, i) => (i === index ? { ...row, price: e.target.value } : row)),
-                        }))
-                      }
-                    />
-                    {formMode === "edit" && variant.id && activeBranchId ? (
-                      <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                        <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-                          <span>{t("products.variantStockHere")}</span>
-                          <input
-                            style={inp}
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={variant.stock}
-                            onChange={(e) =>
-                              setForm((f) => ({
-                                ...f,
-                                variants: f.variants.map((row, i) => (i === index ? { ...row, stock: e.target.value } : row)),
-                              }))
-                            }
-                          />
-                        </label>
-                        <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-                          <span>{t("products.variantLowStockHere")}</span>
-                          <input
-                            style={inp}
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={variant.minStockLevel}
-                            onChange={(e) =>
-                              setForm((f) => ({
-                                ...f,
-                                variants: f.variants.map((row, i) => (i === index ? { ...row, minStockLevel: e.target.value } : row)),
-                              }))
-                            }
-                          />
-                        </label>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
+              <div style={{ ...fld, gridColumn: "1 / -1" }}>
+                <span style={{ fontWeight: 600 }}>{t("products.variants")}</span>
+                {(form.variants || []).length ? (
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>
+                    {formMode === "create" ? t("products.variantsCreateHint") : t("products.variantsEditHint")}
+                  </span>
+                ) : null}
+                {(form.variants || []).map((variant, index) => {
+                  const setVariant = (patch) =>
+                    setForm((f) => ({
+                      ...f,
+                      variants: f.variants.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+                    }));
+                  const showStock = formMode === "create" || (formMode === "edit" && variant.id && activeBranchId);
+                  return (
+                    <div
+                      key={variant.id || `new-${index}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                        gap: 8,
+                        padding: 10,
+                        border: "1px solid var(--border)",
+                        borderRadius: 12,
+                        alignItems: "end",
+                      }}
+                    >
+                      <label style={fldSm}>
+                        <span>{t("products.variantLabel")}</span>
+                        <input style={inp} value={variant.label} onChange={(e) => setVariant({ label: e.target.value })} />
+                      </label>
+                      <label style={fldSm}>
+                        <span>{t("products.variantLabelEn")}</span>
+                        <input style={inp} value={variant.labelEn} onChange={(e) => setVariant({ labelEn: e.target.value })} />
+                      </label>
+                      <label style={fldSm}>
+                        <span>{t("products.price")}</span>
+                        <input style={inp} type="number" min={0} step="0.01" value={variant.price} onChange={(e) => setVariant({ price: e.target.value })} />
+                      </label>
+                      {showStock ? (
+                        <>
+                          <label style={fldSm}>
+                            <span>{formMode === "create" ? t("products.variantOpeningStock") : t("products.variantStockHere")}</span>
+                            <input style={inp} type="number" min={0} step={1} value={variant.stock ?? ""} onChange={(e) => setVariant({ stock: e.target.value })} />
+                          </label>
+                          <label style={fldSm}>
+                            <span>{t("products.variantLowStockHere")}</span>
+                            <input style={inp} type="number" min={0} step={1} value={variant.minStockLevel ?? ""} onChange={(e) => setVariant({ minStockLevel: e.target.value })} />
+                          </label>
+                        </>
+                      ) : (
+                        <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>{t("products.variantStockAfterSave")}</span>
+                      )}
+                      {!variant.id ? (
+                        <button
+                          type="button"
+                          onClick={() => setForm((f) => ({ ...f, variants: f.variants.filter((_, i) => i !== index) }))}
+                          style={{ ...btnSm, background: "var(--surface2)", justifySelf: "start", alignSelf: "end", minHeight: 40 }}
+                        >
+                          {t("products.removeVariant")}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
                 <button
                   type="button"
                   className="btn-touch"
-                  style={{ background: "var(--surface2)", marginTop: 8 }}
+                  style={{ background: "var(--surface2)", justifySelf: "start" }}
                   onClick={() =>
                     setForm((f) => ({
                       ...f,
-                      variants: [...(f.variants || []), { label: "", labelEn: "", sku: "", price: f.price || "", packWeight: "", isActive: true }],
+                      variants: [
+                        ...(f.variants || []),
+                        { label: "", labelEn: "", sku: "", price: f.price || "", packWeight: "", isActive: true, stock: "", minStockLevel: "" },
+                      ],
                     }))
                   }
                 >
@@ -1668,6 +1749,9 @@ const thCell = { padding: "10px 12px", fontWeight: 600, whiteSpace: "nowrap" };
 const tdCell = { padding: "10px 12px", verticalAlign: "top" };
 
 const inp = {
+  width: "100%",
+  boxSizing: "border-box",
+  minWidth: 0,
   padding: 10,
   borderRadius: 12,
   border: "1px solid var(--border)",
@@ -1675,6 +1759,10 @@ const inp = {
   color: "var(--text)",
 };
 const fld = { display: "flex", flexDirection: "column", gap: 6, minWidth: 0 };
+const fldSm = { display: "flex", flexDirection: "column", gap: 4, minWidth: 0, fontSize: 12 };
+/** Checkbox with its text on one line, the same height as an input so it lines up in the grid. */
+const checkRow = { display: "flex", flexDirection: "row", alignItems: "center", gap: 8, minHeight: 42, alignSelf: "end", cursor: "pointer" };
+const checkBox = { width: 18, height: 18, margin: 0, flex: "0 0 auto" };
 const btnSm = {
   padding: "4px 10px",
   minHeight: 28,

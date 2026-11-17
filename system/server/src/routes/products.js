@@ -922,6 +922,20 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
     });
   }
   const stockQty = stockRaw;
+  // Opening stock and low-stock level per variant, at the location the product is created in (FR-17, FR-92).
+  const wholeOrNull = (v) => (v == null || v === "" ? null : Number(v));
+  for (const raw of Array.isArray(req.body?.variants) ? req.body.variants : []) {
+    for (const key of ["initialStock", "minStockLevel"]) {
+      const n = wholeOrNull(raw?.[key]);
+      if (n !== null && (!Number.isInteger(n) || n < 0)) {
+        return res.status(400).json({
+          error: "مخزون الصنف يجب أن يكون عدداً صحيحاً",
+          errorAr: "مخزون الصنف يجب أن يكون عدداً صحيحاً",
+          errorEn: "Variant stock must be a whole number of zero or more",
+        });
+      }
+    }
+  }
   const hasVariantsInBody = Array.isArray(req.body?.variants) && req.body.variants.some((v) => String(v?.label || v?.labelEn || "").trim());
   if (stockQty > 0 && hasVariantsInBody) {
     return res.status(400).json({
@@ -981,12 +995,36 @@ router.post("/", requireModule("products", "create"), async (req, res) => {
           unitCost: openingCost,
         });
       }
+      // Variants (and pet types) are created in the same transaction, then their opening stock.
+      const { createdVariants } = await syncProductExtras(tx, {
+        orgId: req.user.organizationId,
+        productId: created.id,
+        body: req.body || {},
+      });
+      for (const { id: variantId, raw } of createdVariants) {
+        const opening = wholeOrNull(raw?.initialStock) ?? 0;
+        const minLevel = wholeOrNull(raw?.minStockLevel);
+        if (opening > 0) {
+          await setStockCount(tx, {
+            orgId: req.user.organizationId,
+            userId: req.user.sub,
+            productId: created.id,
+            variantId,
+            branchId: bid,
+            quantity: opening,
+            note: "Opening stock",
+            unitCost: openingCost,
+          });
+        }
+        if (minLevel !== null) {
+          await tx.variantStock.upsert({
+            where: { variantId_branchId: { variantId, branchId: bid } },
+            create: { variantId, branchId: bid, quantity: 0, minStockLevel: minLevel },
+            update: { minStockLevel: minLevel },
+          });
+        }
+      }
       return tx.product.findUnique({ where: { id: created.id }, include: { inventories: true } });
-    });
-    await syncProductExtras(prisma, {
-      orgId: req.user.organizationId,
-      productId: product.id,
-      body: req.body || {},
     });
   } catch (e) {
     if (e?.code === "P2002") {

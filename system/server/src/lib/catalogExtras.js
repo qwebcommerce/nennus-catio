@@ -47,17 +47,19 @@ export async function productExtrasData(tx, { orgId, body }) {
 }
 
 export async function syncProductExtras(tx, { orgId, productId, body, skipProductRow = false }) {
-  if (!body) return;
+  if (!body) return { createdVariants: [] };
   if (!skipProductRow) {
     const data = await productExtrasData(tx, { orgId, body });
     if (Object.keys(data).length) await tx.product.update({ where: { id: productId }, data });
   }
-  await syncProductLinks(tx, { orgId, productId, body });
+  return syncProductLinks(tx, { orgId, productId, body });
 }
 
 /** Pet types and variants of a product (rows of their own tables). */
+/** Returns the variants it created, with the request row each came from (for opening stock). */
 export async function syncProductLinks(tx, { orgId, productId, body }) {
-  if (!body) return;
+  const createdVariants = [];
+  if (!body) return { createdVariants };
   if (Array.isArray(body.petTypeIds)) {
     const ids = [...new Set(body.petTypeIds.map((id) => String(id || "").trim()).filter(Boolean))];
     const found = ids.length
@@ -105,10 +107,13 @@ export async function syncProductLinks(tx, { orgId, productId, body }) {
           if (cur) throw staleEditError(cur.version);
         }
       } else {
-        await tx.productVariant.create({
+        const row = await tx.productVariant.create({
           data: { ...data, productId, organizationId: orgId },
+          select: { id: true },
         });
+        createdVariants.push({ id: row.id, raw });
       }
     }
   }
+  return { createdVariants };
 }
