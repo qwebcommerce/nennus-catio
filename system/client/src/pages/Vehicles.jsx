@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api/client.js";
+import { branchDisplayName } from "../utils/displayLabels.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 
 export default function Vehicles() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [rows, setRows] = useState([]);
   const [vans, setVans] = useState([]);
   const [form, setForm] = useState({ name: "", plate: "", branchId: "", notes: "" });
@@ -17,22 +18,28 @@ export default function Vehicles() {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <h1>{t("shop.vehicles")}</h1>
+      {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
       <form className="card" style={{ display: "grid", gap: 8 }} onSubmit={async (e) => {
         e.preventDefault();
-        await api("/api/vehicles", { method: "POST", body: { ...form, branchId: form.branchId || null } });
-        setForm({ name: "", plate: "", branchId: "", notes: "" });
-        load();
+        setMsg("");
+        try {
+          await api("/api/vehicles", { method: "POST", body: { ...form, branchId: form.branchId || null } });
+          setForm({ name: "", plate: "", branchId: "", notes: "" });
+          setMsg(t("setup.added"));
+          await load();
+        } catch (err) {
+          setMsg(err.message);
+        }
       }}>
-        <input required placeholder={t("shop.vehicleName")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <input required placeholder={t("shop.plate")} value={form.plate} onChange={(e) => setForm({ ...form, plate: e.target.value })} />
-        <select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
+        <input required placeholder={t("shop.vehicleName")} aria-label={t("shop.vehicleName")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <input required placeholder={t("shop.plate")} aria-label={t("shop.plate")} value={form.plate} onChange={(e) => setForm({ ...form, plate: e.target.value })} />
+        <select aria-label={t("shop.noVan")} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
           <option value="">{t("shop.noVan")}</option>
-          {vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}
+          {vans.filter((van) => van.isActive !== false).map((van) => <option key={van.id} value={van.id}>{branchDisplayName(van, locale)}</option>)}
         </select>
         <button className="btn-touch" type="submit">{t("common.add")}</button>
       </form>
-      {rows.map((row) => <div key={row.id} className="card">{row.name} · {row.plate} · {row.branch?.name || "—"}</div>)}
-      {msg ? <div>{msg}</div> : null}
+      {rows.map((row) => <div key={row.id} className="card">{row.name} · {row.plate} · {row.branch ? branchDisplayName(row.branch, locale) : "—"}</div>)}
     </div>
   );
 }

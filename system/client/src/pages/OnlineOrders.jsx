@@ -4,6 +4,7 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { formatDateTime } from "../utils/qatarDate.js";
 import { money2, riyals, toDirhams } from "../utils/money.js";
+import { productDisplayName } from "../utils/productName.js";
 
 const NEXT = {
   CONFIRMED: ["PREPARING", "CANCELLED"],
@@ -38,15 +39,16 @@ export default function OnlineOrders() {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <h1>{t("shop.staffOrders")}</h1>
+      {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           {t("shop.deliveryDay")}
           <input type="date" value={day} onChange={(e) => setDay(e.target.value)} />
         </label>
         <form onSubmit={(e) => { e.preventDefault(); load(); }}>
-          <input placeholder={t("shop.searchReference")} value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input placeholder={t("shop.searchReference")} aria-label={t("shop.searchReference")} value={search} onChange={(e) => setSearch(e.target.value)} />
         </form>
-        <label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={reviewOnly} onChange={(e) => setReviewOnly(e.target.checked)} /> {t("shop.reviewOnly")}
         </label>
       </div>
@@ -59,6 +61,16 @@ export default function OnlineOrders() {
             {Number(row.amountPaid) > 0 ? ` · ${t("shop.paid")} ${Number(row.amountPaid).toFixed(2)}` : ""}
             {refunded(row) > 0 ? ` · ${t("shop.refunds")} ${refunded(row).toFixed(2)}` : ""}
           </div>
+          {row.customer?.phone ? <div>{row.customer.phone}</div> : null}
+          {/* What to prepare: the order lines. */}
+          {(row.items || []).map((it) => (
+            <div key={it.id} style={{ fontSize: 14 }}>
+              {productDisplayName(it.product, locale)}
+              {it.variant ? ` · ${locale === "en" ? it.variant.labelEn || it.variant.label : it.variant.label}` : ""}
+              {" × "}
+              {it.product?.sellBy === "WEIGHT" ? `${(Number(it.quantity) / 1000).toFixed(3)} kg` : it.quantity}
+            </div>
+          ))}
           {row.deliveryDate ? <div>{String(row.deliveryDate).slice(0, 10)} · {row.deliveryAddress}</div> : null}
           {row.fleetwizReference ? <div>FleetWiz {row.fleetwizReference} · {row.fleetwizStatus}</div> : null}
           {row.gatewayPaymentId && (row.webStatus === "PENDING_PAYMENT" || row.paymentReview) ? (
@@ -87,14 +99,13 @@ export default function OnlineOrders() {
               <button type="button" onClick={() => api(`/api/online-orders/${row.id}/dispatch`, { method: "POST", body: {} }).then(load).catch((e) => setMsg(e.message))}>FleetWiz</button>
             ) : null}
             {(NEXT[row.webStatus] || []).map((status) => (
-              <button key={status} type="button" onClick={() => api(`/api/online-orders/${row.id}/status`, { method: "POST", body: { status } }).then(load).catch((e) => setMsg(e.message))}>
+              <button key={status} type="button" onClick={() => api(`/api/online-orders/${row.id}/status`, { method: "POST", body: { status } }).then(() => { setMsg(`${row.reference || ""} · ${statusLabel("order", status, locale)}`); return load(); }).catch((e) => setMsg(e.message))}>
                 {statusLabel("order", status, locale)}
               </button>
             ))}
           </div>
         </article>
       ))}
-      {msg ? <div>{msg}</div> : null}
     </div>
   );
 }

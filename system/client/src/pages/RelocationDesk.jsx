@@ -70,6 +70,7 @@ export default function RelocationDesk() {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <h1>{t("shop.relocation")}</h1>
+      {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
       {rows.map((row) => (
         <article key={row.id} className="card" style={{ display: "grid", gap: 6 }}>
           <strong>{row.reference || row.id} · {row.customer?.name} · {row.destination} · {statusLabel("relocation", row.status, locale)}</strong>
@@ -130,7 +131,6 @@ export default function RelocationDesk() {
           </div>
         </article>
       ))}
-      {msg ? <div>{msg}</div> : null}
     </div>
   );
 }

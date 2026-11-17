@@ -138,7 +138,10 @@ export default function Appointments() {
           notes: form.notes || undefined,
         },
       });
-      await loadAppointments();
+      // Show the day the booking was made for, so it is visible straight away.
+      const bookedDay = String(form.startAt || "").slice(0, 10);
+      if (bookedDay && bookedDay !== day) setDay(bookedDay);
+      else await loadAppointments();
       setMsg(t("appointments.msgCreated"));
     } catch (x) {
       setMsg(x.message || t("appointments.msgCreateFail"));
@@ -192,6 +195,7 @@ export default function Appointments() {
       <form className="card" onSubmit={submit} style={{ display: "grid", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <select
+            aria-label={t("appointments.customerOptional")}
             value={form.customerId}
             onChange={(e) => setForm((f) => ({ ...f, customerId: e.target.value }))}
             style={{ ...inp, minWidth: 180 }}
@@ -204,6 +208,7 @@ export default function Appointments() {
             ))}
           </select>
           <select
+            aria-label={t("appointments.service")}
             value={form.serviceId}
             onChange={(e) => onServiceChange(e.target.value)}
             style={{ ...inp, minWidth: 180 }}
@@ -211,7 +216,7 @@ export default function Appointments() {
             <option value="">{t("appointments.service")}</option>
             {services.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name}
+                {locale === "en" ? s.nameEn || s.name : s.name}
               </option>
             ))}
           </select>
@@ -228,26 +233,31 @@ export default function Appointments() {
                 value={form.petName}
                 onChange={(e) => setForm((f) => ({ ...f, petName: e.target.value }))}
                 placeholder={t("appointments.petNamePh")}
+                aria-label={t("appointments.petNamePh")}
               />
               <select
                 value={form.petType}
                 onChange={(e) => setForm((f) => ({ ...f, petType: e.target.value }))}
                 style={{ ...inp, minWidth: 120 }}
               >
-                <option value="CAT">CAT</option>
-                <option value="DOG">DOG</option>
-                <option value="OTHER">OTHER</option>
+                <option value="CAT">{t("pet.cat")}</option>
+                <option value="DOG">{t("pet.dog")}</option>
+                <option value="OTHER">{t("pet.other")}</option>
               </select>
             </>
           ) : null}
           <input
             type="datetime-local"
+            aria-label={t("appointments.startAt")}
+            title={t("appointments.startAt")}
             value={form.startAt}
             onChange={(e) => setForm((f) => ({ ...f, startAt: e.target.value }))}
             style={{ ...inp }}
           />
           <input
             type="datetime-local"
+            aria-label={t("appointments.endAt")}
+            title={t("appointments.endAt")}
             value={form.endAt}
             onChange={(e) => setForm((f) => ({ ...f, endAt: e.target.value }))}
             style={{ ...inp }}
@@ -277,7 +287,7 @@ export default function Appointments() {
       <div className="card" style={{ display: "grid", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <strong>{t("appointments.todayTitle")}</strong>
-          <input type="date" value={day} onChange={(e) => setDay(e.target.value)} style={inp} />
+          <input type="date" aria-label={t("appointments.todayTitle")} value={day} onChange={(e) => setDay(e.target.value)} style={inp} />
           <button type="button" className="btn-touch" onClick={() => loadAppointments()}>
             {t("appointments.refresh")}
           </button>
