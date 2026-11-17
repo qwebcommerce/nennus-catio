@@ -384,13 +384,21 @@ export default function Products() {
         });
         showToast(t("products.toastCreated"), "success");
       } else if (formMode === "edit" && editId) {
-        await api(`/api/products/${editId}`, {
-          method: "PATCH",
-          body: { ...catalogBody, version: form.version },
-        });
         const bid = activeBranchId;
         const reason = String(form.stockReason || "").trim();
         const savedVariants = (form.variants || []).filter((v) => v.id);
+        // Ask for the stock-change reason before saving anything: otherwise the product is saved,
+        // the form keeps its old version and the next "Save" is refused as someone else's edit.
+        const stockEdited = bid && (savedVariants.length
+          ? savedVariants.some((v) => String(v.stock) !== String(v.stockOriginal))
+          : String(form.stock) !== String(form.stockOriginal));
+        if (stockEdited && !reason) throw new Error(t("products.stockReasonRequired"));
+        const saved = await api(`/api/products/${editId}`, {
+          method: "PATCH",
+          body: { ...catalogBody, version: form.version },
+        });
+        // Saved: a retry of the stock step below must send the new version, not the old one.
+        if (saved?.version != null) setForm((f) => ({ ...f, version: saved.version }));
         if (bid && savedVariants.length) {
           // Stock and low-stock level are kept per variant at this location (FR-17, FR-92).
           for (const v of savedVariants) {
