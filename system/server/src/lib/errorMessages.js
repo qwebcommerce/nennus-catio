@@ -488,6 +488,14 @@ const EXACT = [
   ["تعذر جلب التنبيهات", "Could not load notifications"],
   ["تعذر حساب غير المقروء", "Could not count unread notifications"],
   ["تعذر تحديث حالة القراءة", "Could not update the read status"],
+  // ── Added with the screen sweep ──────────────────────────────────────────
+  ["النظام مشغول بعملية أخرى على نفس المخزون. حاول مرة أخرى.", "Another sale was updating the same stock at the same moment. Please try again."],
+  ["أدخل الأوقات بصيغة HH:MM وسعة واحدة على الأقل", "Times as HH:MM and a capacity of at least one are required"],
+  ["لا يمكن حذف هذه الفئة لأنها مستخدمة في منتجات أو عروض. انقل المنتجات إلى فئة أخرى أولاً.", "This category is used by products or offers, so it can't be deleted. Move those products to another category first."],
+  ["لا يمكن حذف هذه الفئة الفرعية لأنها مستخدمة في منتجات. انقل المنتجات أولاً.", "This subcategory is used by products, so it can't be deleted. Move those products first."],
+  ["يوجد نوع حيوان بهذا الاسم بالفعل", "A pet type with this name already exists"],
+  ["مشغول، أعد المحاولة لاحقاً", "Busy, retry later"],
+  ["لا يمكن حذف هذا المورد لأن له مشتريات أو أوامر شراء أو فواتير. أوقفه بدلاً من ذلك.", "This supplier has purchases, purchase orders or bills, so it can't be deleted. Deactivate it instead."],
 ];
 
 const PATTERNS = [

@@ -2206,3 +2206,16 @@ model EmailOutbox {
 
   @@index([status, nextAttemptAt])
 }
+
+/// Demo data (scripts/demo-data.mjs): one row per database row the demo loader created, so
+/// `remove` deletes exactly those rows. entityType is the table name; "_load" rows hold the
+/// loader's own state (organization, previous website location, status).
+model DemoRecord {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  @@unique([entityType, entityId])
+}

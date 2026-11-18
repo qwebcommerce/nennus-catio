@@ -47,7 +47,7 @@ function emptyProductForm() {
 }
 
 export default function Products() {
-  const { user, isAdmin, can } = useAuth();
+  const { user, isAdmin, can, canModule } = useAuth();
   const { t, locale } = useI18n();
   const { showToast } = useToast();
   const { classFor } = usePrintSettings();
@@ -110,7 +110,11 @@ export default function Products() {
     });
   };
 
+  /** Only the newest list request may fill the table: on a slow line an older reply (say the full
+   *  list from before a search was typed) can arrive last and would overwrite the search results. */
+  const loadSeq = useRef(0);
   const load = async () => {
+    const seq = ++loadSeq.current;
     setListLoading(true);
     try {
       const bid = activeBranchId;
@@ -127,6 +131,7 @@ export default function Products() {
         api(`/api/products${q}`),
         api(`/api/inventory/low-stock${bid ? `?branchId=${bid}` : ""}`),
       ]);
+      if (seq !== loadSeq.current) return res && Array.isArray(res.items) ? res.items : Array.isArray(res) ? res : [];
       if (res && Array.isArray(res.items)) {
         setList(res.items);
         setTotal(res.total ?? 0);
@@ -167,7 +172,8 @@ export default function Products() {
         setPetTypes([]);
         setPetTypesError(true);
       });
-    api("/api/suppliers").then(setSuppliers).catch(() => setSuppliers([]));
+    // The preferred-supplier list needs Purchasing → view; without it the field just stays empty.
+    if (canModule("purchasing", "view")) api("/api/suppliers").then(setSuppliers).catch(() => setSuppliers([]));
   }, []);
 
   useEffect(() => {
@@ -384,13 +390,21 @@ export default function Products() {
         });
         showToast(t("products.toastCreated"), "success");
       } else if (formMode === "edit" && editId) {
-        await api(`/api/products/${editId}`, {
-          method: "PATCH",
-          body: { ...catalogBody, version: form.version },
-        });
         const bid = activeBranchId;
         const reason = String(form.stockReason || "").trim();
         const savedVariants = (form.variants || []).filter((v) => v.id);
+        // Ask for the stock-change reason before saving anything: otherwise the product is saved,
+        // the form keeps its old version and the next "Save" is refused as someone else's edit.
+        const stockEdited = bid && (savedVariants.length
+          ? savedVariants.some((v) => String(v.stock) !== String(v.stockOriginal))
+          : String(form.stock) !== String(form.stockOriginal));
+        if (stockEdited && !reason) throw new Error(t("products.stockReasonRequired"));
+        const saved = await api(`/api/products/${editId}`, {
+          method: "PATCH",
+          body: { ...catalogBody, version: form.version },
+        });
+        // Saved: a retry of the stock step below must send the new version, not the old one.
+        if (saved?.version != null) setForm((f) => ({ ...f, version: saved.version }));
         if (bid && savedVariants.length) {
           // Stock and low-stock level are kept per variant at this location (FR-17, FR-92).
           for (const v of savedVariants) {
@@ -908,8 +922,18 @@ export default function Products() {
                       <div className="products-table__sub">{catalogLabel(p.productSubcategory)}</div>
                     ) : null}
                   </td>
-                  <td className="products-table__num">{Number(p.price).toFixed(2)}</td>
-                  <td className="products-table__num">{inv?.quantity ?? t("common.none")}</td>
+                  <td className="products-table__num">{Number(p.price).toFixed(2)}{p.sellBy === "WEIGHT" ? ` ${t("pos.perKg")}` : ""}</td>
+                  <td className="products-table__num">
+                    {(() => {
+                      // Stock at this location: the variants' sum for a variant product, kg for weight goods.
+                      const vs = Array.isArray(p.variants) ? p.variants : [];
+                      const qty = vs.length
+                        ? vs.reduce((sum, v) => sum + Number((v.stocks || []).find((row) => !activeBranchId || row.branchId === activeBranchId)?.quantity ?? 0), 0)
+                        : inv?.quantity;
+                      if (qty == null) return t("common.none");
+                      return p.sellBy === "WEIGHT" ? `${(Number(qty) / 1000).toFixed(3)} kg` : qty;
+                    })()}
+                  </td>
                   <td>{p.isActive ? t("products.statusActive") : t("products.statusInactive")}</td>
                   <td className="products-table__actions">
                     <div className="products-table__btns">
@@ -1402,6 +1426,13 @@ export default function Products() {
                       ) : (
                         <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>{t("products.variantStockAfterSave")}</span>
                       )}
+                      {variant.id ? (
+                        // A saved variant is switched off rather than removed (it has stock and sales history).
+                        <label style={checkRow}>
+                          <input type="checkbox" style={checkBox} checked={variant.isActive !== false} onChange={(e) => setVariant({ isActive: e.target.checked })} />
+                          <span>{t("products.variantActive")}</span>
+                        </label>
+                      ) : null}
                       {!variant.id ? (
                         <button
                           type="button"
@@ -1576,6 +1607,9 @@ export default function Products() {
             inset: 0,
             zIndex: 70,
             display: "grid",
+            // One shrinkable column: an auto track grew to the table's width on a phone and
+            // pushed "Save as drafts" off the screen.
+            gridTemplateColumns: "minmax(0, 1fr)",
             placeItems: "center",
             padding: 16,
             background: "rgba(15, 23, 42, 0.55)",
@@ -1588,6 +1622,8 @@ export default function Products() {
             className="card"
             style={{
               width: "min(960px, 100%)",
+              minWidth: 0,
+              boxSizing: "border-box",
               maxHeight: "90vh",
               margin: 0,
               display: "flex",

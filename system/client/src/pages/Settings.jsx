@@ -35,7 +35,7 @@ function SettingRow({ label, hint, control }) {
 }
 
 export default function Settings() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { theme, toggleTheme } = useTheme();
   const { isAdmin, isManager, isOrgOwner } = useAuth();
   const { showToast } = useToast();
@@ -192,6 +192,8 @@ export default function Settings() {
           <h2>{t("settings.websiteLocation")}</h2>
           <p>{t("settings.websiteLocationHint")}</p>
           <select
+            aria-label={t("settings.websiteLocation")}
+            style={{ width: "100%" }}
             value={websiteBranchId}
             onChange={async (e) => {
               const next = e.target.value;
@@ -200,7 +202,7 @@ export default function Settings() {
                 const saved = await api("/api/org-settings", { method: "PATCH", body: { websiteBranchId: next || null, version: orgVersion } });
                 setWebsiteBranchId(saved.websiteBranchId || "");
                 setOrgVersion(saved.version ?? null);
-                showToast(t("common.save"), "success");
+                showToast(t("shop.saved"), "success");
               } catch (err) {
                 await settingsSaveFailed(err);
               }
@@ -208,9 +210,11 @@ export default function Settings() {
           >
             <option value="">{t("shop.noLocation")}</option>
             {branches.filter((b) => b.isActive !== false && b.kind !== "VAN").map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
+              <option key={b.id} value={b.id}>{locale === "en" ? b.nameEn || b.name : b.name}</option>
             ))}
           </select>
+          <h2 style={{ marginTop: 18 }}>{t("settings.business")}</h2>
+          <div className="settings-fields">
           <label>
             <span>{t("fd.businessName")}</span>
             <input value={businessName} onChange={(e) => setBusinessName(e.target.value)} maxLength={120} required />
@@ -234,14 +238,16 @@ export default function Settings() {
             </label>
           ))}
           {["alertOrder", "alertBooking", "alertRelocation", "alertLowStock"].map((key) => (
-            <label key={key}>
+            <label key={key} className="settings-check">
               <input type="checkbox" checked={Boolean(profile[key])} onChange={(e) => setProfile({ ...profile, [key]: e.target.checked })} />
               <span>{t(`shop.${key}`)}</span>
             </label>
           ))}
+          </div>
           <button
             type="button"
             className="btn-touch"
+            style={{ background: "var(--accent)", color: "#fff", marginTop: 12 }}
             onClick={async () => {
               try {
                 const saved = await api("/api/org-settings", {
@@ -253,7 +259,7 @@ export default function Settings() {
                 setHomeVisitFee(String(saved.homeVisitFee ?? 0));
                 setBookingCancelHours(String(saved.bookingCancelHours ?? 24));
                 setOrgVersion(saved.version ?? null);
-                showToast(t("common.save"), "success");
+                showToast(t("shop.saved"), "success");
               } catch (err) {
                 await settingsSaveFailed(err);
               }

@@ -12,6 +12,11 @@ const ROLE_TABS = [
 export default function Permissions() {
   const { refreshUser } = useAuth();
   const { t } = useI18n();
+  /** Module/action keys are codes: show their translated names (fall back to the code). */
+  const label = (kind, key) => {
+    const text = t(`perm.${kind}.${key}`);
+    return text === `perm.${kind}.${key}` ? key : text;
+  };
   const { showToast } = useToast();
   const [tab, setTab] = useState("MANAGER");
   const [busy, setBusy] = useState(false);
@@ -107,9 +112,9 @@ export default function Permissions() {
         <strong>{t("shop.modules")}</strong>
         {moduleKeys.map((mod) => (
           <div key={mod} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ minWidth: 110 }}>{mod}</span>
+            <span style={{ minWidth: 150 }}>{label("module", mod)}</span>
             {moduleActions.map((action) => (
-              <label key={action}>
+              <label key={action} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <input
                   type="checkbox"
                   checked={Boolean(modules[tab]?.[mod]?.[action])}
@@ -124,7 +129,7 @@ export default function Permissions() {
                     setDirty(true);
                   }}
                 />
-                {action}
+                {label("action", action)}
               </label>
             ))}
           </div>

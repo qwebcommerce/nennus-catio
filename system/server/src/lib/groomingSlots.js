@@ -90,13 +90,17 @@ export async function claimSlot(tx, { organizationId, startAt, endAt, excludeId,
     ORDER BY id FOR UPDATE`;
   const startMin = local.minutes;
   const endMin = startMin + Math.round((endAt.getTime() - startAt.getTime()) / 60000);
-  const schedule = schedules.find((row) => {
-    const open = minutesOf(row.startTime);
-    const close = minutesOf(row.endTime);
-    if (open == null || close == null) return false;
-    if (startMin < open || endMin > close) return false;
-    return !grid || (startMin - open) % grid === 0;
-  });
+  // When several hours rows cover the time (e.g. a second row added for more grooming tables),
+  // the booking counts against the one with the most room, not whichever row id sorts first.
+  const schedule = schedules
+    .filter((row) => {
+      const open = minutesOf(row.startTime);
+      const close = minutesOf(row.endTime);
+      if (open == null || close == null) return false;
+      if (startMin < open || endMin > close) return false;
+      return !grid || (startMin - open) % grid === 0;
+    })
+    .sort((a, b) => Number(b.capacity) - Number(a.capacity))[0];
   if (!schedule) {
     throw slotError(
       grid ? "Choose one of the offered times" : "That time is outside grooming hours",

@@ -87,6 +87,16 @@ Second pass (18 November 2026), also fixed and merged:
 - Server-side SkipCash payment lookup (customer return, staff "check payment status", before a hold expires). The lookup URL is unverified against SkipCash's docs; a failed lookup changes nothing.
 - Uploaded product images are re-encoded (auto-orient, metadata stripped, max 1600 px, WebP).
 
+Third pass (screen-by-screen use and a full business day), also fixed:
+- Every staff screen and the website were used in the browser (desktop, phone, Arabic) and about 50 bugs fixed, among them:
+  weight goods billed 1000x on purchase orders, transfers losing unit cost, till total ignoring offers and coupons until
+  the sale was saved, refunds hitting the wrong variant, resumed held carts staying on the held list, deletes of used
+  categories, suppliers and locations, a deadlock between a till sale and a website payment, and the low-stock list.
+- A scripted business day across all modules (purchase, transfer, till, refund, cash-up, van, website order, grooming,
+  price change, cashier, end-of-day finance) checks that every connected screen agrees: 323 of 323 checks pass.
+- Remaining small gaps: vehicles and promotions can only be paused, not edited; the website checkout does not show the
+  offer discount before the card page (the amount charged is correct).
+
 Still open:
 - Confirm the SkipCash payment-lookup endpoint against SkipCash's API documentation.
 
@@ -109,3 +119,58 @@ attached. Every build runs `scripts/move-files-to-storage.mjs` after the migrati
 in the database into the buckets and rewrites product image URLs; it never deletes the database copies (a later cleanup,
 after the owner confirms the files in the dashboard). An image whose bytes are not a real image is left in the database.
 Without the two variables everything stays in the database as before (local development).
+
+## Demo data
+
+An empty system looks bad in a demo, so the server can fill the live database with a realistic demo
+pet shop and 30 days of activity, and take all of it out again with one switch before the shop goes
+live. The owner does not run anything locally: it is controlled with one Vercel environment variable.
+
+**Owner steps (Vercel → the project → Settings → Environment Variables, Production):**
+1. Add `DEMO_DATA` = `load`, then redeploy (Deployments → the latest → Redeploy). The build log shows
+   `[demo] loaded … demo rows` (a few minutes). Loading again does nothing while the demo is loaded.
+2. Before going live: change `DEMO_DATA` to `remove`, redeploy. The build log shows `[demo] remove: deleted … rows`.
+3. Delete the `DEMO_DATA` variable (leaving it on `remove` is harmless, it finds nothing the next time).
+
+A demo problem never fails the build; it is reported in the log as `DEMO DATA … FAILED` and the
+database is left as it was (a failed load removes what it had created).
+
+**What is created** (organisation = `SHOP_ORGANIZATION_ID`, else the first one with a website location):
+6 categories and 6 pet types (an existing one with the same English name is reused), a warehouse, a shop
+(the website sells from it while the demo is loaded) and 2 vans with vehicles, 3 demo staff
+(`demo.*@example.com`, random passwords nobody knows), 3 suppliers, 33 products (Arabic + English,
+pack-size variants, 2 sold by weight, 10 pet houses using the images in `client/public/images/pet-houses`,
+5 in stock and 5 made to order with lead time and delivery charge), 6 Doha delivery areas and 3 windows,
+4 grooming packages (Basic/Full for cats and dogs), grooming hours on days that have none, 3 promotions
+(10 % off cat food, coupon `WELCOME15`, buy 2 get 1 wet food), 12 customers with pets and addresses
+(`*.demo@example.com`, `+974 5000 01xx`). Activity over the last 30 days in Qatar business hours:
+5 purchase orders (one partly received) with bills paid in full, in part or not yet; transfers from the
+warehouse to the shop and vans; a shop till every day with cash, card and split sales and a cash-up;
+van sales (cash, card, Fawran, payment link) on about 15 days; 16 website orders through a mock card gateway
+(delivered, collected, preparing, out for delivery, one cancelled and refunded, one awaiting payment
+review); 2 till refunds (one with the goods returned); 10 past grooming bookings (done, a no-show) and up to 3
+upcoming ones (today and tomorrow, when a slot is still free); 3 relocation requests (submitted, quote sent, paid and in progress); rent, electricity,
+supplies and van fuel expenses.
+
+**How it stays faithful:** `scripts/demo-data.mjs` starts the real app inside the build process and
+creates everything through its own HTTP API as the owner and the demo staff, so stock movements, unit
+costs, cost of goods, bills, payments, promotions, audit rows, references and versions are what the app
+writes. Each action runs at its planned time: the loader's requests carry that time and, inside the app,
+the clock and the Prisma timestamps follow it, so all rules that depend on time apply as on that day. In
+that process RESEND_API_KEY, FleetWiz and Supabase Storage are switched off, SkipCash is replaced by an
+in-process mock with throw-away keys, and queued demo mail is marked never to send.
+
+**How removal works:** every row the app creates during the load is listed in the `DemoRecord` table
+(migration `20261119103000_demo_data`): rows created directly are caught by a Prisma query extension,
+rows created inside them by following foreign keys from them. `remove` deletes exactly those rows in one
+transaction, children first; the audit-log guard trigger is disabled only around the delete of demo audit
+rows. Rows someone created later on top of demo rows (for example a test sale of a demo product at the
+demo shop) are removed with them, because they cannot exist without them. The website selling location is
+put back as it was. Nothing else is touched.
+
+While the demo is loaded: the website sells from the demo shop (goods held only at other locations do not
+show on the website), the 3 demo staff count towards the 10-active-user limit, and if staff act on demo
+records (for example refund a demo website order) the app talks to the real services with demo references,
+which they refuse. Remove the demo before the first real order.
+
+Locally: `node scripts/demo-data.mjs load|remove|status` in `system/server` (uses `server/.env`).

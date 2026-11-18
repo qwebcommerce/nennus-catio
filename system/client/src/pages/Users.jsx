@@ -75,6 +75,7 @@ export default function Users() {
     try {
       await api(`/api/users/${u.id}`, { method: "PATCH", body: { role, version: u.version } });
       await load();
+      showToast(t("users.saved"), "success");
     } catch (err) {
       // A stale copy (NFR-13) shows the bilingual notice; the reload brings the latest values.
       showToast(editErrorMessage(err, t) || t("errors.generic"), "error");
@@ -95,6 +96,21 @@ export default function Users() {
         body: { branchId: branchId || null, version: u.version },
       });
       await load();
+      showToast(t("users.saved"), "success");
+    } catch (err) {
+      showToast(editErrorMessage(err, t) || "Failed", "error");
+      await load();
+    }
+  };
+
+  /** The owner sets a new password for a staff member who forgot theirs (signs them out everywhere). */
+  const setPassword = async (u) => {
+    const password = window.prompt(t("users.passwordPrompt", { name: u.name }));
+    if (!password) return;
+    try {
+      await api(`/api/users/${u.id}`, { method: "PATCH", body: { password, version: u.version } });
+      await load();
+      showToast(t("users.passwordSet"), "success");
     } catch (err) {
       showToast(editErrorMessage(err, t) || t("errors.generic"), "error");
       await load();
@@ -137,6 +153,7 @@ export default function Users() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
           <input
             placeholder={t("products.name")}
+            aria-label={t("products.name")}
             required
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -145,6 +162,7 @@ export default function Users() {
           />
           <input
             placeholder={t("login.email")}
+            aria-label={t("login.email")}
             type="email"
             required
             value={form.email}
@@ -154,6 +172,7 @@ export default function Users() {
           />
           <input
             placeholder={t("login.password")}
+            aria-label={t("login.password")}
             type="password"
             required
             minLength={6}
@@ -263,7 +282,12 @@ export default function Users() {
                       </select>
                     )}
                   </td>
-                  <td style={td}>
+                  <td style={{ ...td, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {!locked ? (
+                      <button type="button" className="btn-touch" style={{ background: "var(--surface2)" }} onClick={() => setPassword(u)}>
+                        {t("users.setPassword")}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="btn-touch"
@@ -302,6 +326,9 @@ const lockedPill = {
 };
 
 const inp = {
+  width: "100%",
+  boxSizing: "border-box",
+  minWidth: 0,
   padding: 10,
   borderRadius: 12,
   border: "1px solid var(--border)",

@@ -74,6 +74,9 @@ export async function enqueueMail({ to, subject, text, html = null, kind = "othe
 let flushing = null;
 /** Starts a background send of due rows without making the caller wait. */
 export function flushSoon() {
+  // The demo-data loader (scripts/demo-data.mjs) queues mail but never sends it, and must not
+  // claim other rows of the outbox.
+  if (process.env.NC_DEMO_LOADER === "1") return Promise.resolve();
   if (flushing) return flushing;
   flushing = new Promise((resolve) => setImmediate(resolve))
     .then(() => processOutbox({ limit: 10 }))

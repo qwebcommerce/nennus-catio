@@ -8,7 +8,7 @@ import { toApi } from "../lib/moneyFields.js";
 import { LOCK_TX, acceptReviewPayments, lockParent, paymentTotals, refundParent, rejectReviewPayments, statusError } from "../lib/payments.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { checkGatewayPayment } from "../lib/paymentLookup.js";
-import { assertVersion, clientVersion, isStaleEditError, requireVersion, staleEditError } from "../lib/recordVersion.js";
+import { assertVersion, clientVersion, isStaleEditError, requireVersion, staleEditError, versionedUpdate } from "../lib/recordVersion.js";
 import { mailCustomer } from "../lib/mailer.js";
 
 const router = Router();
@@ -108,7 +108,8 @@ router.get("/services", async (req, res) => {
   const rows = await prisma.groomingService.findMany({
     where: {
       organizationId: req.user.organizationId,
-      active: true,
+      // The grooming desk lists paused packages too (?all=1) so they can be switched back on.
+      ...(req.query.all === "1" ? {} : { active: true }),
       ...(branchId ? { OR: [{ branchId: null }, { branchId }] } : {}),
     },
     orderBy: [{ name: "asc" }],
@@ -151,6 +152,52 @@ router.post("/services", requireModule("grooming", "create"), async (req, res) =
   }
 });
 
+/** Edit a package (price, names, duration) or take it off the website (active=false). NFR-13 versioned. */
+router.patch("/services/:id", requireModule("grooming", "edit"), async (req, res) => {
+  const version = requireVersion(req);
+  const existing = await prisma.groomingService.findFirst({ where: { id: req.params.id, organizationId: req.user.organizationId } });
+  if (!existing) return res.status(404).json({ error: "Package not found", errorAr: "الباقة غير موجودة", errorEn: "Package not found" });
+  assertVersion(existing, version);
+  const b = req.body || {};
+  const data = {};
+  if (b.name !== undefined) {
+    const name = String(b.name || "").trim();
+    if (!name) return res.status(400).json({ error: "اسم الخدمة مطلوب", errorAr: "اسم الخدمة مطلوب", errorEn: "The package name is required" });
+    data.name = name;
+  }
+  if (b.nameEn !== undefined) data.nameEn = b.nameEn ? String(b.nameEn).trim() : null;
+  if (b.price !== undefined) {
+    const price = toDirhams(b.price);
+    if (price == null) return res.status(400).json({ error: "سعر غير صالح", errorAr: "سعر غير صالح", errorEn: "Enter a valid price (at most 2 decimals)" });
+    data.price = price;
+  }
+  if (b.durationMin !== undefined) data.durationMin = Math.max(10, Math.min(360, Number(b.durationMin) || 60));
+  if (b.active !== undefined) data.active = Boolean(b.active);
+  const row = await versionedUpdate(prisma, "groomingService", { id: existing.id, version, data });
+  await writeAudit({ userId: req.user.sub, action: "GROOMING_SERVICE_UPDATE", entityType: "GroomingService", entityId: row.id, summary: `${row.name} ${fmt(row.price)} ${row.active ? "active" : "inactive"}` });
+  res.json(toApi("GroomingService", row));
+});
+
+/** Change or close a grooming hours row (isActive=false stops new bookings in it). NFR-13 versioned. */
+router.patch("/schedule/:id", requireModule("grooming", "edit"), async (req, res) => {
+  const version = requireVersion(req);
+  const existing = await prisma.groomingSchedule.findFirst({ where: { id: req.params.id, organizationId: req.user.organizationId } });
+  if (!existing) return res.status(404).json({ error: "Not found", errorAr: "غير موجود", errorEn: "Not found" });
+  assertVersion(existing, version);
+  const b = req.body || {};
+  const data = {};
+  const time = (v) => /^\d{1,2}:\d{2}$/.test(String(v || "").trim()) ? String(v).trim().padStart(5, "0") : null;
+  if (b.startTime !== undefined) data.startTime = time(b.startTime);
+  if (b.endTime !== undefined) data.endTime = time(b.endTime);
+  if (b.capacity !== undefined) data.capacity = Math.floor(Number(b.capacity) || 0);
+  if (data.startTime === null || data.endTime === null || (data.capacity !== undefined && data.capacity < 1)) {
+    return res.status(400).json({ error: "Times as HH:MM and a capacity of at least one are required", errorAr: "أدخل الأوقات بصيغة HH:MM وسعة واحدة على الأقل", errorEn: "Times as HH:MM and a capacity of at least one are required" });
+  }
+  if (b.isActive !== undefined) data.isActive = Boolean(b.isActive);
+  const row = await versionedUpdate(prisma, "groomingSchedule", { id: existing.id, version, data });
+  res.json(row);
+});
+
 router.get("/", async (req, res) => {
   try {
     const branchId = req.query.branchId ? String(req.query.branchId) : req.user.branchId || null;
@@ -169,7 +216,7 @@ router.get("/", async (req, res) => {
       include: {
         payments: { select: { id: true, kind: true, method: true, status: true, amount: true, reviewReason: true, createdAt: true } },
         customer: { select: { id: true, name: true, phone: true } },
-        service: { select: { id: true, name: true, durationMin: true, price: true } },
+        service: { select: { id: true, name: true, nameEn: true, durationMin: true, price: true } },
         branch: { select: { id: true, name: true } },
       },
       orderBy: [{ startAt: "asc" }],
@@ -271,7 +318,7 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
       },
       include: {
         customer: { select: { id: true, name: true, phone: true } },
-        service: { select: { id: true, name: true, durationMin: true, price: true } },
+        service: { select: { id: true, name: true, nameEn: true, durationMin: true, price: true } },
       },
       });
     }, LOCK_TX);

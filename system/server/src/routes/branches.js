@@ -43,7 +43,9 @@ router.post("/", requireModule("warehouses", "create"), async (req, res) => {
     action: "BRANCH_CREATE",
     entityType: "Branch",
     entityId: b.id,
-    branchId: b.id,
+    // The actor's location, not the new one: a location's own create/edit record must not
+    // make it undeletable (audit rows are immutable and block the delete below).
+    branchId: req.user.branchId || null,
     summary: `Created branch "${b.name}"`,
     meta: { name: b.name },
   });
@@ -71,7 +73,9 @@ router.patch("/:id", requireModule("warehouses", "edit"), async (req, res) => {
     action: "BRANCH_UPDATE",
     entityType: "Branch",
     entityId: b.id,
-    branchId: b.id,
+    // The actor's location, not the new one: a location's own create/edit record must not
+    // make it undeletable (audit rows are immutable and block the delete below).
+    branchId: req.user.branchId || null,
     summary: `Updated branch "${b.name}"`,
     meta: { changes: Object.keys(data) },
   });
@@ -93,7 +97,7 @@ router.delete("/:id", requireModule("warehouses", "delete"), async (req, res) =>
     });
   }
 
-  const [sales, users, cashSessions, refunds, purchases, auditRows] = await Promise.all([
+  const [sales, users, cashSessions, refunds, purchases, auditRows, stockMoves, purchaseOrders, holds, stockRows, variantStockRows] = await Promise.all([
     prisma.sale.count({ where: { branchId: existing.id } }),
     prisma.user.count({ where: { branchId: existing.id } }),
     prisma.cashSession.count({ where: { branchId: existing.id } }),
@@ -101,6 +105,12 @@ router.delete("/:id", requireModule("warehouses", "delete"), async (req, res) =>
     prisma.purchase.count({ where: { branchId: existing.id } }),
     // Audit rows are immutable (NFR-16), so a branch they point at cannot be removed.
     prisma.auditLog.count({ where: { branchId: existing.id } }),
+    // Stock history and stock on hand would otherwise fail the delete (500) or be cascaded away.
+    prisma.stockMovement.count({ where: { branchId: existing.id } }),
+    prisma.purchaseOrder.count({ where: { branchId: existing.id } }),
+    prisma.stockHold.count({ where: { branchId: existing.id } }),
+    prisma.inventory.count({ where: { branchId: existing.id, quantity: { not: 0 } } }),
+    prisma.variantStock.count({ where: { branchId: existing.id, quantity: { not: 0 } } }),
   ]);
 
   const blockers = [];
@@ -110,12 +120,16 @@ router.delete("/:id", requireModule("warehouses", "delete"), async (req, res) =>
   if (refunds) blockers.push(`${refunds} refund(s)`);
   if (purchases) blockers.push(`${purchases} purchase(s)`);
   if (auditRows) blockers.push(`${auditRows} audit record(s)`);
+  if (stockMoves) blockers.push(`${stockMoves} stock movement(s)`);
+  if (purchaseOrders) blockers.push(`${purchaseOrders} purchase order(s)`);
+  if (holds) blockers.push(`${holds} stock hold(s)`);
+  if (stockRows + variantStockRows) blockers.push(`${stockRows + variantStockRows} item(s) in stock`);
 
   if (blockers.length) {
     return res.status(400).json({
       error: `Cannot delete branch while related data exists: ${blockers.join(", ")}. Move users or choose a branch with no transactions.`,
       code: "BRANCH_HAS_DATA",
-      blockers: { sales, users, cashSessions, refunds, purchases, auditRows },
+      blockers: { sales, users, cashSessions, refunds, purchases, auditRows, stockMoves, purchaseOrders, holds, stock: stockRows + variantStockRows },
     });
   }
 

@@ -84,9 +84,18 @@ async function buildItems(req, types) {
             branch: { organizationId: orgId },
             product: { organizationId: orgId },
           },
-      include: { product: true, branch: true },
+      include: { product: { include: { _count: { select: { variants: true } } } }, branch: true },
     });
-    const low = rows.filter((r) => r.quantity <= r.minStockLevel);
+    // Same rule as the low-stock list: a level above 0, active stocked goods (made-to-order houses
+    // never run low), and not the product-level row of a product kept per variant.
+    const low = rows.filter(
+      (r) =>
+        r.minStockLevel > 0 &&
+        r.quantity <= r.minStockLevel &&
+        r.product.isActive !== false &&
+        r.product.takesStock !== false &&
+        !r.product._count?.variants,
+    );
     for (const r of low) {
       items.push({
         key: `low-stock:${r.id}`,

@@ -1,5 +1,6 @@
 import { PrismaClient } from "../src/lib/prisma-client-bundle.js";
 import bcrypt from "bcryptjs";
+import { toDirhams } from "../src/lib/money.js";
 
 const prisma = new PrismaClient();
 
@@ -120,8 +121,8 @@ async function main() {
           name: s.name,
           nameEn: s.nameEn,
           petType: s.petType,
-          price: s.price,
-          cost: s.cost,
+          price: toDirhams(s.price),
+          cost: toDirhams(s.cost),
           imageUrl: s.imageUrl,
           sku: `SKU-${Math.random().toString(36).slice(2, 8)}`,
         },

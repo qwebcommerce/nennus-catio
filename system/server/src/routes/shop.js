@@ -6,6 +6,7 @@ import { Prisma } from "../lib/prisma-client-bundle.js";
 import { prisma } from "../lib/prisma.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { customerSession, endCustomerSession, startCustomerSession } from "../lib/customerSession.js";
+import { isDeadlockError } from "../lib/dbErrors.js";
 import { createSkipcashPayment, skipcashConfigured, skipcashWebhookValid } from "../lib/skipcash.js";
 import { assertStockForHolds, commitSaleHolds, heldQuantity, releaseSaleHolds, restoreCommittedHolds, sweepExpiredHolds } from "../lib/webOrder.js";
 import { LOCK_TX, statusError } from "../lib/payments.js";
@@ -164,8 +165,14 @@ router.get("/meta", async (req, res) => {
       }
     }
     const runs = date && (w.weekday == null || weekdayOf(date) === w.weekday);
-    windowDates.set(w.id, { date, used: runs && branch ? await seatsUsed(w.id, date) : null, runs });
+    windowDates.set(w.id, { date, used: null, runs });
   }
+  // Seat counts for all windows at once instead of one round trip after another.
+  await Promise.all(
+    [...windowDates.entries()].map(async ([id, row]) => {
+      if (row.runs && branch) row.used = await seatsUsed(id, row.date);
+    }),
+  );
   res.json({
     location: branch ? { id: branch.id, name: branch.name, nameEn: branch.nameEn } : null,
     petTypes,
@@ -223,10 +230,12 @@ router.get("/catalog", async (req, res) => {
       },
     ];
   }
+  // Every published product (the shop filters and pages in the browser); a cap of 80 hid the rest
+  // of the catalogue from the website once the shop had more products.
   const rows = await prisma.product.findMany({
     where,
     orderBy: { nameEn: "asc" },
-    take: 80,
+    take: 2000,
     include: {
       productCategory: { select: { id: true, name: true, nameEn: true } },
       petLinks: { include: { petType: true } },
@@ -234,20 +243,24 @@ router.get("/catalog", async (req, res) => {
       variants: { where: { isActive: true }, include: { stocks: { where: { branchId: branch.id } } } },
     },
   });
+  // Live website holds for all these products in one query (one query per product and variant
+  // made the page take seconds over the network to the database).
+  const held = new Map();
+  if (rows.length) {
+    const sums = await prisma.stockHold.groupBy({
+      by: ["productId", "variantId"],
+      where: { branchId: branch.id, productId: { in: rows.map((r) => r.id) }, status: "HELD", expiresAt: { gt: new Date() } },
+      _sum: { quantity: true },
+    });
+    for (const row of sums) held.set(`${row.productId}:${row.variantId || ""}`, Number(row._sum.quantity || 0));
+  }
   const out = [];
   for (const product of rows) {
     const dto = publicProduct(product, branch.id);
     if (dto.variants.length) {
-      for (const variant of dto.variants) {
-        variant.available -= await heldQuantity(prisma, {
-          branchId: branch.id,
-          productId: product.id,
-          variantId: variant.id,
-        });
-      }
-      dto.variants = dto.variants.filter((v) => v.available > 0 || true);
+      for (const variant of dto.variants) variant.available -= held.get(`${product.id}:${variant.id}`) || 0;
     } else {
-      dto.available -= await heldQuantity(prisma, { branchId: branch.id, productId: product.id, variantId: null });
+      dto.available -= held.get(`${product.id}:`) || 0;
     }
     out.push(dto);
   }
@@ -591,6 +604,22 @@ router.get("/orders", async (req, res) => {
 });
 
 router.get("/orders/:id", async (req, res) => {
+  // A guest coming back from the card page has no account session: the gateway payment id on the
+  // return URL (known only to whoever paid) shows that one order's confirmation, without the address.
+  const returnPaymentId = String(req.query.paymentId || "").trim();
+  if (returnPaymentId && !(await customerSession(req, res))) {
+    const guest = await prisma.sale.findFirst({
+      where: { id: req.params.id, orderChannel: "WEBSITE", gatewayPaymentId: returnPaymentId },
+      select: { id: true, webStatus: true, gatewayPaymentId: true },
+    });
+    if (!guest) return res.status(404).json({ error: "Order not found" });
+    await lookupOnReturn(req, "sale", guest, guest.webStatus === "PENDING_PAYMENT");
+    const sale = await prisma.sale.findUnique({
+      where: { id: guest.id },
+      include: { items: { include: { product: { select: { name: true, nameEn: true, sellBy: true } }, variant: true } } },
+    });
+    return res.json({ ...publicOrder(sale), deliveryAddress: null, guest: true });
+  }
   const session = await requireCustomer(req, res);
   if (!session) return;
   const owned = await prisma.sale.findFirst({
@@ -620,6 +649,7 @@ function publicOrder(sale) {
       name: item.product?.name,
       nameEn: item.product?.nameEn,
       variant: item.variant?.label || null,
+      variantEn: item.variant?.labelEn || null,
       sellBy: item.product?.sellBy,
       quantity: item.quantity,
       unitPrice: riyals(item.unitPrice),
@@ -640,6 +670,21 @@ router.post("/orders/:id/cancel", async (req, res) => {
         const err = new Error("Order not found");
         err.status = 404;
         throw err;
+      }
+      if (row.webStatus === "PENDING_PAYMENT") {
+        // Not paid yet: cancel and free the held stock, guarded exactly like a failed payment,
+        // so only one of this, the expiry sweep or a payment result wins.
+        const moved = await tx.sale.updateMany({
+          where: { id: row.id, webStatus: "PENDING_PAYMENT" },
+          data: { webStatus: "CANCELLED", invoiceStatus: "CANCELLED" },
+        });
+        if (!moved.count) {
+          const err = new Error("This order can only be cancelled before it is being prepared");
+          err.status = 400;
+          throw err;
+        }
+        await releaseSaleHolds(tx, row.id);
+        return tx.sale.findUnique({ where: { id: row.id } });
       }
       if (row.webStatus !== "CONFIRMED") {
         const err = new Error("This order can only be cancelled before it is being prepared");
@@ -823,7 +868,8 @@ router.post("/checkout", async (req, res) => {
             where: { productId_branchId: { productId: product.id, branchId: branch.id } },
           });
       const onHand = stockRow?.quantity ?? 0;
-      unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : 0;
+      // No cost recorded at the website location yet: the product cost, never a silent 0.
+      unitCost = stockRow?.unitCost != null ? d(stockRow.unitCost) : !variant && product.cost != null ? d(product.cost) : 0;
         const held = await heldQuantity(prisma, {
           branchId: branch.id,
           productId: product.id,
@@ -1034,9 +1080,21 @@ router.post("/payments/skipcash", async (req, res) => {
   }
   try {
     // Same guarded confirm path as the server's own payment lookup (lib/gatewayNotify.js).
-    const result = await applyGatewayResult(body, { req });
+    // A deadlock with a till sale on the same stock rolls back cleanly: try again a few times.
+    let result;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        result = await applyGatewayResult(body, { req });
+        break;
+      } catch (err) {
+        if (!isDeadlockError(err) || attempt >= 3) throw err;
+        await new Promise((r) => setTimeout(r, 100 * attempt));
+      }
+    }
     res.status(200).json({ ok: true, ...(result.outcome === "review" ? { review: true } : {}) });
   } catch (e) {
+    // Still contended after retries: 503 so the gateway sends the webhook again later.
+    if (isDeadlockError(e)) return res.status(503).json({ error: "Busy, retry later" });
     res.status(e.status || 500).json({ error: e.message || "Could not update the order" });
   }
 });

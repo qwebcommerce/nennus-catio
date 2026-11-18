@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
@@ -142,7 +143,7 @@ export default function CustomerReceivables() {
               ) : (
                 txns.map((row) => (
                   <tr key={row.id}>
-                    <td className="accounts-table__nowrap">{new Date(row.createdAt).toLocaleString()}</td>
+                    <td className="accounts-table__nowrap">{formatDateTime(row.createdAt, locale)}</td>
                     <td>
                       <span className={`accounts-kind accounts-kind--${row.kind === "COLLECTION" ? "collect" : "sale"}`}>
                         {row.kind === "COLLECTION" ? t("accounts.kindCollect") : t("accounts.kindSale")}

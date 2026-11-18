@@ -187,6 +187,7 @@ export default function Branches() {
                         {t(`branches.kind.${b.kind || "SHOP"}`)}
                         {" · "}
                         {b.address?.trim() ? b.address : t("branches.noAddress")}
+                        {b.isActive === false ? ` · ${t("setup.inactive")}` : ""}
                       </p>
                     </div>
                   </div>
