@@ -165,6 +165,7 @@ model Organization {
   stockTransfers          StockTransfer[]
   vanReturns              VanReturn[]
   vanReturnPhotos         VanReturnPhoto[]
+  vanReturnProofs         VanReturnPaymentProof[]
   damagedStocks           DamagedStock[]
 }
 
@@ -2402,6 +2403,7 @@ model VanReturn {
   updatedAt           DateTime           @updatedAt
   lines               VanReturnLine[]
   photos              VanReturnPhoto[]
+  paymentProof        VanReturnPaymentProof?
   movements           StockMovement[]
   damagedStocks       DamagedStock[]
 
@@ -2506,4 +2508,22 @@ model DamagedStock {
   @@index([organizationId, status])
   @@index([branchId])
   @@index([resolvedAt])
+}
+
+/// Proof of a van-return payment (required for a bank transfer, optional for cash). Private.
+/// Images are re-encoded as WebP without metadata; PDFs are kept as sent (checked by their bytes).
+model VanReturnPaymentProof {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId    String       @unique
+  vanReturn      VanReturn    @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  fileName       String
+  mime           String
+  size           Int
+  /// Bytes in the database when file storage is off.
+  content        Bytes?
+  /// Object key in the private "van-return-proofs" bucket.
+  storagePath    String?
+  createdAt      DateTime     @default(now())
 }

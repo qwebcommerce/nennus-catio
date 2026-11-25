@@ -8,8 +8,10 @@ import { stockRowKey, isDeadlockError, BUSY_RETRY } from "../lib/dbErrors.js";
 import { readStockLines } from "../lib/inventoryTransfer.js";
 import { requireActiveStaff, requireVehicle, staffAndVehicles, vehicleForBranch } from "../lib/staffPick.js";
 import { normalizeImage } from "../lib/imageNormalize.js";
+import { contentDisposition, sniffFileType } from "../lib/fileCheck.js";
 import {
   VAN_RETURN_PHOTOS_BUCKET,
+  VAN_RETURN_PROOFS_BUCKET,
   downloadObject,
   objectKey,
   removeObjects,
@@ -82,6 +84,43 @@ async function readPhoto(raw) {
   return normalizeImage(bytes);
 }
 
+/**
+ * Payment proof from the request ({ dataBase64, fileName }): JPEG / PNG / WebP (re-encoded to WebP,
+ * metadata dropped) or PDF, decided by the bytes. Null when nothing was sent.
+ */
+async function readProof(raw) {
+  if (!raw) return null;
+  const text = String(raw?.dataBase64 || raw?.data || "");
+  const b64 = text.startsWith("data:") && text.includes(",") ? text.slice(text.indexOf(",") + 1) : text;
+  const bytes = Buffer.from(b64, "base64");
+  if (!bytes.length) return null;
+  if (bytes.length > PHOTO_MAX_BYTES) throw vrError("ملف الإثبات أكبر من 6 ميغابايت", "The proof file must be 6 MB or smaller");
+  const kind = sniffFileType(bytes);
+  const base = String(raw?.fileName || "payment-proof").replace(/[\r\n"\\/]/g, "_").replace(/\.[^.]*$/, "").slice(0, 100) || "payment-proof";
+  if (kind?.mime === "application/pdf") return { buffer: bytes, mime: "application/pdf", ext: "pdf", fileName: `${base}.pdf` };
+  if (!kind) throw vrError("الإثبات يجب أن يكون صورة JPEG أو PNG أو WebP أو ملف PDF", "The proof must be a JPEG, PNG or WebP image or a PDF");
+  const img = await normalizeImage(bytes);
+  return { buffer: img.buffer, mime: "image/webp", ext: "webp", fileName: `${base}.webp` };
+}
+
+/** Stores the proof bytes (private bucket when storage is on); returns the row data and the written key. */
+async function storeProof(orgId, proof) {
+  if (!proof) return { data: null, key: null };
+  const data = { organizationId: orgId, fileName: proof.fileName, mime: proof.mime, size: proof.buffer.length };
+  if (storageEnabled()) {
+    const key = objectKey(orgId, proof.ext);
+    await uploadObject(VAN_RETURN_PROOFS_BUCKET, key, proof.buffer, proof.mime);
+    return { data: { ...data, storagePath: key }, key };
+  }
+  return { data: { ...data, content: proof.buffer }, key: null };
+}
+
+function proofRequired(payment, proof) {
+  if (payment?.method === "BANK" && !proof) {
+    throw vrError("أرفق إثبات التحويل البنكي (صورة أو PDF)", "Attach the bank transfer proof (an image or a PDF)", 400, "PROOF_REQUIRED");
+  }
+}
+
 function moneyOut(row) {
   return row == null ? null : fmt(row);
 }
@@ -110,6 +149,8 @@ function returnSummary(row) {
     paidBy: row.paidBy,
     paidAt: row.paidAt,
     cashSessionId: row.cashSessionId,
+    proofUrl: row.paymentProof ? `/api/van-returns/${row.id}/proof` : null,
+    proofName: row.paymentProof?.fileName || null,
     receivedBranch: row.receivedBranch,
     receivedAt: row.receivedAt,
     broughtBackBy: row.broughtBackBy,
@@ -128,6 +169,7 @@ const SUMMARY_INCLUDE = {
   paidBy: PERSON,
   broughtBackBy: PERSON,
   receivedBy: PERSON,
+  paymentProof: { select: { id: true, fileName: true, mime: true } },
   lines: { select: { condition: true } },
 };
 
@@ -421,6 +463,24 @@ router.get("/", async (req, res) => {
   res.json(rows.map(returnSummary));
 });
 
+/** Payment proof (private): staff who may see the return; PDFs download, images show inline. */
+router.get("/:id/proof", async (req, res) => {
+  const row = await prisma.vanReturn.findFirst({ where: await scopedWhere(req, { id: String(req.params.id) }), select: { id: true, paymentProof: true } });
+  const proof = row?.paymentProof;
+  if (!proof) throw vrError("الإثبات غير موجود", "Payment proof not found", 404);
+  let bytes = proof.content ? Buffer.from(proof.content) : null;
+  if (!bytes && proof.storagePath) bytes = await downloadObject(VAN_RETURN_PROOFS_BUCKET, proof.storagePath);
+  if (!bytes) throw vrError("الإثبات غير موجود", "Payment proof not found", 404);
+  const pdf = proof.mime === "application/pdf";
+  res.setHeader("Content-Type", pdf ? "application/pdf" : "image/webp");
+  if (pdf) res.setHeader("Content-Disposition", contentDisposition(proof.fileName, "pdf"));
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.send(bytes);
+});
+
 router.get("/:id", async (req, res) => {
   const row = await prisma.vanReturn.findFirst({ where: await scopedWhere(req, { id: String(req.params.id) }), include: DETAIL_INCLUDE });
   if (!row) throw NOT_FOUND();
@@ -460,7 +520,8 @@ function paymentFields(raw) {
  * POST /api/van-returns
  * { vanBranchId, vehicleId?, customerId? | customerName?, customerPhone?, collectedByUserId?, collectedAt?,
  *   amountOwed (QAR), note?, lines: [{ productId, variantId?, unit, quantity, condition: GOOD|DAMAGED, photo?: { dataBase64 } }],
- *   payment?: { method: CASH|BANK, reference? } }
+ *   payment?: { method: CASH|BANK, reference?, proof?: { dataBase64, fileName } } }
+ * A bank payment needs a proof file (JPEG / PNG / WebP / PDF); for cash it is optional.
  * A DAMAGED line needs a photo. Nothing is added to sellable stock until the return is received.
  */
 router.post("/", requireModule("returns", "create"), async (req, res) => {
@@ -490,6 +551,8 @@ router.post("/", requireModule("returns", "create"), async (req, res) => {
   const note = body.note != null && String(body.note).trim() ? String(body.note).trim().slice(0, 500) : null;
   const payment = body.payment && body.payment.method ? paymentFields(body.payment) : null;
   if (payment && amountOwed <= 0) throw vrError("لا يوجد مبلغ مستحق للعميل", "Nothing is owed to the customer");
+  const proof = payment ? await readProof(body.payment.proof) : null;
+  proofRequired(payment, proof);
 
   const rawLines = Array.isArray(body.lines) ? body.lines : [];
   const lines = await readStockLines(prisma, orgId, rawLines, {
@@ -517,6 +580,8 @@ router.post("/", requireModule("returns", "create"), async (req, res) => {
         line.photo.storagePath = key;
       }
     }
+    const storedProof = await storeProof(orgId, proof);
+    if (storedProof.key) written.push(["proof", storedProof.key]);
     const created = await prisma.$transaction(async (tx) => {
       const cashSessionId = payment?.method === "CASH" ? await openSessionFor(tx, van.id) : null;
       const row = await tx.vanReturn.create({
@@ -539,6 +604,7 @@ router.post("/", requireModule("returns", "create"), async (req, res) => {
             : {}),
         },
       });
+      if (storedProof.data) await tx.vanReturnPaymentProof.create({ data: { ...storedProof.data, vanReturnId: row.id } });
       for (const line of lines) {
         let photoId = null;
         if (line.photo) {
@@ -583,14 +649,15 @@ router.post("/", requireModule("returns", "create"), async (req, res) => {
     const full = await prisma.vanReturn.findUnique({ where: { id: created.id }, include: DETAIL_INCLUDE });
     res.status(201).json({ ...returnSummary(full), lines: full.lines.map((l) => lineOut(l)) });
   } catch (e) {
-    await removeObjects(VAN_RETURN_PHOTOS_BUCKET, written);
+    await removeObjects(VAN_RETURN_PHOTOS_BUCKET, written.filter((k) => typeof k === "string"));
+    await removeObjects(VAN_RETURN_PROOFS_BUCKET, written.filter((k) => Array.isArray(k)).map((k) => k[1]));
     throw e;
   }
 });
 
 // ------------------------------------------------------------------ pay
 
-/** Mark the money owed as paid back (cash or bank). Body: { version, method, reference? } */
+/** Mark the money owed as paid back. Body: { version, method: CASH|BANK, reference?, proof?: { dataBase64, fileName } } — proof required for BANK. */
 router.post("/:id/pay", requireModule("returns", ["create", "edit"]), async (req, res) => {
   const version = requireVersion(req);
   const row = await prisma.vanReturn.findFirst({ where: await scopedWhere(req, { id: String(req.params.id) }) });
@@ -598,20 +665,30 @@ router.post("/:id/pay", requireModule("returns", ["create", "edit"]), async (req
   if (row.paymentStatus === "PAID") throw vrError("تم دفع هذا المرتجع من قبل", "This return was already paid", 409, "ALREADY_PAID");
   if (row.amountOwed <= 0) throw vrError("لا يوجد مبلغ مستحق للعميل", "Nothing is owed to the customer");
   const payment = paymentFields(req.body);
-  const saved = await prisma.$transaction(async (tx) => {
-    const cashSessionId = payment.method === "CASH" ? await openSessionFor(tx, row.vanBranchId) : null;
-    const updated = await versionedUpdate(tx, "vanReturn", {
-      id: row.id, version, where: { paymentStatus: "UNPAID" },
-      data: { paymentStatus: "PAID", paidMethod: payment.method, paidReference: payment.reference, paidByUserId: req.user.sub, paidAt: new Date(), cashSessionId },
-      include: DETAIL_INCLUDE,
+  const proof = await readProof(req.body?.proof);
+  proofRequired(payment, proof);
+  const storedProof = await storeProof(req.user.organizationId, proof);
+  let saved;
+  try {
+    saved = await prisma.$transaction(async (tx) => {
+      if (storedProof.data) await tx.vanReturnPaymentProof.create({ data: { ...storedProof.data, vanReturnId: row.id } });
+      const cashSessionId = payment.method === "CASH" ? await openSessionFor(tx, row.vanBranchId) : null;
+      const updated = await versionedUpdate(tx, "vanReturn", {
+        id: row.id, version, where: { paymentStatus: "UNPAID" },
+        data: { paymentStatus: "PAID", paidMethod: payment.method, paidReference: payment.reference, paidByUserId: req.user.sub, paidAt: new Date(), cashSessionId },
+        include: DETAIL_INCLUDE,
+      });
+      await writeAudit({
+        userId: req.user.sub, action: "VAN_RETURN_PAY", entityType: "VanReturn", entityId: row.id, branchId: row.vanBranchId,
+        summary: `Van return ${row.reference} paid ${fmt(row.amountOwed)} by ${payment.method}`,
+        meta: { ...payment, amount: fmt(row.amountOwed), cashSessionId, proof: storedProof.data ? { fileName: storedProof.data.fileName, mime: storedProof.data.mime } : null },
+      }, tx);
+      return updated;
     });
-    await writeAudit({
-      userId: req.user.sub, action: "VAN_RETURN_PAY", entityType: "VanReturn", entityId: row.id, branchId: row.vanBranchId,
-      summary: `Van return ${row.reference} paid ${fmt(row.amountOwed)} by ${payment.method}`,
-      meta: { ...payment, amount: fmt(row.amountOwed), cashSessionId },
-    }, tx);
-    return updated;
-  });
+  } catch (e) {
+    if (storedProof.key) await removeObjects(VAN_RETURN_PROOFS_BUCKET, [storedProof.key]);
+    throw e;
+  }
   res.json({ ...returnSummary(saved), lines: saved.lines.map((l) => lineOut(l)) });
 });
 

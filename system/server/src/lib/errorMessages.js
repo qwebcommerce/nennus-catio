@@ -520,6 +520,10 @@ const EXACT = [
   ["تم دفع هذا المرتجع من قبل", "This return was already paid"],
   ["تم استلام هذا المرتجع من قبل", "This return was already received"],
   ["اختر المستودع أو الموقع المستلم", "Choose the warehouse or location receiving it"],
+  ["ملف الإثبات أكبر من 6 ميغابايت", "The proof file must be 6 MB or smaller"],
+  ["الإثبات يجب أن يكون صورة JPEG أو PNG أو WebP أو ملف PDF", "The proof must be a JPEG, PNG or WebP image or a PDF"],
+  ["أرفق إثبات التحويل البنكي (صورة أو PDF)", "Attach the bank transfer proof (an image or a PDF)"],
+  ["الإثبات غير موجود", "Payment proof not found"],
 ];
 
 const PATTERNS = [

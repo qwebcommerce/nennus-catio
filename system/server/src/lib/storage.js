@@ -10,6 +10,8 @@ export const PRODUCT_IMAGES_BUCKET = "product-images";
 export const RELOCATION_DOCUMENTS_BUCKET = "relocation-documents";
 /** Private: evidence photos of van returns (WebP, re-encoded, no metadata). */
 export const VAN_RETURN_PHOTOS_BUCKET = "van-return-photos";
+/** Private: proof of van-return payments (WebP images or PDF). */
+export const VAN_RETURN_PROOFS_BUCKET = "van-return-proofs";
 /** Largest relocation document accepted (direct upload). */
 export const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
 /** Lifetime of a Supabase signed download URL. */
@@ -31,6 +33,11 @@ const BUCKET_OPTIONS = {
     public: false,
     fileSizeLimit: 5 * 1024 * 1024,
     allowedMimeTypes: ["image/webp"],
+  },
+  [VAN_RETURN_PROOFS_BUCKET]: {
+    public: false,
+    fileSizeLimit: 6 * 1024 * 1024,
+    allowedMimeTypes: ["image/webp", "application/pdf"],
   },
 };
 
