@@ -8,6 +8,7 @@ import {
   DEFAULT_MANAGER_PERMISSIONS,
   MODULES,
   MODULE_ACTIONS,
+  MODULE_ACTIONS_FOR,
   defaultModuleMap,
   orgPermissionMatrices,
   resolveModulePermissions,
@@ -37,6 +38,7 @@ router.get("/", async (req, res) => {
     },
     moduleKeys: MODULES,
     moduleActions: MODULE_ACTIONS,
+    moduleActionsFor: MODULE_ACTIONS_FOR,
     defaults: {
       MANAGER: { ...DEFAULT_MANAGER_PERMISSIONS },
       CASHIER: { ...DEFAULT_CASHIER_PERMISSIONS },

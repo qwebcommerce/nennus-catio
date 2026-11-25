@@ -8,12 +8,19 @@ import { createClient } from "@supabase/supabase-js";
 
 export const PRODUCT_IMAGES_BUCKET = "product-images";
 export const RELOCATION_DOCUMENTS_BUCKET = "relocation-documents";
+/** Private: purchase-order quotations / invoices and payment proofs (lib/businessFiles.js). */
+export const BUSINESS_DOCUMENTS_BUCKET = "business-documents";
 /** Largest relocation document accepted (direct upload). */
 export const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
 /** Lifetime of a Supabase signed download URL. */
 export const SIGNED_DOWNLOAD_SECONDS = 60;
 
 const BUCKET_OPTIONS = {
+  [BUSINESS_DOCUMENTS_BUCKET]: {
+    public: false,
+    fileSizeLimit: 10 * 1024 * 1024,
+    allowedMimeTypes: ["application/pdf", "image/jpeg", "image/png", "image/webp"],
+  },
   [PRODUCT_IMAGES_BUCKET]: {
     public: true,
     fileSizeLimit: 5 * 1024 * 1024,

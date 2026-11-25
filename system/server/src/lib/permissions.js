@@ -128,8 +128,18 @@ export function hasPermission(permissions, key) {
   return Boolean(permissions?.[key]);
 }
 
-export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team"];
+export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "salesOrders", "complimentary"];
 export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
+
+/**
+ * Modules that use only some actions (the Permissions screen shows just these):
+ * - salesOrders: view, create (orders, payments, deliveries), edit (change a line price), delete (cancel), export.
+ * - complimentary: create = give goods free (till lines / whole invoice, sales-order lines). Managers by default.
+ */
+export const MODULE_ACTIONS_FOR = Object.freeze({
+  salesOrders: ["view", "create", "edit", "delete", "export"],
+  complimentary: ["create"],
+});
 
 function blankModuleMap(on) {
   return Object.fromEntries(

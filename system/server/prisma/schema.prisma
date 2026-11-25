@@ -162,6 +162,9 @@ model Organization {
   relocationRequests      RelocationRequest[]
   promotions              Promotion[]
   vehicles                Vehicle[]
+  salesOrders             SalesOrder[]
+  supplierPrepayments     SupplierPrepayment[]
+  businessFiles           BusinessFile[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -543,6 +546,8 @@ enum PaymentMethod {
   ON_DELIVERY
   /// بيع كامل على حساب الزبون (ذمّة)
   ON_ACCOUNT
+  /// Customer paid by bank transfer (optional reference; proof required outside the till).
+  BANK_TRANSFER
 }
 
 enum LoyaltyEarnBase {
@@ -666,6 +671,10 @@ model Customer {
   pets           CustomerPet[]
   addresses      CustomerAddress[]
   relocationRequests RelocationRequest[]
+  /// B2B / company customer (sales orders).
+  isBusiness     Boolean      @default(false)
+  companyName    String?
+  salesOrders    SalesOrder[]
 }
 
 /// حركات ذمم الزبائن
@@ -690,6 +699,11 @@ model CustomerAccountLedger {
 
   @@index([organizationId, customerId])
   @@index([saleId])
+  /// Transfer number or other payment reference.
+  reference        String?
+  /// Proof of payment (required for bank transfer).
+  proofFileId      String?
+  proofFile        BusinessFile?           @relation("LedgerProof", fields: [proofFileId], references: [id], onDelete: Restrict)
 }
 
 /// إعدادات برنامج الولاء والاستبدال لكل مؤسسة
@@ -874,6 +888,9 @@ model Branch {
   vehicle        Vehicle?
 
   @@unique([organizationId, supabaseId])
+  salesOrders    SalesOrder[]
+  salesOrderPayments SalesOrderPayment[]
+  salesOrderDeliveries SalesOrderDelivery[]
 }
 
 model Supplier {
@@ -895,6 +912,11 @@ model Supplier {
   preferredVariants ProductVariant[] @relation("VariantPreferredSupplier")
   purchaseOrders PurchaseOrder[]
   supplierBills  SupplierBill[]
+  /// A freight company: its bills are freight on purchase orders (landed cost).
+  isFreight      Boolean      @default(false)
+  /// Default payment terms in days (Net 30 = 30). Null = due on receipt.
+  paymentTermsDays Int?
+  prepayments    SupplierPrepayment[]
 }
 
 model Account {
@@ -1178,6 +1200,11 @@ model User {
   updatedAt      DateTime     @updatedAt
 
   @@unique([organizationId, email])
+  salesOrdersCreated   SalesOrder[]
+  salesOrderPayments   SalesOrderPayment[]
+  salesOrderDeliveries SalesOrderDelivery[]
+  supplierPrepayments  SupplierPrepayment[]
+  businessFilesUploaded BusinessFile[]
 }
 
 model Product {
@@ -1252,6 +1279,7 @@ model Product {
   @@unique([organizationId, sku])
   @@unique([organizationId, externalId])
   @@unique([organizationId, barcode])
+  salesOrderLines SalesOrderLine[]
 }
 
 model Inventory {
@@ -1416,6 +1444,8 @@ model Sale {
   payments         Payment[]
 
   @@unique([invoiceNumber])
+  /// Why goods on this sale were given free (required when any line is free).
+  freeReason       String?
 }
 
 model HeldCart {
@@ -1654,6 +1684,8 @@ model SaleItem {
   /// الإضافات المختارة للسطر [{key,label,priceDelta}]
   modifiers Json?
   lotUsages SaleItemLot[]
+  /// Complimentary (free) line: no revenue, cost reported as Complimentary.
+  isFree    Boolean  @default(false)
 }
 
 /// لوتات المخزون (دفعات استلام منفصلة) لتتبع الصلاحية واستهلاك FEFO
@@ -1780,6 +1812,7 @@ model ProductVariant {
   @@unique([organizationId, sku])
   @@unique([organizationId, barcode])
   @@index([productId])
+  salesOrderLines     SalesOrderLine[]
 }
 
 model VariantStock {
@@ -1816,6 +1849,13 @@ model PurchaseOrder {
   bills          SupplierBill[]
 
   @@index([organizationId, status])
+  /// Expected delivery date (pending stock).
+  expectedDate   DateTime?           @db.Date
+  /// Payment terms in days from receipt (Net 30 = 30); paymentDueDate overrides when set.
+  paymentTermsDays Int?
+  paymentDueDate DateTime?           @db.Date
+  prepayments    SupplierPrepayment[]
+  attachments    BusinessFile[]
 }
 
 model PurchaseOrderLine {
@@ -1848,6 +1888,20 @@ model SupplierBill {
   payments       SupplierPayment[]
 
   @@index([organizationId, supplierId, status])
+  /// GOODS (raised on receipt) or FREIGHT (freight company, landed cost on the order).
+  kind           SupplierBillKind   @default(GOODS)
+  dueDate        DateTime?          @db.Date
+  reference      String?
+  note           String?
+  proofFileId    String?
+  proofFile      BusinessFile?      @relation("BillProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  /// FREIGHT: [{ lineId, amount }] share of each order line (by line value).
+  freightAllocation Json?
+  /// FREIGHT: dirhams added to stock unit cost so far / charged as freight on goods already sold.
+  freightCapitalised Int            @default(0)
+  freightExpensed Int               @default(0)
+  userId         String?
+  prepaymentApplications SupplierPrepaymentApplication[]
 }
 
 model SupplierPayment {
@@ -1860,6 +1914,9 @@ model SupplierPayment {
   userId    String
   user      User              @relation(fields: [userId], references: [id])
   note      String?
+  reference String?
+  proofFileId String?
+  proofFile BusinessFile? @relation("SupplierPaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
 }
 
 model StockMovement {
@@ -1881,6 +1938,9 @@ model StockMovement {
 
   @@index([organizationId, branchId, createdAt])
   @@index([productId])
+  /// SALE movement of a sales-order delivery.
+  salesOrderId   String?
+  salesOrder     SalesOrder?     @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
 }
 
 model StockHold {
@@ -2218,4 +2278,227 @@ model DemoRecord {
   createdAt  DateTime @default(now())
 
   @@unique([entityType, entityId])
+}
+
+// ───────────────────────── Sales orders, supplier prepayments, freight, files ─────────────────────────
+
+enum SupplierBillKind {
+  GOODS
+  FREIGHT
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTLY_DELIVERED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+/// B2B / project order: paid by installments, stock leaves at delivery (revenue and cost at delivery).
+model SalesOrder {
+  id               String                  @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int                     @default(1)
+  organizationId   String
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Short reference staff and customers quote (NC-SO-000001).
+  reference        String                  @unique @default(dbgenerated("nc_ref('NC-SO-'::text, 'nc_sales_order_ref_seq'::regclass)"))
+  customerId       String
+  customer         Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  branchId         String
+  branch           Branch                  @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  userId           String
+  user             User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  status           SalesOrderStatus        @default(DRAFT)
+  deliveryDate     DateTime?               @db.Date
+  note             String?
+  /// Payment terms label (e.g. "50% now, 50% in 14 days") and default days.
+  paymentTerms     String?
+  paymentTermsDays Int?
+  /// Sum of paid line amounts before the order discount (dirhams).
+  subtotal         Int                     @default(0)
+  discountAmount   Int                     @default(0)
+  total            Int                     @default(0)
+  amountPaid       Int                     @default(0)
+  /// Revenue recognised so far (delivered value).
+  deliveredRevenue Int                     @default(0)
+  freeReason       String?
+  confirmedAt      DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  lines            SalesOrderLine[]
+  installments     SalesOrderInstallment[]
+  payments         SalesOrderPayment[]
+  deliveries       SalesOrderDelivery[]
+  stockMovements   StockMovement[]
+
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+model SalesOrderLine {
+  id                String                   @id @default(cuid())
+  orderId           String
+  order             SalesOrder               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product                  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId         String?
+  variant           ProductVariant?          @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  sortOrder         Int                      @default(0)
+  /// Pieces, or grams for weight goods.
+  quantity          Int
+  quantityDelivered Int                      @default(0)
+  /// Current catalogue price when the line was written; unitPrice may differ (manager override).
+  listPrice         Int
+  unitPrice         Int
+  /// quantity × unitPrice (0 on a free line).
+  subtotal          Int
+  /// Share of the order discount.
+  discountShare     Int                      @default(0)
+  isFree            Boolean                  @default(false)
+  deliveryLines     SalesOrderDeliveryLine[]
+
+  @@index([orderId])
+}
+
+model SalesOrderInstallment {
+  id         String     @id @default(cuid())
+  orderId    String
+  order      SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  seq        Int
+  /// Percent of the total when the plan was given in percent (the amount is authoritative).
+  percent    Decimal?   @db.Decimal(7, 3)
+  amount     Int
+  dueDate    DateTime   @db.Date
+  amountPaid Int        @default(0)
+
+  @@unique([orderId, seq])
+}
+
+model SalesOrderPayment {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       SalesOrder    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  branchId    String
+  branch      Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  amount      Int
+  method      PaymentMethod
+  reference   String?
+  note        String?
+  paidAt      DateTime      @default(now())
+  proofFileId String?
+  proofFile   BusinessFile? @relation("SalesOrderPaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  /// [{ installmentId, seq, amount }] how this payment was spread over the installments (oldest first).
+  allocation  Json?
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt   DateTime      @default(now())
+
+  @@index([orderId])
+}
+
+model SalesOrderDelivery {
+  id                String                   @id @default(cuid())
+  orderId           String
+  order             SalesOrder               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  branchId          String
+  branch            Branch                   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  userId            String
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  note              String?
+  /// Revenue recognised by this delivery, cost of the paid lines, cost of the free lines.
+  revenue           Int                      @default(0)
+  cost              Int                      @default(0)
+  complimentaryCost Int                      @default(0)
+  deliveredAt       DateTime                 @default(now())
+  lines             SalesOrderDeliveryLine[]
+
+  @@index([orderId])
+}
+
+model SalesOrderDeliveryLine {
+  id         String             @id @default(cuid())
+  deliveryId String
+  delivery   SalesOrderDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  lineId     String
+  line       SalesOrderLine     @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  quantity   Int
+  revenue    Int
+  unitCost   Int
+  costAmount Int
+  isFree     Boolean            @default(false)
+
+  @@index([deliveryId])
+}
+
+/// Money paid to a supplier against a purchase order before (or without) a bill. Applied to the
+/// order's goods bills when goods are received (SupplierPrepaymentApplication); never a SupplierPayment.
+model SupplierPrepayment {
+  id              String                          @id @default(cuid())
+  organizationId  String
+  organization    Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplierId      String
+  supplier        Supplier                        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder                   @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  amount          Int
+  amountApplied   Int                             @default(0)
+  method          SupplierPayMethod
+  reference       String?
+  note            String?
+  paidAt          DateTime                        @default(now())
+  proofFileId     String?
+  proofFile       BusinessFile?                   @relation("PrepaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  userId          String
+  user            User                            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt       DateTime                        @default(now())
+  applications    SupplierPrepaymentApplication[]
+
+  @@index([organizationId, supplierId])
+  @@index([purchaseOrderId])
+}
+
+model SupplierPrepaymentApplication {
+  id           String             @id @default(cuid())
+  prepaymentId String
+  prepayment   SupplierPrepayment @relation(fields: [prepaymentId], references: [id], onDelete: Cascade)
+  billId       String
+  bill         SupplierBill       @relation(fields: [billId], references: [id], onDelete: Cascade)
+  amount       Int
+  createdAt    DateTime           @default(now())
+
+  @@index([billId])
+}
+
+/// Private business document: PO quotation / invoice attachment or a payment proof (JPEG, PNG, WebP, PDF, at most 10 MB).
+model BusinessFile {
+  id                      String                  @id @default(cuid())
+  organizationId          String
+  organization            Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// PO_ATTACHMENT or PAYMENT_PROOF.
+  purpose                 String
+  purchaseOrderId         String?
+  purchaseOrder           PurchaseOrder?          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  fileName                String
+  mime                    String
+  size                    Int
+  /// Bytes kept in the database when Supabase Storage is not configured.
+  content                 Bytes?
+  /// Object key in the private "business-documents" bucket.
+  storagePath             String?
+  uploadedByUserId        String?
+  uploadedBy              User?                   @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  createdAt               DateTime                @default(now())
+  ledgerProofs            CustomerAccountLedger[] @relation("LedgerProof")
+  billProofs              SupplierBill[]          @relation("BillProof")
+  supplierPaymentProofs   SupplierPayment[]       @relation("SupplierPaymentProof")
+  salesOrderPaymentProofs SalesOrderPayment[]     @relation("SalesOrderPaymentProof")
+  prepaymentProofs        SupplierPrepayment[]    @relation("PrepaymentProof")
+
+  @@index([organizationId, purpose])
+  @@index([purchaseOrderId])
 }

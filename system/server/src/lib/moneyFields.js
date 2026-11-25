@@ -48,12 +48,21 @@ export const MONEY_FIELDS = {
   ProductVariant: ["price"],
   VariantStock: ["unitCost"],
   PurchaseOrderLine: ["unitCost"],
-  SupplierBill: ["amount", "amountPaid"],
+  SupplierBill: ["amount", "amountPaid", "freightCapitalised", "freightExpensed"],
   SupplierPayment: ["amount"],
   DeliveryArea: ["fee"],
   RelocationRequest: ["quoteAmount", "amountPaid"],
   Promotion: ["amount", "bundlePrice", "minOrderAmount"],
   Payment: ["amount"],
+  // Sales orders, supplier prepayments (migration 20261126100000_sales_orders_payments).
+  SalesOrder: ["subtotal", "discountAmount", "total", "amountPaid", "deliveredRevenue"],
+  SalesOrderLine: ["listPrice", "unitPrice", "subtotal", "discountShare"],
+  SalesOrderInstallment: ["amount", "amountPaid"],
+  SalesOrderPayment: ["amount"],
+  SalesOrderDelivery: ["revenue", "cost", "complimentaryCost"],
+  SalesOrderDeliveryLine: ["revenue", "unitCost", "costAmount"],
+  SupplierPrepayment: ["amount", "amountApplied"],
+  SupplierPrepaymentApplication: ["amount"],
 };
 
 const MONEY = new Map(Object.entries(MONEY_FIELDS).map(([model, fields]) => [model, new Set(fields)]));
