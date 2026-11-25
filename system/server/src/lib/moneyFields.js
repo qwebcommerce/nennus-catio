@@ -54,6 +54,10 @@ export const MONEY_FIELDS = {
   RelocationRequest: ["quoteAmount", "amountPaid"],
   Promotion: ["amount", "bundlePrice", "minOrderAmount"],
   Payment: ["amount"],
+  StockTransferLine: ["unitCost", "lineValue"],
+  VanReturn: ["amountOwed"],
+  VanReturnLine: ["unitCost", "costAmount"],
+  DamagedStock: ["unitCost", "costAmount", "saleAmount"],
 };
 
 const MONEY = new Map(Object.entries(MONEY_FIELDS).map(([model, fields]) => [model, new Set(fields)]));
