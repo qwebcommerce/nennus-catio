@@ -6,6 +6,7 @@ import { d, money, sum } from "../lib/money.js";
 import { qatarRange } from "../lib/qatarTime.js";
 import { financeFilters, financeSummary, financeTransactions, stockValueRows } from "../lib/financeData.js";
 import { tablePdf } from "../lib/pdfTable.js";
+import { EXTRA_ENUMS, EXTRA_HEAD, EXTRA_LISTS, EXTRA_MONEY, EXTRA_TITLES, EXTRA_VALUES, buildExtraList, extraProfitRows } from "../lib/exportExtras.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -195,7 +196,20 @@ const LINES = {
   net: ["Net money", "صافي الحركة"],
 };
 
+// Sales orders, pending payments / stock, supplier balances (lib/exportExtras.js).
+Object.assign(LISTS, EXTRA_LISTS);
+Object.assign(TITLES, EXTRA_TITLES);
+Object.assign(VALUES, EXTRA_VALUES);
+Object.assign(HEAD, EXTRA_HEAD);
+for (const key of EXTRA_ENUMS) ENUMS.add(key);
+for (const key of EXTRA_MONEY) {
+  MONEY_COLUMNS.add(key);
+  NUMERIC.add(key);
+}
+
 async function buildList(list, req, lang) {
+  const extraList = await buildExtraList(list, req, { lang, qatarStamp, pick });
+  if (extraList) return extraList;
   const orgId = req.user.organizationId;
   const q = req.query;
   const hasDates = Boolean(q.from || q.to);
@@ -380,7 +394,7 @@ async function buildList(list, req, lang) {
     subtitle = `${qatarStamp(dates.from, false)} – ${qatarStamp(new Date(dates.to.getTime() - 1), false)}`;
     const L = (key) => LINES[key][lang === "ar" ? 1 : 0];
     const ch = (key) => tr(key, lang);
-    const CH = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION"];
+    const CH = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION", "SALES_ORDER"];
     const mi = s.moneyInDetail;
     const mo = s.moneyOutDetail;
     const rows = [
@@ -419,6 +433,8 @@ async function buildList(list, req, lang) {
       { line: `  ${L("byMethod")}: ${L("methodBank")}`, amount: mo.bank },
       { line: `  ${L("byMethod")}: ${L("methodFawran")}`, amount: mo.fawran },
       { line: L("net"), amount: s.net },
+      { line: "", amount: "" },
+      ...extraProfitRows(s, lang),
     ];
     return { subtitle, columns: ["line", "amount"], rows };
   }

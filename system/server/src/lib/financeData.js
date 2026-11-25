@@ -1,11 +1,13 @@
 import { prisma } from "./prisma.js";
 import { d, lineAmount, money, shareOf, sum } from "./money.js";
+import { SALES_ORDER_CHANNEL, financeExtras, salesOrderTransactions } from "./financeExtras.js";
 
 /** Shop sales channels (Sale rows). */
 export const SALE_CHANNELS = ["IN_STORE", "VAN", "WEBSITE"];
 /** Service income that is paid through Payment rows (lib/payments.js), not Sale rows. */
 export const SERVICE_CHANNELS = ["GROOMING", "RELOCATION"];
-export const CHANNELS = [...SALE_CHANNELS, ...SERVICE_CHANNELS];
+/** B2B / project sales orders: revenue at delivery (lib/financeExtras.js). */
+export const CHANNELS = [...SALE_CHANNELS, ...SERVICE_CHANNELS, SALES_ORDER_CHANNEL];
 const TENDERS = ["cash", "card", "bank", "fawran"];
 
 /** Amounts here are whole dirhams (NFR-03); money() turns them into riyals for the response. */
@@ -49,7 +51,7 @@ function tenderGroup(method) {
   if (m === "CASH" || m === "ON_DELIVERY") return "cash";
   if (m === "CARD" || m === "ONLINE") return "card";
   if (m === "FAWRAN") return "fawran";
-  if (m === "PAYMENT_LINK" || m === "BANK") return "bank";
+  if (m === "PAYMENT_LINK" || m === "BANK" || m === "BANK_TRANSFER") return "bank";
   return null;
 }
 
@@ -231,7 +233,7 @@ export async function loadServicePayments(orgId, { from, to }, { channel, branch
 /** Profit and loss plus money in / out for the range. All sums are exact whole dirhams. */
 export async function financeSummary(orgId, dates, filters = {}) {
   const [sales, refunds, servicePayments] = await Promise.all([
-    loadSales(orgId, dates, filters, { items: { select: { costAmount: true } } }),
+    loadSales(orgId, dates, filters, { items: { select: { costAmount: true, isFree: true } } }),
     loadRefunds(orgId, dates, filters, { items: { select: { costAmount: true } } }),
     loadServicePayments(orgId, dates, filters),
   ]);
@@ -240,7 +242,8 @@ export async function financeSummary(orgId, dates, filters = {}) {
   for (const sale of sales) {
     const row = byChannel[sale.orderChannel] || byChannel.IN_STORE;
     row.revenue += d(sale.total);
-    row.cogs += sum(sale.items, (item) => item.costAmount);
+    // Free (complimentary) lines: their cost is reported as Complimentary, not cost of goods.
+    row.cogs += sum(sale.items, (item) => (item.isFree ? 0 : item.costAmount));
     row.orders += 1;
     const t = takenByTender(sale);
     for (const key of TENDERS) taken[key] += t[key];
@@ -312,11 +315,25 @@ export async function financeSummary(orgId, dates, filters = {}) {
   const businessWide = !filters.channel;
   const wide = (value) => (businessWide ? value : 0);
 
+  // ── Sales orders, complimentary goods, bank transfer, prepayments, freight (lib/financeExtras.js) ──
+  const extra = await financeExtras(orgId, dates, filters, { countedSale: COUNTED_SALE, saleChannels: SALE_CHANNELS });
+  for (const row of Object.values(byChannel)) row.complimentary = 0;
+  byChannel[SALES_ORDER_CHANNEL].revenue += extra.so.revenue;
+  byChannel[SALES_ORDER_CHANNEL].cogs += extra.so.cogs;
+  byChannel[SALES_ORDER_CHANNEL].orders += extra.so.deliveries;
+  byChannel[SALES_ORDER_CHANNEL].complimentary += extra.so.complimentary;
+  for (const [ch, cost] of Object.entries(extra.tillComplimentary)) (byChannel[ch] || byChannel.IN_STORE).complimentary += cost;
+  supplier.CASH += extra.prepay.CASH;
+  supplier.BANK += extra.prepay.BANK;
+  const complimentaryTotal = sum(Object.values(byChannel), (row) => row.complimentary);
+  const freightOnSold = wide(extra.freightOnSold);
+
   const channels = Object.fromEntries(Object.entries(byChannel).map(([key, row]) => [key, {
     revenue: money(row.revenue),
     refunds: money(row.refunds),
     cogs: money(row.cogs),
-    grossProfit: money(row.revenue - row.refunds - row.cogs),
+    grossProfit: money(row.revenue - row.refunds - row.cogs - row.complimentary),
+    complimentary: money(row.complimentary),
     orders: row.orders,
     refundCount: row.refundCount,
   }]));
@@ -328,7 +345,7 @@ export async function financeSummary(orgId, dates, filters = {}) {
 
   const moneyInBy = {};
   for (const key of TENDERS) {
-    moneyInBy[key] = taken[key] + serviceIn.GROOMING[key] + serviceIn.RELOCATION[key] + wide(collected[key]);
+    moneyInBy[key] = taken[key] + serviceIn.GROOMING[key] + serviceIn.RELOCATION[key] + wide(collected[key]) + extra.soIn[key];
   }
   const moneyOutBy = { ...refundOut };
   moneyOutBy.cash += wide(expenses.CASH + supplier.CASH);
@@ -346,14 +363,16 @@ export async function financeSummary(orgId, dates, filters = {}) {
     revenue: money(revenue),
     refunds: money(refundTotal),
     cogs: money(cogs),
-    grossProfit: money(revenue - refundTotal - cogs),
+    grossProfit: money(revenue - refundTotal - cogs - complimentaryTotal - freightOnSold),
+    complimentary: money(complimentaryTotal),
+    freightOnSold: money(freightOnSold),
     expenses: money(expenseTotal),
     expensesBySource: { CASH: money(wide(expenses.CASH)), BANK: money(wide(expenses.BANK)) },
     supplierPayments: money(supplierTotal),
     supplierPaymentsBySource: { CASH: money(wide(supplier.CASH)), BANK: money(wide(supplier.BANK)) },
     relocationPaid: money(relocationIn),
     groomingPaid: money(groomingIn),
-    netProfit: money(revenue - refundTotal - cogs - expenseTotal),
+    netProfit: money(revenue - refundTotal - cogs - complimentaryTotal - freightOnSold - expenseTotal),
     moneyIn: money(moneyIn),
     moneyOut: money(moneyOut),
     moneyInDetail: {
@@ -364,6 +383,15 @@ export async function financeSummary(orgId, dates, filters = {}) {
       accountCollections: money(wide(tenderSum(collected))),
       grooming: money(groomingIn),
       relocation: money(relocationIn),
+      salesOrders: money(extra.soPaymentsTotal),
+      salesOrdersCash: money(extra.soIn.cash),
+      salesOrdersCard: money(extra.soIn.card),
+      salesOrdersBank: money(extra.soIn.bank),
+      salesOrdersFawran: money(extra.soIn.fawran),
+      bankTransfer: money(extra.bankTransfer.till + wide(extra.bankTransfer.collections) + extra.bankTransfer.salesOrders),
+      bankTransferTill: money(extra.bankTransfer.till),
+      bankTransferCollections: money(wide(extra.bankTransfer.collections)),
+      bankTransferSalesOrders: money(extra.bankTransfer.salesOrders),
       cash: money(moneyInBy.cash),
       card: money(moneyInBy.card),
       bank: money(moneyInBy.bank),
@@ -379,6 +407,8 @@ export async function financeSummary(orgId, dates, filters = {}) {
       refundsRelocation: money(tenderSum(serviceOut.RELOCATION)),
       supplierPaymentsCash: money(wide(supplier.CASH)),
       supplierPaymentsBank: money(wide(supplier.BANK)),
+      supplierPrepaymentsCash: money(wide(extra.prepay.CASH)),
+      supplierPrepaymentsBank: money(wide(extra.prepay.BANK)),
       expensesCash: money(wide(expenses.CASH)),
       expensesBank: money(wide(expenses.BANK)),
       cash: money(moneyOutBy.cash),
@@ -457,10 +487,11 @@ export async function stockValueRows(orgId, branchId = "") {
  * and relocation payments (type PAYMENT) and their refunds on the GROOMING / RELOCATION channels.
  */
 export async function financeTransactions(orgId, dates, filters = {}) {
-  const [sales, refunds, servicePayments] = await Promise.all([
+  const [sales, refunds, servicePayments, soRows] = await Promise.all([
     filters.type === "refund" ? [] : loadSales(orgId, dates, filters),
     filters.type === "sale" ? [] : loadRefunds(orgId, dates, filters),
     loadServicePayments(orgId, dates, filters),
+    salesOrderTransactions(orgId, dates, filters),
   ]);
   const services = servicePayments.filter((row) => (filters.type === "sale" ? row.kind === "PAYMENT" : filters.type === "refund" ? row.kind === "REFUND" : true));
   const rows = [
@@ -512,6 +543,7 @@ export async function financeTransactions(orgId, dates, filters = {}) {
         amount: payment.kind === "REFUND" ? -d(payment.amount) : d(payment.amount),
       };
     }),
+    ...soRows,
   ].sort((a, b) => b.date - a.date);
   const income = rows.filter((row) => row.type !== "REFUND");
   const outgoing = rows.filter((row) => row.type === "REFUND");
