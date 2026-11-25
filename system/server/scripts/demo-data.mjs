@@ -35,6 +35,7 @@ import { performance } from "perf_hooks";
 import "../src/loadEnv.js";
 import { DemoRecords, countByTable } from "./demo/records.mjs";
 import * as C from "./demo/content.mjs";
+import { demoPdf, planSalesOrdersDemo } from "./demo/salesOrders.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -502,6 +503,20 @@ function makeApi(baseUrl) {
     return json;
   }
   call.retries = 0;
+  /** Multipart file upload (PO attachments, payment proofs), with the same demo clock and address headers. */
+  call.upload = async (path, buffer, fileName, mime, token) => {
+    n += 1;
+    const headers = { "X-Requested-With": "XMLHttpRequest", "X-Forwarded-For": `10.${(n >> 16) & 255}.${(n >> 8) & 255}.${n & 255}` };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const clock = clientClock.getStore();
+    if (clock) headers["X-Demo-Clock"] = String(Math.floor(clock.at + (performance.now() - clock.t0)));
+    const fd = new FormData();
+    fd.append("file", new Blob([buffer], { type: mime }), fileName);
+    const res = await fetch(baseUrl + path, { method: "POST", headers, body: fd });
+    const text = await res.text();
+    if (res.status !== 201) throw new Error(`POST ${path} (upload) -> ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  };
   return call;
 }
 
@@ -807,7 +822,9 @@ function buildPlan(ctx, now) {
   const payBill = (key, fraction, method, note) => async () => {
     const bill = po[key].bill;
     const amount = Math.round(dirhams(bill.amount) * fraction);
-    await api("POST", `/api/purchase-orders/bills/${bill.id}/payments`, { amount: riyals(amount), method, note }, owner);
+    // A bank payment carries a proof file (required for bank transfers).
+    const proofFileId = method === "BANK" ? (await api.upload("/api/files", demoPdf(`Bank transfer ${key}`), `transfer-${key}.pdf`, "application/pdf", owner)).id : undefined;
+    await api("POST", `/api/purchase-orders/bills/${bill.id}/payments`, { amount: riyals(amount), method, note, proofFileId }, owner);
   };
   const food = (it) => it.supplier === "gulfPet";
   const care = (it) => it.supplier === "doha";
@@ -1217,6 +1234,9 @@ function buildPlan(ctx, now) {
   expense(-22, "16:30", "OTHER", "185.00", "CASH", "Supplies – cleaning products and receipt rolls");
   expense(-8, "16:45", "OTHER", "96.50", "CASH", "Supplies – carrier bags and packing tape");
   for (const [d, amt] of [[-27, "140.00"], [-20, "155.00"], [-13, "150.00"], [-6, "160.00"]]) expense(d, "08:15", "OTHER", amt, "CASH", "Fuel – sales vans");
+
+  // ---- sales orders, free goods, bank transfers, PO quotation / prepayment / freight (scripts/demo/salesOrders.mjs)
+  planSalesOrdersDemo({ at, api, owner, S, L, plan, addStock, onHand, basket, qDay, riyals, upload: api.upload });
 
   return plan;
 }
