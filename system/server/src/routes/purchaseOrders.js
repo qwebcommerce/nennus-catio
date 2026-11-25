@@ -7,8 +7,23 @@ import { findBranchInOrg } from "../lib/orgScope.js";
 import { receivePurchaseOrderTx } from "../lib/purchaseReceive.js";
 import { d, fmt, money, parseMoney } from "../lib/money.js";
 import { toApi } from "../lib/moneyFields.js";
+import { FILE_SELECT, checkProof } from "../lib/businessFiles.js";
+import { fail, optDate, optText } from "../lib/bizError.js";
+import { poMoney, sellByMap } from "../lib/purchaseExtras.js";
+import { qatarDayKey } from "../lib/qatarTime.js";
 
 const api = (order) => toApi("PurchaseOrder", order);
+
+/** Orders with their money summary (paid vs received, prepaid, freight) in riyals. */
+async function withMoney(orders) {
+  const list = Array.isArray(orders) ? orders : [orders];
+  const sellBy = await sellByMap(prisma, list.flatMap((o) => o.lines || []));
+  const out = list.map((o) => {
+    const m = poMoney(o, sellBy);
+    return { ...api(o), money: Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === "number" ? fmt(v) : v])) };
+  });
+  return Array.isArray(orders) ? out : out[0];
+}
 
 const router = Router();
 router.use(authMiddleware);
@@ -18,7 +33,9 @@ const include = {
   supplier: { select: { id: true, name: true } },
   branch: { select: { id: true, name: true, nameEn: true } },
   lines: true,
-  bills: { include: { payments: true } },
+  bills: { include: { payments: { include: { proofFile: { select: FILE_SELECT } } }, proofFile: { select: FILE_SELECT }, supplier: { select: { id: true, name: true, isFreight: true } } } },
+  prepayments: { orderBy: { paidAt: "asc" }, include: { proofFile: { select: FILE_SELECT } } },
+  attachments: { select: FILE_SELECT, orderBy: { createdAt: "asc" } },
 };
 
 router.get("/", async (req, res) => {
@@ -28,7 +45,7 @@ router.get("/", async (req, res) => {
     take: 100,
     include,
   });
-  res.json(api(rows));
+  res.json(await withMoney(rows));
 });
 
 router.post("/", requireModule("purchasing", "create"), async (req, res) => {
@@ -78,18 +95,27 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
       unitCost: cost,
     });
   }
+  // Expected delivery date and payment terms (Net N days from receipt, or a fixed due date).
+  const termsRaw = req.body?.paymentTermsDays;
+  const paymentTermsDays = termsRaw == null || termsRaw === "" ? null : Number(termsRaw);
+  if (paymentTermsDays != null && (!Number.isInteger(paymentTermsDays) || paymentTermsDays < 0 || paymentTermsDays > 365)) {
+    throw fail(400, "TERMS_INVALID", "مدة السداد غير صالحة (0 إلى 365 يوماً)", "Payment terms must be 0 to 365 days");
+  }
   const order = await prisma.purchaseOrder.create({
     data: {
       organizationId: req.user.organizationId,
       supplierId: supplier.id,
       branchId,
       userId: req.user.sub,
+      expectedDate: optDate(req.body?.expectedDate, "expectedDate"),
+      paymentDueDate: optDate(req.body?.paymentDueDate, "paymentDueDate"),
+      paymentTermsDays,
       note: req.body?.note ? String(req.body.note).trim() : null,
       lines: { create: prepared },
     },
     include,
   });
-  res.status(201).json(api(order));
+  res.status(201).json(await withMoney(order));
 });
 
 /** A guarded status step that matched nothing: a newer version means the client's copy was stale. */
@@ -193,7 +219,8 @@ function billView(bill, now = new Date()) {
   const owed = d(bill.amount) - d(bill.amountPaid);
   const ageDays = Math.max(0, Math.floor((now.getTime() - new Date(bill.createdAt).getTime()) / DAY_MS));
   const bucket = AGE_BUCKETS.find((b) => ageDays >= b.min && ageDays <= b.max)?.key || "90+";
-  return { ...toApi("SupplierBill", bill), owed: money(owed), owedDirhams: owed, ageDays, ageBucket: bucket };
+  const overdue = owed > 0 && bill.dueDate ? new Date(bill.dueDate).toISOString().slice(0, 10) < qatarDayKey(now) : false;
+  return { ...toApi("SupplierBill", bill), owed: money(owed), owedDirhams: owed, ageDays, ageBucket: bucket, overdue };
 }
 
 /** FR-104: bills with amount, paid and owed. Filters: supplierId, open=1, age=0-30|31-60|61-90|90+. */
@@ -207,7 +234,13 @@ router.get("/bills", async (req, res) => {
       ...(open ? { status: { in: ["OPEN", "PARTIAL"] } } : {}),
     },
     orderBy: { createdAt: "desc" },
-    include: { supplier: { select: { id: true, name: true } }, payments: { orderBy: { paidAt: "desc" } }, purchaseOrder: { select: { id: true, status: true } } },
+    include: {
+      supplier: { select: { id: true, name: true, isFreight: true } },
+      payments: { orderBy: { paidAt: "desc" }, include: { proofFile: { select: FILE_SELECT } } },
+      purchaseOrder: { select: { id: true, status: true } },
+      proofFile: { select: FILE_SELECT },
+      prepaymentApplications: true,
+    },
   });
   const now = new Date();
   res.json(rows.map((bill) => billView(bill, now)).filter((bill) => !age || bill.ageBucket === age).map(({ owedDirhams, ...bill }) => bill));
@@ -284,6 +317,8 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
         err.errorAr = "لا يمكن أن تزيد الدفعة عن الرصيد المتبقي";
         throw err;
       }
+      // Proof of payment: required for a bank transfer, optional for cash (owner decision).
+      const proofFileId = await checkProof(tx, { orgId: req.user.organizationId, userId: req.user.sub, method, proofFileId: req.body?.proofFileId });
       await tx.supplierPayment.create({
         data: {
           billId: row.id,
@@ -291,6 +326,8 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
           method,
           userId: req.user.sub,
           note: req.body?.note ? String(req.body.note).trim().slice(0, 500) : null,
+          reference: optText(req.body?.reference, 120),
+          proofFileId,
         },
       });
       const amountPaid = d(row.amountPaid) + amount;
@@ -298,7 +335,7 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
       return tx.supplierBill.update({
         where: { id: row.id },
         data: { amountPaid, status },
-        include: { payments: true, supplier: { select: { id: true, name: true } } },
+        include: { payments: { include: { proofFile: { select: FILE_SELECT } } }, supplier: { select: { id: true, name: true, isFreight: true } } },
       });
     });
     // The location of the order the bill came from, so the payment shows in that location's audit log.
@@ -316,7 +353,7 @@ router.post("/bills/:id/payments", requireModule("purchasing", "create"), async 
     const { owedDirhams, ...view } = billView(bill);
     res.json(view);
   } catch (e) {
-    res.status(e.status || 400).json({ error: e.message || "Could not record the payment", errorEn: e.message, errorAr: e.errorAr });
+    res.status(e.status || 400).json({ error: e.message || "Could not record the payment", errorEn: e.errorEn || e.message, errorAr: e.errorAr, ...(e.code ? { code: e.code } : {}) });
   }
 });
 

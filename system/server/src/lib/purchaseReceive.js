@@ -2,6 +2,7 @@ import { prisma } from "./prisma.js";
 import { d, fmt, lineAmount, toDirhams } from "./money.js";
 import { writeAudit } from "./auditLog.js";
 import { moveStock } from "./stockLedger.js";
+import { applyPrepaymentsTx, billDueDate, freightForReceipt, landedUnitCost, loadFreight, saveFreightAdded } from "./purchaseExtras.js";
 
 /** Allowed purchase order status changes (NFR-23). The database trigger enforces the same list. */
 export const PO_TRANSITIONS = Object.freeze({
@@ -61,6 +62,8 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
     (await tx.product.findMany({ where: { id: { in: order.lines.map((l) => l.productId) } }, select: { id: true, sellBy: true } }))
       .map((p) => [p.id, p.sellBy]),
   );
+  // Freight bills on the order: their share of what is received goes into the unit cost (landed cost).
+  const freight = await loadFreight(tx, order.id);
   for (const line of order.lines) {
     const remaining = line.quantity - line.quantityReceived;
     // With a list of lines, a line left out receives nothing; with none, everything still on order.
@@ -86,7 +89,7 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
       delta: qty,
       reason: "RECEIPT",
       note: order.id,
-      receiptUnitCost: d(line.unitCost),
+      receiptUnitCost: landedUnitCost(line.unitCost, qty, sellBy.get(line.productId), freightForReceipt(freight, line, line.quantityReceived, qty)),
     });
     // Guarded update: the line must still hold what we read under the lock.
     const updated = await tx.purchaseOrderLine.updateMany({
@@ -99,14 +102,19 @@ export async function receivePurchaseOrderTx(tx, { orgId, userId, orderId, reque
   }
   if (!received.length) throw poError("Enter a quantity to receive", 400, "أدخل كمية للاستلام");
 
-  const bill = await tx.supplierBill.create({
+  let bill = await tx.supplierBill.create({
     data: {
       organizationId: orgId,
       supplierId: order.supplierId,
       purchaseOrderId: order.id,
       amount: receivedCost,
+      dueDate: await billDueDate(tx, order),
+      userId,
     },
   });
+  // A prepayment on the order pays this bill first (never counted twice: no SupplierPayment row).
+  if (await applyPrepaymentsTx(tx, order.id)) bill = await tx.supplierBill.findUnique({ where: { id: bill.id } });
+  await saveFreightAdded(tx, freight);
   const nextStatus = anyLeft ? "PARTIALLY_RECEIVED" : "RECEIVED";
   if (!canMovePurchaseOrder(order.status, nextStatus)) {
     throw poError(`Order cannot move from ${order.status} to ${nextStatus}`);
