@@ -84,6 +84,8 @@ export async function moveStock(tx, opts) {
         reason,
         note: note != null ? String(note).slice(0, 500) : null,
         userId,
+        // Sales-order delivery: the SALE movement names its order.
+        ...(opts.salesOrderId ? { salesOrderId: opts.salesOrderId } : {}),
       },
     });
   }

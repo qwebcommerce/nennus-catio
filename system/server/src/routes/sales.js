@@ -15,7 +15,7 @@ import {
 } from "../lib/dbErrors.js";
 import { quotePromotions } from "../lib/promotions.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
-import { requireModule } from "../middleware/auth.js";
+import { hasModule, requireModule } from "../middleware/auth.js";
 import crypto from "crypto";
 import QRCode from "qrcode";
 import { heldQuantity } from "../lib/webOrder.js";
@@ -26,7 +26,12 @@ const router = Router();
 router.use(authMiddleware);
 router.use((req, res, next) => requireModule("pos", req.method === "GET" ? "view" : "create")(req, res, next));
 
-const OK_PAY = new Set(["CASH", "CARD", "ONLINE", "FAWRAN", "PAYMENT_LINK", "ON_DELIVERY", "ON_ACCOUNT"]);
+const OK_PAY = new Set(["CASH", "CARD", "ONLINE", "FAWRAN", "PAYMENT_LINK", "ON_DELIVERY", "ON_ACCOUNT", "BANK_TRANSFER"]);
+
+/** Free (complimentary) line: `isFree` on the line, or `complimentary: true` for the whole invoice. */
+function lineIsFree(line, body) {
+  return body?.complimentary === true || line?.isFree === true || line?.free === true;
+}
 const SALE_FILTER_PAY = new Set([...OK_PAY, "SPLIT"]);
 /** Split tender lines — cash-like methods only (matches POS UI). */
 const SPLIT_PAY = new Set(["CASH", "CARD", "ONLINE"]);
@@ -120,6 +125,8 @@ router.post("/quote", async (req, res) => {
     const product = byId.get(String(line?.productId || ""));
     const qty = Math.round(Number(line?.quantity));
     if (!product || !Number.isFinite(qty) || qty < 1) continue;
+    // Free lines bring no revenue: no price and no offer.
+    if (lineIsFree(line, req.body)) continue;
     const variant = line.variantId ? product.variants.find((v) => v.id === String(line.variantId)) : null;
     const unitPrice = variant ? d(variant.price) : d(product.price);
     lines.push({ productId: product.id, categoryId: product.categoryId, quantity: qty, sellBy: product.sellBy, subtotal: lineAmount(unitPrice, qty, product.sellBy) });
@@ -175,6 +182,27 @@ router.post("/checkout", async (req, res) => {
     });
   }
   const orderChannel = tillBranch.kind === "VAN" ? "VAN" : "IN_STORE";
+  // Complimentary goods (free lines / whole invoice): manager or owner only (complimentary → create), reason required.
+  const anyFree = Array.isArray(items) && items.some((line) => lineIsFree(line, req.body));
+  const freeReason = req.body?.freeReason != null && String(req.body.freeReason).trim() ? String(req.body.freeReason).trim().slice(0, 300) : null;
+  if (anyFree) {
+    if (!(await hasModule(req, "complimentary", "create"))) {
+      return res.status(403).json({
+        error: "البضاعة المجانية للمدير أو المالك فقط",
+        errorAr: "البضاعة المجانية للمدير أو المالك فقط",
+        errorEn: "Only a manager or the owner can give goods free",
+        code: "FREE_GOODS_FORBIDDEN",
+      });
+    }
+    if (!freeReason) {
+      return res.status(400).json({
+        error: "اكتب سبب إعطاء البضاعة مجاناً",
+        errorAr: "اكتب سبب إعطاء البضاعة مجاناً",
+        errorEn: "Enter the reason the goods are given free",
+        code: "FREE_REASON_REQUIRED",
+      });
+    }
+  }
   const paymentReference = String(paymentReferenceRaw || "").trim();
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: "السلة فارغة" });
@@ -329,10 +357,13 @@ router.post("/checkout", async (req, res) => {
       });
       if (onHand - held < qty) throw new Error(`كمية غير كافية: ${variant?.label || product.name}`);
       const unitPrice = variant ? d(variant.price) : d(product.price);
+      const isFree = lineIsFree(line, req.body);
       // A weight line is grams × price per kg / 1000, rounded half away from zero to a dirham.
-      const subtotal = lineAmount(unitPrice, qty, product.sellBy);
+      // A free line brings no revenue (subtotal 0); its cost is kept and reported as Complimentary.
+      const subtotal = isFree ? 0 : lineAmount(unitPrice, qty, product.sellBy);
       total += subtotal;
       lineData.push({
+        isFree,
         productId,
         categoryId: product.categoryId,
         sellBy: product.sellBy,
@@ -361,10 +392,12 @@ router.post("/checkout", async (req, res) => {
 
     const afterManualNum = subtotalDec - discountDec;
 
+    // Offers apply to the paid lines only.
+    const paidLines = lineData.filter((line) => !line.isFree);
     const promo = await quotePromotions(prisma, {
       organizationId: orgId,
       channel: "TILL",
-      lines: lineData.map((line) => ({
+      lines: paidLines.map((line) => ({
         productId: line.productId,
         categoryId: line.categoryId,
         quantity: line.quantity,
@@ -374,7 +407,7 @@ router.post("/checkout", async (req, res) => {
       goods: afterManualNum,
       code: couponCode,
     });
-    lineData.forEach((line, index) => {
+    paidLines.forEach((line, index) => {
       line.discountAmount = promo.lineDiscounts[index] || 0;
     });
 
@@ -517,8 +550,10 @@ router.post("/checkout", async (req, res) => {
           promotionDiscount: promo.discount,
           orderNote,
           deliveryAddress,
+          ...(anyFree ? { freeReason } : {}),
           items: {
             create: lineData.map((l) => ({
+              isFree: l.isFree,
               productId: l.productId,
               variantId: l.variantId,
               quantity: l.quantity,
@@ -581,6 +616,18 @@ router.post("/checkout", async (req, res) => {
         });
       }
 
+      if (anyFree) {
+        const freeLines = lineData.filter((l) => l.isFree);
+        await writeAudit({
+          userId: req.user.sub,
+          action: "SALE_COMPLIMENTARY",
+          entityType: "Sale",
+          entityId: created.id,
+          branchId: bid,
+          summary: `Free goods: ${freeLines.length} line(s) at cost ${fmt(freeLines.reduce((s, l) => s + d(l.costAmount), 0))}. Reason: ${freeReason}`,
+          meta: { freeReason, lines: freeLines.map((l) => ({ productId: l.productId, variantId: l.variantId, quantity: l.quantity, costAmount: l.costAmount })) },
+        }, tx);
+      }
       return created;
     }, { maxWait: 10000, timeout: 60000 });
 

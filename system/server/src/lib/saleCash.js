@@ -161,15 +161,28 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
     cashCollections = 0;
   }
 
+  // Sales-order installments paid in cash at this location while the session was open.
+  // Bank transfers (and every non-cash method) never count as drawer cash.
+  let salesOrderCash = 0;
+  const soCash = await db.salesOrderPayment.aggregate({
+    where: { branchId: session.branchId, method: "CASH", createdAt: { gte: session.openedAt, lte: closedAt } },
+    _sum: { amount: true },
+  });
+  salesOrderCash = d(soCash._sum.amount);
+  // Shown on the cash-up for reference only (not in the drawer).
+  const bankTransferSales = sessionSales.filter((s) => s.paymentMethod === "BANK_TRANSFER").reduce((acc, s) => acc + d(s.amountPaid), 0);
+
   return {
     openingFloat: opening,
     cashSales,
     cashCollections,
+    salesOrderCash,
     cashRefunds,
-    expectedCash: opening + cashSales + cashCollections - cashRefunds,
+    expectedCash: opening + cashSales + cashCollections + salesOrderCash - cashRefunds,
     cardSales,
     cardRefunds,
     cardTotal: cardSales - cardRefunds,
+    bankTransferSales,
   };
 }
 

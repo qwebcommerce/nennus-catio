@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { FILE_SELECT, checkProof } from "../lib/businessFiles.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -120,6 +121,8 @@ router.get("/transactions", async (req, res) => {
         user: c.createdBy,
         branch: c.branch,
         note: c.note || null,
+        reference: c.reference || null,
+        proofFileId: c.proofFileId || null,
       })),
     ]
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -151,6 +154,7 @@ router.get("/:customerId/ledger", async (req, res) => {
       sale: { select: { id: true, total: true, createdAt: true, amountDue: true } },
       branch: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
+      proofFile: { select: FILE_SELECT },
     },
   });
   res.json({ customer: toApi("Customer", c), entries: toApi("CustomerAccountLedger", entries) });
@@ -167,7 +171,7 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
       return res.status(400).json({ error: "مبلغ غير صالح", errorAr: "مبلغ غير صالح", errorEn: "Enter a valid amount (at most 2 decimals)" });
     }
     const pm = String(paymentMethod || "CASH").toUpperCase();
-    if (!["CASH", "CARD", "ONLINE"].includes(pm)) {
+    if (!["CASH", "CARD", "ONLINE", "BANK_TRANSFER"].includes(pm)) {
       return res.status(400).json({ error: "طريقة دفع غير صالحة" });
     }
     const bid = bodyBranch || req.user.branchId;
@@ -202,6 +206,8 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
           where: { id: customerId, organizationId: orgId },
         });
         if (!cust) throw new Error("العميل غير موجود");
+        // Proof of payment: required for a bank transfer, optional otherwise (owner decision).
+        const proofFileId = await checkProof(tx, { orgId, userId: req.user.sub, method: pm, proofFileId: req.body?.proofFileId });
         const bal = d(cust.accountBalance);
         if (bal <= 0) throw new Error("لا يوجد رصيد مستحق لهذا العميل");
         const apply = Math.min(payAmt, bal);
@@ -217,6 +223,8 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
             amount: neg,
             paymentMethod: pm,
             note: note != null && String(note).trim() ? String(note).trim().slice(0, 500) : null,
+            reference: req.body?.reference != null && String(req.body.reference).trim() ? String(req.body.reference).trim().slice(0, 120) : null,
+            proofFileId,
             createdByUserId: req.user.sub,
           },
         });
@@ -241,6 +249,9 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
 
       res.json({ applied: riyals(out.applied), customer: toApi("Customer", out.customer) });
     } catch (e) {
+      if (e?.errorAr && e?.errorEn) {
+        return res.status(e.status || 400).json({ error: e.errorAr, errorAr: e.errorAr, errorEn: e.errorEn, code: e.code });
+      }
       const msg = e instanceof Error ? e.message : "فشل التحصيل";
       res.status(400).json({ error: msg });
     }

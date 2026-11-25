@@ -25,6 +25,8 @@ const CUSTOMER_STAFF_SELECT = {
   accountBalance: true,
   emailVerifiedAt: true,
   creditApproved: true,
+  isBusiness: true,
+  companyName: true,
   creditLimit: true,
   locale: true,
   tags: true,
@@ -102,6 +104,9 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
         accountBalance: opening,
         creditApproved: Boolean(req.body?.creditApproved),
         creditLimit: openingLimit,
+        // Business (B2B) customer for sales orders.
+        isBusiness: req.body?.isBusiness === true || req.body?.isBusiness === "true",
+        companyName: req.body?.companyName != null && String(req.body.companyName).trim() ? String(req.body.companyName).trim().slice(0, 200) : null,
       },
       select: CUSTOMER_STAFF_SELECT,
     });
@@ -139,6 +144,10 @@ router.patch("/:id", requireModule("customers", "edit"), async (req, res) => {
   if (req.body?.tags !== undefined) data.tags = req.body.tags != null && String(req.body.tags).trim() ? String(req.body.tags).trim().slice(0, 300) : null;
   if (req.body?.creditApproved !== undefined) {
     data.creditApproved = Boolean(req.body.creditApproved);
+  }
+  if (req.body?.isBusiness !== undefined) data.isBusiness = req.body.isBusiness === true || req.body.isBusiness === "true";
+  if (req.body?.companyName !== undefined) {
+    data.companyName = req.body.companyName != null && String(req.body.companyName).trim() ? String(req.body.companyName).trim().slice(0, 200) : null;
   }
   if (req.body?.creditLimit !== undefined) {
     const limit = req.body.creditLimit === "" || req.body.creditLimit == null ? null : toDirhams(req.body.creditLimit);
