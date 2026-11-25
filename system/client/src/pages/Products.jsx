@@ -1,4 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useSearchParams as useTabParams } from "react-router-dom";
+import { PageTabs } from "../components/BizShared.jsx";
+import { PendingPayments, PendingStock } from "../components/PendingPanels.jsx";
+import { useI18n as useTabI18n } from "../context/LanguageContext.jsx";
+import { useAuth as useTabAuth } from "../context/AuthContext.jsx";
 import { Link } from "react-router-dom";
 import { api, apiBlob, apiUploadExcel, apiUploadImage, editErrorMessage, isStaleEdit, resolveRowMessage } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -46,7 +51,7 @@ function emptyProductForm() {
   };
 }
 
-export default function Products() {
+function ProductsMain() {
   const { user, isAdmin, can, canModule } = useAuth();
   const { t, locale } = useI18n();
   const { showToast } = useToast();
@@ -1812,3 +1817,27 @@ const btnSm = {
   color: "var(--text)",
   whiteSpace: "nowrap",
 };
+
+/** Products with the pending stock / pending payments tabs (?tab=). */
+export default function Products() {
+  const { t } = useTabI18n();
+  const { canModule } = useTabAuth();
+  const [params, setParams] = useTabParams();
+  const tab = params.get("tab") || "products";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <PageTabs
+        value={tab}
+        onChange={(id) => setParams(id === "products" ? {} : { tab: id })}
+        tabs={[
+          { id: "products", label: t("products.title") },
+          { id: "stock", label: t("so.pendingStock") },
+          ...(canModule("finance", "view") ? [{ id: "pending", label: t("so.pendingPayments") }] : []),
+        ]}
+      />
+      {tab === "products" ? <ProductsMain /> : null}
+      {tab === "stock" ? <PendingStock /> : null}
+      {tab === "pending" ? <PendingPayments side="tous" /> : null}
+    </div>
+  );
+}

@@ -8,7 +8,7 @@ import { lineAmount } from "../store/cartStore.js";
 /**
  * Premium cart list for POS left panel — qty steppers, line totals, empty state.
  */
-export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
+export function PosCartPanel({ lines, onChangeQty, onRemove, total, canGiveFree = false, isFree = () => false, onToggleFree }) {
   const { t, locale } = useI18n();
 
   if (!lines.length) {
@@ -56,6 +56,7 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
           const weight = line.sellBy === "WEIGHT";
           const shownQty = weight ? Number((line.quantity / 1000).toFixed(3)) : line.quantity;
           const lineTotal = lineAmount(line);
+          const free = isFree(line);
           const belowCost = isUnitPriceAtOrBelowCost(line.unitPrice, line.cost);
           return (
             <li key={key} className="pos-cart-line">
@@ -80,6 +81,12 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
                   {line.unitPrice.toFixed(2)} {t("common.currency")}
                   <span className="pos-cart-line__each"> / {weight ? t("pos.perKg") : t("cart.each")}</span>
                 </div>
+                {canGiveFree && onToggleFree ? (
+                  <label className="pos-free-toggle">
+                    <input type="checkbox" checked={free} onChange={() => onToggleFree(key)} aria-label={t("so.freeLine")} />
+                    <span>{t("so.freeLine")}</span>
+                  </label>
+                ) : null}
                 {belowCost ? (
                   <div className="pos-cart-line__warn" role="status">
                     {t("pos.belowCostLine")}
@@ -117,8 +124,8 @@ export function PosCartPanel({ lines, onChangeQty, onRemove, total }) {
                       +
                     </button>
                   </div>
-                  <div className="pos-cart-line__line-total">
-                    {lineTotal.toFixed(2)} {t("common.currency")}
+                  <div className={`pos-cart-line__line-total${free ? " pos-cart-line__free" : ""}`}>
+                    {free ? t("so.free") : `${lineTotal.toFixed(2)} ${t("common.currency")}`}
                   </div>
                 </div>
               </div>

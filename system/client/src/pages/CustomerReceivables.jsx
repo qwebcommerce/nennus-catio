@@ -1,4 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { useSearchParams as useTabParams } from "react-router-dom";
+import { PageTabs } from "../components/BizShared.jsx";
+import { PendingPayments } from "../components/PendingPanels.jsx";
+import { useI18n as useTabI18n } from "../context/LanguageContext.jsx";
+import { useAuth as useTabAuth } from "../context/AuthContext.jsx";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
@@ -22,7 +27,7 @@ function paymentLabel(t, method) {
   return method || "—";
 }
 
-export default function CustomerReceivables() {
+function CustomerReceivablesMain() {
   const { t, locale } = useI18n();
   const { user, loading: authLoading } = useAuth();
   const { showToast } = useToast();
@@ -234,6 +239,28 @@ export default function CustomerReceivables() {
           <PaymentReceiptPrint txn={printCollection} />
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** CustomerReceivables with the pending stock / pending payments tabs (?tab=). */
+export default function CustomerReceivables() {
+  const { t } = useTabI18n();
+  const { canModule } = useTabAuth();
+  const [params, setParams] = useTabParams();
+  const tab = params.get("tab") || "accounts";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <PageTabs
+        value={tab}
+        onChange={(id) => setParams(id === "accounts" ? {} : { tab: id })}
+        tabs={[
+          { id: "accounts", label: t("nav.accounts") },
+          { id: "pending", label: t("so.pendingPayments") },
+        ]}
+      />
+      {tab === "accounts" ? <CustomerReceivablesMain /> : null}
+      {tab === "pending" ? <PendingPayments side="tous" /> : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 /** @typedef {'ar' | 'en'} Locale */
 import { fdEntries } from "./translationsFd.js";
 import { pwEntries } from "./translationsPw.js";
+import { soEntries } from "./translationsSo.js";
 
 const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
@@ -1169,7 +1170,7 @@ const entries = [
 ];
 
 const ROOT = {};
-for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries]) {
+for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...soEntries]) {
   const parts = path.split(".");
   let cur = ROOT;
   for (let i = 0; i < parts.length - 1; i++) {

@@ -42,14 +42,15 @@ import Audit from "./pages/Audit.jsx";
 import Alerts from "./pages/Alerts.jsx";
 import Settings from "./pages/Settings.jsx";
 import SalesHistory from "./pages/SalesHistory.jsx";
+import SalesOrders from "./pages/SalesOrders.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
 
 const Reports = React.lazy(loadReports);
 const Appointments = React.lazy(loadAppointments);
 
-function Protected({ children, roles, permission, anyPermission }) {
-  const { user, loading, can } = useAuth();
+function Protected({ children, roles, permission, anyPermission, module }) {
+  const { user, loading, can, canModule } = useAuth();
   const { t } = useI18n();
   if (loading) {
     return (
@@ -64,6 +65,7 @@ function Protected({ children, roles, permission, anyPermission }) {
     const denied =
       (roles && !roles.includes(user.role)) ||
       (permission && !can(permission)) ||
+      (Array.isArray(module) && !canModule(module[0], module[1])) ||
       (Array.isArray(anyPermission) && anyPermission.length > 0 && !anyPermission.some((key) => can(key)));
     if (denied) {
       return (
@@ -152,6 +154,14 @@ export default function App() {
             element={
               <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} anyPermission={["pos", "reports"]}>
                 <SalesHistory />
+              </Protected>
+            }
+          />
+          <Route
+            path="/sales-orders"
+            element={
+              <Protected module={["salesOrders", "view"]}>
+                <SalesOrders />
               </Protected>
             }
           />

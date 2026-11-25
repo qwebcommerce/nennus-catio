@@ -19,13 +19,14 @@ function navSectionForPath(pathname) {
     p.startsWith("/dashboard") ||
     p.startsWith("/alerts") ||
     p.startsWith("/reports") ||
-    p.startsWith("/sales")
+    (p.startsWith("/sales") && !p.startsWith("/sales-orders"))
   ) {
     return "dashboard";
   }
   if (
     p.startsWith("/products") ||
     p.startsWith("/categories") ||
+    p.startsWith("/sales-orders") ||
     p.startsWith("/cash") ||
     p.startsWith("/purchases") ||
     p.startsWith("/transfer") ||
@@ -111,7 +112,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
 }
 
 export function AppLayout() {
-  const { user, logout, isAdmin, isManager, isOrgOwner, can } = useAuth();
+  const { user, logout, isAdmin, isManager, isOrgOwner, can, canModule } = useAuth();
   const {
     branches,
     activeBranchId,
@@ -294,6 +295,12 @@ export function AppLayout() {
               <NavLink to="/purchases" className={sidebarLinkClass}>
                 <SidebarIcon name="purchases" />
                 <span>{t("nav.purchases")}</span>
+              </NavLink>
+            ) : null}
+            {canModule("salesOrders", "view") ? (
+              <NavLink to="/sales-orders" className={sidebarLinkClass}>
+                <SidebarIcon name="purchases" />
+                <span>{t("so.title")}</span>
               </NavLink>
             ) : null}
             {can("purchases") ? (

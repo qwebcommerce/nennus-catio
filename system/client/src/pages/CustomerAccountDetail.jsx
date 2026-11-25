@@ -4,6 +4,8 @@ import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
+import { FileLink, ProofUpload, proofNeeded } from "../components/BizShared.jsx";
+import { statusLabel } from "../utils/statusLabels.js";
 
 export default function CustomerAccountDetail() {
   const { customerId } = useParams();
@@ -13,6 +15,9 @@ export default function CustomerAccountDetail() {
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("CASH");
   const [payNote, setPayNote] = useState("");
+  const [payRef, setPayRef] = useState("");
+  const [proofFileId, setProofFileId] = useState("");
+  const [proofKey, setProofKey] = useState(0);
   const [busy, setBusy] = useState(false);
   const branchId = useActiveBranchId();
 
@@ -33,6 +38,10 @@ export default function CustomerAccountDetail() {
   const submitPay = async (e) => {
     e.preventDefault();
     setMsg("");
+    if (proofNeeded(payMethod) && !proofFileId) {
+      setMsg(t("so.proofRequired"));
+      return;
+    }
     setBusy(true);
     try {
       if (!branchId) {
@@ -46,10 +55,15 @@ export default function CustomerAccountDetail() {
           paymentMethod: payMethod,
           branchId,
           note: payNote.trim() || undefined,
+          reference: payRef.trim() || undefined,
+          proofFileId: proofFileId || undefined,
         },
       });
       setPayAmount("");
       setPayNote("");
+      setPayRef("");
+      setProofFileId("");
+      setProofKey((k) => k + 1);
       setMsg(t("receivable.saved"));
       await load();
     } catch (err) {
@@ -124,8 +138,14 @@ export default function CustomerAccountDetail() {
                 <option value="CASH">{t("payment.cash")}</option>
                 <option value="CARD">{t("payment.card")}</option>
                 <option value="ONLINE">{t("payment.online")}</option>
+                <option value="BANK_TRANSFER">{t("payment.bankTransfer")}</option>
               </select>
             </label>
+            <label className="ca-detail__field">
+              <span>{t("so.reference")}</span>
+              <input value={payRef} onChange={(e) => setPayRef(e.target.value)} disabled={busy} placeholder={t("so.transferReferenceHint")} />
+            </label>
+            <ProofUpload key={proofKey} value={proofFileId} onChange={setProofFileId} required={proofNeeded(payMethod)} />
             <label className="ca-detail__field">
               <span>{t("receivable.note")}</span>
               <input value={payNote} onChange={(e) => setPayNote(e.target.value)} disabled={busy} />
@@ -172,6 +192,8 @@ export default function CustomerAccountDetail() {
                         <span className={`ca-type ca-type--${String(row.entryType || "").toLowerCase()}`}>
                           {typeLabel(row.entryType)}
                         </span>
+                        {row.paymentMethod ? <div className="fd-muted">{statusLabel("payment", row.paymentMethod, locale)}{row.reference ? ` · ${row.reference}` : ""}</div> : null}
+                        {row.proofFile ? <FileLink file={row.proofFile} label={t("so.viewProof")} /> : null}
                       </td>
                       <td className="ca-detail-table__amount">
                         {Number(row.amount).toFixed(2)} {t("common.currency")}

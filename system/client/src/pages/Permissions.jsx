@@ -25,6 +25,8 @@ export default function Permissions() {
   const [modules, setModules] = useState({ MANAGER: {}, CASHIER: {} });
   const [moduleKeys, setModuleKeys] = useState([]);
   const [moduleActions, setModuleActions] = useState([]);
+  /** Some modules use only some actions (e.g. complimentary → create). */
+  const [moduleActionsFor, setModuleActionsFor] = useState({});
   const [moduleDefaults, setModuleDefaults] = useState({ MANAGER: {}, CASHIER: {} });
   /** NFR-13: version of the organisation row the matrix was loaded from. */
   const [version, setVersion] = useState(null);
@@ -37,6 +39,7 @@ export default function Permissions() {
     });
     setModuleKeys(data?.moduleKeys || []);
     setModuleActions(data?.moduleActions || []);
+    setModuleActionsFor(data?.moduleActionsFor || {});
     setModuleDefaults(data?.moduleDefaults || { MANAGER: {}, CASHIER: {} });
     setVersion(data?.version ?? null);
     setDirty(false);
@@ -113,7 +116,7 @@ export default function Permissions() {
         {moduleKeys.map((mod) => (
           <div key={mod} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ minWidth: 150 }}>{label("module", mod)}</span>
-            {moduleActions.map((action) => (
+            {(moduleActionsFor[mod] || moduleActions).map((action) => (
               <label key={action} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <input
                   type="checkbox"

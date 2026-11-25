@@ -5,7 +5,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 
-const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "", creditApproved: false, creditLimit: "" });
+const emptyForm = () => ({ name: "", phone: "", email: "", notes: "", accountBalance: "", creditApproved: false, creditLimit: "", isBusiness: false, companyName: "" });
 
 /** Edit-form copy of a customer row; keeps `version` so the save names the copy it was loaded from. */
 function editFormOf(c) {
@@ -62,6 +62,8 @@ export default function Customers() {
             : {}),
           creditApproved: Boolean(form.creditApproved),
           creditLimit: form.creditLimit === "" ? null : Number(form.creditLimit),
+          isBusiness: Boolean(form.isBusiness),
+          companyName: form.companyName || null,
         },
       });
       setForm(emptyForm());
@@ -88,6 +90,8 @@ export default function Customers() {
           accountBalance: Number(String(balRaw).replace(",", ".") || "0"),
           creditApproved: Boolean(editing.creditApproved),
           creditLimit: editing.creditLimit === "" ? null : Number(editing.creditLimit),
+          isBusiness: Boolean(editing.isBusiness),
+          companyName: editing.companyName || null,
           version: editing.version,
         },
       });
@@ -197,6 +201,18 @@ export default function Customers() {
             value={form.creditLimit}
             onChange={(e) => setForm({ ...form, creditLimit: e.target.value })}
           />
+          <label className="customers-check">
+            <input type="checkbox" checked={Boolean(form.isBusiness)} onChange={(e) => setForm({ ...form, isBusiness: e.target.checked })} />
+            {t("so.businessCustomer")}
+          </label>
+          {form.isBusiness ? (
+            <input
+              placeholder={t("so.companyName")}
+              aria-label={t("so.companyName")}
+              value={form.companyName}
+              onChange={(e) => setForm({ ...form, companyName: e.target.value })}
+            />
+          ) : null}
         </div>
         <button type="submit" className="btn-touch customers-form__submit">
           {t("common.add")}
@@ -325,6 +341,16 @@ export default function Customers() {
                         onChange={(e) => setEditing({ ...editing, creditLimit: e.target.value })}
                         placeholder={t("shop.creditLimit")}
                       />
+                      <label className="customers-check">
+                        <input type="checkbox" checked={Boolean(editing.isBusiness)} onChange={(e) => setEditing({ ...editing, isBusiness: e.target.checked })} />
+                        {t("so.businessCustomer")}
+                      </label>
+                      <input
+                        value={editing.companyName || ""}
+                        onChange={(e) => setEditing({ ...editing, companyName: e.target.value })}
+                        placeholder={t("so.companyName")}
+                        aria-label={t("so.companyName")}
+                      />
                     </td>
                     {showReceivable ? <td>—</td> : null}
                     {isManager ? (
@@ -342,7 +368,7 @@ export default function Customers() {
                   </tr>
                 ) : (
                   <tr key={c.id}>
-                    <td>{c.name}</td>
+                    <td>{c.name}{c.isBusiness ? <span className="biz-badge"> {c.companyName || t("so.business")}</span> : null}</td>
                     <td>{c.phone || "—"}</td>
                     <td className="customers-table__bal">{Number(c.accountBalance ?? 0).toFixed(2)}</td>
                     <td>{c.email || "—"}</td>

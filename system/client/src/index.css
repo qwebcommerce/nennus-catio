@@ -3988,3 +3988,44 @@ html:not([data-theme="light"]) .accounts-kind--collect {
 .fd-lowstock__list small {
   color: var(--muted);
 }
+
+/* ── Sales orders, pending payments / stock, proofs (biz-*) ─────────────────────────────── */
+.biz-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.biz-tab { min-height: 40px; padding: 6px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; }
+.biz-tab--on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.biz-kpis { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.biz-kpis--small { margin-top: 8px; }
+.biz-kpi { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--surface2); color: var(--text); text-decoration: none; min-width: 0; }
+.biz-kpi span { font-size: 12px; color: var(--muted); }
+.biz-kpi strong { font-size: 18px; overflow-wrap: anywhere; }
+.biz-kpi--bad strong { color: #c0392b; }
+.biz-badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 8px; background: var(--surface2); color: var(--text); margin-inline-start: 4px; }
+.biz-badge--bad { background: #fde2e1; color: #a52a1f; }
+.biz-badge--ok { background: #ddf5e3; color: #1f6b35; }
+.biz-overdue td:first-child { color: #a52a1f; }
+.biz-req { color: #c0392b; }
+.biz-err { color: #c0392b; display: block; }
+.biz-proof { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; }
+.biz-proof input[type="file"] { max-width: 100%; font-size: 12px; }
+.biz-file { display: inline-flex; flex-direction: column; }
+.biz-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; }
+.biz-grid > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.biz-grid input, .biz-grid select, .biz-grid textarea { width: 100%; box-sizing: border-box; min-width: 0; }
+.biz-line { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); align-items: end; padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.biz-line > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.biz-line input, .biz-line select { width: 100%; box-sizing: border-box; min-width: 0; }
+.biz-check { flex-direction: row !important; align-items: center; gap: 6px !important; min-height: 40px; }
+.biz-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.biz-primary { background: var(--accent) !important; color: #fff !important; }
+.biz-list { display: grid; gap: 8px; }
+.biz-order { display: grid; gap: 4px; cursor: pointer; text-align: start; }
+.biz-order__top { display: flex; flex-wrap: wrap; gap: 6px; justify-content: space-between; align-items: center; }
+.biz-sub { display: grid; gap: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+.biz-sub h3 { margin: 0; font-size: 15px; }
+.biz-summary { display: grid; gap: 8px; }
+.biz-pay-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pos-free-toggle { font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
+.pos-cart-line__free { color: #1f6b35; font-weight: 600; }
+.biz-print-doc { font-size: 13px; color: #000; background: #fff; padding: 12px; }
+.biz-print-doc table { width: 100%; border-collapse: collapse; }
+.biz-print-doc th, .biz-print-doc td { border-bottom: 1px solid #ddd; padding: 6px; text-align: start; }
