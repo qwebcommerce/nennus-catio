@@ -35,7 +35,8 @@ import RelocationDesk from "./pages/RelocationDesk.jsx";
 import Promotions from "./pages/Promotions.jsx";
 import Finance from "./pages/Finance.jsx";
 import Vehicles from "./pages/Vehicles.jsx";
-import Transfer from "./pages/Transfer.jsx";
+import Transfer, { TransferDetail, TransferHistory } from "./pages/Transfer.jsx";
+import VehicleDashboard, { DamagedStockPage } from "./pages/VehicleDashboard.jsx";
 import Count from "./pages/Count.jsx";
 import Cash from "./pages/Cash.jsx";
 import Audit from "./pages/Audit.jsx";
@@ -49,7 +50,7 @@ const loadAppointments = () => import("./pages/Appointments.jsx");
 const Reports = React.lazy(loadReports);
 const Appointments = React.lazy(loadAppointments);
 
-function Protected({ children, roles, permission, anyPermission, module }) {
+function Protected({ children, roles, permission, anyPermission, anyModule, module }) {
   const { user, loading, can, canModule } = useAuth();
   const { t } = useI18n();
   if (loading) {
@@ -66,7 +67,9 @@ function Protected({ children, roles, permission, anyPermission, module }) {
       (roles && !roles.includes(user.role)) ||
       (permission && !can(permission)) ||
       (Array.isArray(module) && !canModule(module[0], module[1])) ||
-      (Array.isArray(anyPermission) && anyPermission.length > 0 && !anyPermission.some((key) => can(key)));
+      (Array.isArray(anyPermission) && anyPermission.length > 0 && !anyPermission.some((key) => can(key))) ||
+      // anyModule: [["returns", "view"], ...] — any one module right is enough.
+      (Array.isArray(anyModule) && anyModule.length > 0 && !anyModule.some(([mod, action]) => canModule(mod, action)));
     if (denied) {
       return (
         <div className="card" role="alert" style={{ maxWidth: 520, margin: "24px auto", display: "grid", gap: 12 }}>
@@ -290,8 +293,24 @@ export default function App() {
           <Route
             path="/vehicles"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected anyModule={[["delivery", "create"], ["returns", "view"]]}>
                 <Vehicles />
+              </Protected>
+            }
+          />
+          <Route
+            path="/vehicles/:id"
+            element={
+              <Protected anyModule={[["returns", "view"]]}>
+                <VehicleDashboard />
+              </Protected>
+            }
+          />
+          <Route
+            path="/damaged-stock"
+            element={
+              <Protected anyModule={[["returns", "view"]]}>
+                <DamagedStockPage />
               </Protected>
             }
           />
@@ -333,6 +352,22 @@ export default function App() {
             element={
               <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="transfer">
                 <Transfer />
+              </Protected>
+            }
+          />
+          <Route
+            path="/transfer/history"
+            element={
+              <Protected anyModule={[["warehouses", "view"]]}>
+                <TransferHistory />
+              </Protected>
+            }
+          />
+          <Route
+            path="/transfer/history/:id"
+            element={
+              <Protected anyModule={[["warehouses", "view"]]}>
+                <TransferDetail />
               </Protected>
             }
           />

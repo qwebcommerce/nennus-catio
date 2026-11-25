@@ -30,6 +30,7 @@ export const EXTRA_VALUES = {
   ON_ACCOUNT: { en: "On account", ar: "على الحساب" },
   SUPPLIER_BILL: { en: "Supplier bill", ar: "فاتورة مورد" },
   FREIGHT_BILL: { en: "Freight bill", ar: "فاتورة شحن" },
+  VAN_RETURN: { en: "Van return (owed to customer)", ar: "مرتجع سيارة (مستحق للعميل)" },
   UNPAID: { en: "Unpaid", ar: "غير مدفوع" },
   PART_PAID: { en: "Part paid", ar: "مدفوع جزئياً" },
   IN: { en: "Incoming", ar: "وارد" },

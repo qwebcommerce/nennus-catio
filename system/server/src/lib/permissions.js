@@ -128,7 +128,13 @@ export function hasPermission(permissions, key) {
   return Boolean(permissions?.[key]);
 }
 
-export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "salesOrders", "complimentary"];
+/**
+ * `returns`: van returns (goods a van driver collects back from a customer) and the vehicle
+ * dashboard. view = see returns and dashboards, create = record a return / mark it paid,
+ * edit = receive it at the warehouse (and mark paid). Writing off or selling damaged stock is
+ * for the business owner only (requireOwner). Staff whose location is a van only see that van.
+ */
+export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary"];
 export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
 
 /**
@@ -162,6 +168,9 @@ export function defaultModuleMap(role) {
     map.customers.create = true;
     map.delivery.view = true;
     map.grooming.view = true;
+    // Van drivers are employees: they record returns into their van and pay customers back.
+    map.returns.view = true;
+    map.returns.create = true;
   }
   return map;
 }

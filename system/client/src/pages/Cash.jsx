@@ -123,6 +123,7 @@ export default function Cash() {
                 {cashUp.cashCollections ? <div>{t("so.cashCollections")} {cashUp.cashCollections.toFixed(2)}</div> : null}
                 {cashUp.salesOrderCash ? <div>{t("so.salesOrderCash")} {cashUp.salesOrderCash.toFixed(2)}</div> : null}
                 <div>{t("cash.cashRefunds")} {cashUp.cashRefunds.toFixed(2)}</div>
+                {cashUp.vanReturnsCash ? <div data-testid="cash-van-returns">{t("cash.vanReturns")} {Number(cashUp.vanReturnsCash).toFixed(2)}</div> : null}
                 <div>
                   <strong>{t("cash.expected")}: {cashUp.expectedCash.toFixed(2)} {t("common.currency")}</strong>
                 </div>

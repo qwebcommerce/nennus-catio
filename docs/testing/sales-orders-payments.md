@@ -24,7 +24,7 @@ New modules, set on the Permissions screen like the others:
 - `salesOrders`: view, create (orders, payments, deliveries), edit (change a line's price from the catalogue price), delete (cancel), export. Managers have all by default; cashiers have none.
 - `complimentary`: create = give goods free (till lines, whole invoice, sales-order lines). Managers by default; cashiers not. The screen shows only this action. A cashier gets a bilingual 403 `FREE_GOODS_FORBIDDEN`.
 
-Pending payments and supplier balances need Finance → view (balances also Purchasing → view). Pending stock needs Warehouses, Purchasing or Sales orders → view. File downloads re-check the right for what the file belongs to: Purchasing for PO attachments and supplier, freight and prepayment proofs, Sales orders for installment proofs, and Finance for customer-account proofs.
+Pending payments also list unpaid van returns (money owed back to customers, `docs/testing/van-returns.md`) under owed by us. Pending payments and supplier balances need Finance → view (balances also Purchasing → view). Pending stock needs Warehouses, Purchasing or Sales orders → view. File downloads re-check the right for what the file belongs to: Purchasing for PO attachments and supplier, freight and prepayment proofs, Sales orders for installment proofs, and Finance for customer-account proofs.
 
 ## Accounting rules
 

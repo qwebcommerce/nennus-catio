@@ -230,12 +230,61 @@ export async function loadServicePayments(orgId, { from, to }, { channel, branch
   return rows.map((row) => ({ ...row, channel: row.appointmentId ? "GROOMING" : "RELOCATION" }));
 }
 
+/** Damaged-stock sale method → tender group. */
+const DAMAGED_TENDER = { CASH: "cash", CARD: "card", BANK: "bank" };
+
+/**
+ * Van returns (routes/vanReturns.js), all on the VAN channel and the van's location:
+ *  - received in the range: the amount owed is a refund (revenue down) and the cost of every
+ *    returned line (good and damaged) comes off cost of goods, on the date it was received;
+ *  - paid back in the range: money out by method (cash / bank), on the payment date;
+ *  - damaged stock written off in the range: its cost goes back into cost of goods (a loss);
+ *  - damaged stock sold in the range: the sale amount is revenue and money in, its cost goes back
+ *    into cost of goods.
+ */
+export async function loadVanReturnActivity(orgId, { from, to }, { channel, branchId } = {}) {
+  if (channel && channel !== "VAN") return { received: [], paid: [], damaged: [] };
+  const range = { gte: from, lt: to };
+  const van = branchId ? { vanBranchId: branchId } : {};
+  const [received, paid, damaged] = await Promise.all([
+    prisma.vanReturn.findMany({
+      where: { organizationId: orgId, status: "RECEIVED", receivedAt: range, ...van },
+      select: {
+        id: true, reference: true, receivedAt: true, amountOwed: true, vanBranchId: true, customerName: true,
+        paymentStatus: true, paidMethod: true,
+        vanBranch: { select: { id: true, name: true, nameEn: true } },
+        lines: { select: { costAmount: true } },
+      },
+      orderBy: { receivedAt: "desc" },
+    }),
+    prisma.vanReturn.findMany({
+      where: { organizationId: orgId, paymentStatus: "PAID", paidAt: range, ...van },
+      select: { id: true, amountOwed: true, paidMethod: true },
+    }),
+    prisma.damagedStock.findMany({
+      where: {
+        organizationId: orgId,
+        status: { in: ["WRITTEN_OFF", "SOLD"] },
+        resolvedAt: range,
+        ...(branchId ? { vanReturn: { vanBranchId: branchId } } : {}),
+      },
+      select: {
+        id: true, status: true, costAmount: true, saleAmount: true, saleMethod: true, resolvedAt: true,
+        vanReturn: { select: { reference: true, vanBranchId: true, customerName: true, vanBranch: { select: { id: true, name: true, nameEn: true } } } },
+      },
+      orderBy: { resolvedAt: "desc" },
+    }),
+  ]);
+  return { received, paid, damaged };
+}
+
 /** Profit and loss plus money in / out for the range. All sums are exact whole dirhams. */
 export async function financeSummary(orgId, dates, filters = {}) {
-  const [sales, refunds, servicePayments] = await Promise.all([
+  const [sales, refunds, servicePayments, vanActivity] = await Promise.all([
     loadSales(orgId, dates, filters, { items: { select: { costAmount: true, isFree: true } } }),
     loadRefunds(orgId, dates, filters, { items: { select: { costAmount: true } } }),
     loadServicePayments(orgId, dates, filters),
+    loadVanReturnActivity(orgId, dates, filters),
   ]);
   const byChannel = Object.fromEntries(CHANNELS.map((key) => [key, { revenue: 0, refunds: 0, cogs: 0, orders: 0, refundCount: 0 }]));
   const taken = emptyTenders();
@@ -274,6 +323,35 @@ export async function financeSummary(orgId, dates, filters = {}) {
       row.revenue += amount;
       row.orders += 1;
       serviceIn[payment.channel][group] += amount;
+    }
+  }
+
+  // Van returns and damaged stock (see loadVanReturnActivity).
+  const vanRow = byChannel.VAN;
+  let vanReturnsTotal = 0;
+  let vanReturnsCost = 0;
+  for (const r of vanActivity.received) {
+    vanRow.refunds += d(r.amountOwed);
+    vanRow.refundCount += 1;
+    vanReturnsTotal += d(r.amountOwed);
+    const cost = sum(r.lines, (line) => line.costAmount);
+    vanRow.cogs -= cost;
+    vanReturnsCost += cost;
+  }
+  const vanReturnsOut = emptyTenders();
+  for (const r of vanActivity.paid) {
+    const group = r.paidMethod === "BANK" ? "bank" : "cash";
+    vanReturnsOut[group] += d(r.amountOwed);
+  }
+  let writtenOff = 0;
+  const damagedIn = emptyTenders();
+  for (const row of vanActivity.damaged) {
+    vanRow.cogs += d(row.costAmount);
+    if (row.status === "WRITTEN_OFF") writtenOff += d(row.costAmount);
+    else {
+      vanRow.revenue += d(row.saleAmount);
+      vanRow.orders += 1;
+      damagedIn[DAMAGED_TENDER[row.saleMethod] || "cash"] += d(row.saleAmount);
     }
   }
 
@@ -345,9 +423,11 @@ export async function financeSummary(orgId, dates, filters = {}) {
 
   const moneyInBy = {};
   for (const key of TENDERS) {
-    moneyInBy[key] = taken[key] + serviceIn.GROOMING[key] + serviceIn.RELOCATION[key] + wide(collected[key]) + extra.soIn[key];
+    moneyInBy[key] = taken[key] + serviceIn.GROOMING[key] + serviceIn.RELOCATION[key] + wide(collected[key]) + damagedIn[key] + extra.soIn[key];
   }
   const moneyOutBy = { ...refundOut };
+  moneyOutBy.cash += vanReturnsOut.cash;
+  moneyOutBy.bank += vanReturnsOut.bank;
   moneyOutBy.cash += wide(expenses.CASH + supplier.CASH);
   moneyOutBy.bank += wide(expenses.BANK + supplier.BANK);
   const moneyIn = tenderSum(moneyInBy);
@@ -373,6 +453,15 @@ export async function financeSummary(orgId, dates, filters = {}) {
     relocationPaid: money(relocationIn),
     groomingPaid: money(groomingIn),
     netProfit: money(revenue - refundTotal - cogs - complimentaryTotal - freightOnSold - expenseTotal),
+    /** Van returns received in the range (included in refunds / VAN). */
+    vanReturns: money(vanReturnsTotal),
+    vanReturnCount: vanActivity.received.length,
+    /** Cost taken back off cost of goods for those returns (good and damaged lines). */
+    vanReturnsCost: money(vanReturnsCost),
+    /** Damaged stock written off at cost in the range (included in cost of goods). */
+    stockWrittenOff: money(writtenOff),
+    /** Damaged stock sold at a reduced price in the range (included in revenue / VAN). */
+    damagedSales: money(tenderSum(damagedIn)),
     moneyIn: money(moneyIn),
     moneyOut: money(moneyOut),
     moneyInDetail: {
@@ -381,6 +470,7 @@ export async function financeSummary(orgId, dates, filters = {}) {
       bankSales: money(taken.bank),
       fawranSales: money(taken.fawran),
       accountCollections: money(wide(tenderSum(collected))),
+      damagedSales: money(tenderSum(damagedIn)),
       grooming: money(groomingIn),
       relocation: money(relocationIn),
       salesOrders: money(extra.soPaymentsTotal),
@@ -403,6 +493,8 @@ export async function financeSummary(orgId, dates, filters = {}) {
       refundsBank: money(refundOut.bank),
       refundsFawran: money(refundOut.fawran),
       refundsCardOrBank: money(refundsNonCash),
+      vanReturnsCash: money(vanReturnsOut.cash),
+      vanReturnsBank: money(vanReturnsOut.bank),
       refundsGrooming: money(tenderSum(serviceOut.GROOMING)),
       refundsRelocation: money(tenderSum(serviceOut.RELOCATION)),
       supplierPaymentsCash: money(wide(supplier.CASH)),
@@ -443,8 +535,20 @@ export async function stockValueRows(orgId, branchId = "") {
       },
     }),
   ]);
+  // Damaged goods from van returns, kept out of sale until the owner writes them off or sells them.
+  // Their cost came off cost of goods when they were received, so they are still stock at cost.
+  const damaged = await prisma.damagedStock.findMany({
+    where: { organizationId: orgId, status: "HELD", ...(branchId ? { branchId } : {}) },
+    select: {
+      quantity: true,
+      unitCost: true,
+      branch: { select: { id: true, name: true, nameEn: true } },
+      product: { select: { name: true, nameEn: true, sku: true, sellBy: true } },
+      variant: { select: { label: true, labelEn: true, sku: true } },
+    },
+  });
   const rows = [];
-  const push = (branch, name, nameEn, sku, sellBy, quantity, unitCost) => {
+  const push = (branch, name, nameEn, sku, sellBy, quantity, unitCost, damagedRow = false) => {
     // Weight stock is held in grams; cost is per kilogram. Value is rounded to a whole dirham per row.
     const qty = sellBy === "WEIGHT" ? Number(quantity) / 1000 : Number(quantity);
     const cost = d(unitCost);
@@ -460,6 +564,7 @@ export async function stockValueRows(orgId, branchId = "") {
       unitCost: money(cost),
       value: lineAmount(cost, quantity, sellBy),
       costMissing: unitCost == null,
+      ...(damagedRow ? { damaged: true } : {}),
     });
   };
   for (const row of inventory) push(row.branch, row.product?.name || "", row.product?.nameEn, row.product?.sku, row.product?.sellBy, row.quantity, row.unitCost);
@@ -467,6 +572,11 @@ export async function stockValueRows(orgId, branchId = "") {
     const label = row.variant?.label ? ` (${row.variant.label})` : "";
     const labelEn = row.variant?.labelEn || row.variant?.label ? ` (${row.variant.labelEn || row.variant.label})` : "";
     push(row.branch, `${row.variant?.product?.name || ""}${label}`, `${row.variant?.product?.nameEn || row.variant?.product?.name || ""}${labelEn}`, row.variant?.sku, row.variant?.product?.sellBy, row.quantity, row.unitCost);
+  }
+  for (const row of damaged) {
+    const label = row.variant ? ` (${row.variant.label})` : "";
+    const labelEn = row.variant ? ` (${row.variant.labelEn || row.variant.label})` : "";
+    push(row.branch, `${row.product?.name || ""}${label} — تالف`, `${row.product?.nameEn || row.product?.name || ""}${labelEn} — damaged`, row.variant?.sku || row.product?.sku, row.product?.sellBy, row.quantity, row.unitCost, true);
   }
   rows.sort((a, b) => a.location.localeCompare(b.location) || a.product.localeCompare(b.product));
   const total = sum(rows, (row) => row.value);
@@ -487,10 +597,11 @@ export async function stockValueRows(orgId, branchId = "") {
  * and relocation payments (type PAYMENT) and their refunds on the GROOMING / RELOCATION channels.
  */
 export async function financeTransactions(orgId, dates, filters = {}) {
-  const [sales, refunds, servicePayments, soRows] = await Promise.all([
+  const [sales, refunds, servicePayments, vanActivity, soRows] = await Promise.all([
     filters.type === "refund" ? [] : loadSales(orgId, dates, filters),
     filters.type === "sale" ? [] : loadRefunds(orgId, dates, filters),
     loadServicePayments(orgId, dates, filters),
+    loadVanReturnActivity(orgId, dates, filters),
     salesOrderTransactions(orgId, dates, filters),
   ]);
   const services = servicePayments.filter((row) => (filters.type === "sale" ? row.kind === "PAYMENT" : filters.type === "refund" ? row.kind === "REFUND" : true));
@@ -544,6 +655,39 @@ export async function financeTransactions(orgId, dates, filters = {}) {
       };
     }),
     ...soRows,
+    // Van returns count as refunds on the day they were received (as in the P&L).
+    ...(filters.type === "sale" ? [] : vanActivity.received).map((r) => ({
+      type: "REFUND",
+      kind: "VAN_RETURN",
+      id: r.id,
+      reference: r.reference || r.id.slice(-8).toUpperCase(),
+      vanReturnId: r.id,
+      date: r.receivedAt,
+      channel: "VAN",
+      branchId: r.vanBranchId,
+      location: r.vanBranch?.name || "",
+      locationEn: r.vanBranch?.nameEn || r.vanBranch?.name || "",
+      customer: r.customerName || "",
+      paymentMethod: r.paymentStatus === "PAID" ? r.paidMethod : "",
+      status: r.paymentStatus === "PAID" ? "REFUNDED" : "UNPAID",
+      amount: -d(r.amountOwed),
+    })),
+    // Damaged stock sold at a reduced price is income.
+    ...(filters.type === "refund" ? [] : vanActivity.damaged.filter((row) => row.status === "SOLD")).map((row) => ({
+      type: "SALE",
+      kind: "DAMAGED_SALE",
+      id: row.id,
+      reference: row.vanReturn?.reference || row.id.slice(-8).toUpperCase(),
+      date: row.resolvedAt,
+      channel: "VAN",
+      branchId: row.vanReturn?.vanBranchId || "",
+      location: row.vanReturn?.vanBranch?.name || "",
+      locationEn: row.vanReturn?.vanBranch?.nameEn || row.vanReturn?.vanBranch?.name || "",
+      customer: "",
+      paymentMethod: row.saleMethod,
+      status: "PAID",
+      amount: d(row.saleAmount),
+    })),
   ].sort((a, b) => b.date - a.date);
   const income = rows.filter((row) => row.type !== "REFUND");
   const outgoing = rows.filter((row) => row.type === "REFUND");

@@ -85,6 +85,7 @@ const LABELS = {
     ON_ACCOUNT: ["On-account balance", "رصيد على الحساب"],
     SUPPLIER_BILL: ["Supplier bill", "فاتورة مورد"],
     FREIGHT_BILL: ["Freight bill", "فاتورة شحن"],
+    VAN_RETURN: ["Van return (owed to customer)", "مرتجع سيارة (مستحق للعميل)"],
   },
   billKind: {
     GOODS: ["Goods", "بضاعة"],

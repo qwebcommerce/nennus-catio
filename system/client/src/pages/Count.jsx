@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
@@ -15,7 +16,7 @@ const inp = {
 
 export default function Count() {
   const { t, locale } = useI18n();
-  const { user } = useAuth();
+  const { user, canModule } = useAuth();
   const branchId = useActiveBranchId();
   const [products, setProducts] = useState([]);
   const [counts, setCounts] = useState({});
@@ -83,6 +84,11 @@ export default function Count() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h1 style={{ margin: 0 }}>{t("count.title")}</h1>
       <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>{t("count.intro")}</p>
+      {canModule("returns", "view") ? (
+        <p style={{ margin: 0, fontSize: 14 }}>
+          <Link to="/damaged-stock" data-testid="damaged-link">{t("vr.damagedTitle")}</Link> — {t("vr.damagedCountHint")}
+        </p>
+      ) : null}
 
       <form className="card" onSubmit={submit}>
         <input

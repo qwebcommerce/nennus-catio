@@ -8,6 +8,7 @@ import { lockStockRow, setStockCount } from "../lib/stockLedger.js";
 import { fmt } from "../lib/money.js";
 import { toApi } from "../lib/moneyFields.js";
 import { listLowStock } from "../lib/lowStock.js";
+import { BUSY_RETRY, isDeadlockError } from "../lib/dbErrors.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -99,8 +100,13 @@ router.post("/reconcile", requireModule("warehouses", "edit"), async (req, res) 
   }
 });
 
+/**
+ * One-step transfer with a transfer record (lib/inventoryTransfer.js). Body: { fromBranchId, toBranchId,
+ * items: [{ productId, variantId?, unit?: PIECE|CARTON|KG, quantity }], transferredByUserId?,
+ * authorisedByUserId?, vehicleId? (omit for the van's vehicle, null for none), note? }
+ */
 router.post("/transfer", requireModule("warehouses", "edit"), async (req, res) => {
-  const { fromBranchId, toBranchId, items } = req.body || {};
+  const { fromBranchId, toBranchId, items, transferredByUserId, authorisedByUserId, vehicleId, note } = req.body || {};
   const from = String(fromBranchId || "");
   const to = String(toBranchId || "");
   if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== from) {
@@ -118,9 +124,15 @@ router.post("/transfer", requireModule("warehouses", "edit"), async (req, res) =
       fromBranchId: from,
       toBranchId: to,
       items: Array.isArray(items) ? items : [],
+      transferredByUserId,
+      authorisedByUserId,
+      vehicleId: Object.prototype.hasOwnProperty.call(req.body || {}, "vehicleId") ? vehicleId || null : undefined,
+      note,
     });
     res.json(result);
   } catch (e) {
+    if (isDeadlockError(e)) return res.status(409).json(BUSY_RETRY);
+    if (!e?.status && !e?.errorAr) throw e;
     const status = e?.status || 400;
     const msg = e?.errorAr || (e instanceof Error ? e.message : "فشل التحويل");
     res.status(status).json({

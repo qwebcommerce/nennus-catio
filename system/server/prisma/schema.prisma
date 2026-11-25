@@ -165,6 +165,11 @@ model Organization {
   salesOrders             SalesOrder[]
   supplierPrepayments     SupplierPrepayment[]
   businessFiles           BusinessFile[]
+  stockTransfers          StockTransfer[]
+  vanReturns              VanReturn[]
+  vanReturnPhotos         VanReturnPhoto[]
+  vanReturnProofs         VanReturnPaymentProof[]
+  damagedStocks           DamagedStock[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -675,6 +680,7 @@ model Customer {
   isBusiness     Boolean      @default(false)
   companyName    String?
   salesOrders    SalesOrder[]
+  vanReturns     VanReturn[]
 }
 
 /// حركات ذمم الزبائن
@@ -886,6 +892,11 @@ model Branch {
   stockHolds     StockHold[]
   variantStocks  VariantStock[]
   vehicle        Vehicle?
+  transfersOut   StockTransfer[] @relation("StockTransferFrom")
+  transfersIn    StockTransfer[] @relation("StockTransferTo")
+  vanReturns     VanReturn[]     @relation("VanReturnVan")
+  vanReturnsReceived VanReturn[] @relation("VanReturnReceivedAt")
+  damagedStocks  DamagedStock[]
 
   @@unique([organizationId, supabaseId])
   salesOrders    SalesOrder[]
@@ -1196,6 +1207,15 @@ model User {
   purchaseOrdersCreated PurchaseOrder[]
   stockMovements StockMovement[]
   supplierPayments SupplierPayment[]
+  transfersCreated     StockTransfer[] @relation("StockTransferCreatedBy")
+  transfersMoved       StockTransfer[] @relation("StockTransferTransferredBy")
+  transfersAuthorised  StockTransfer[] @relation("StockTransferAuthorisedBy")
+  vanReturnsCollected  VanReturn[]     @relation("VanReturnCollectedBy")
+  vanReturnsCreated    VanReturn[]     @relation("VanReturnCreatedBy")
+  vanReturnsPaid       VanReturn[]     @relation("VanReturnPaidBy")
+  vanReturnsBroughtBack VanReturn[]    @relation("VanReturnBroughtBackBy")
+  vanReturnsReceived   VanReturn[]     @relation("VanReturnReceivedBy")
+  damagedResolved      DamagedStock[]  @relation("DamagedStockResolvedBy")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -1263,9 +1283,14 @@ model Product {
   expiryDate            DateTime?
   /// عدد الأيام قبل التاريخ لبدء التنبيه (إن وُجد تاريخ؛ الافتراضي في المنطق 14)
   expiryAlertDaysBefore Int?
+  /// Optional: pieces in one carton (whole number, 2 or more). Lets staff move or return stock by the carton.
+  piecesPerCarton Int?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   inventories    Inventory[]
+  transferLines  StockTransferLine[]
+  vanReturnLines VanReturnLine[]
+  damagedStocks  DamagedStock[]
   saleItems      SaleItem[]
   refundItems    RefundItem[]
   purchaseItems  PurchaseItem[]
@@ -1482,6 +1507,7 @@ model CashSession {
   note               String?
   sales              Sale[]
   refunds            Refund[]
+  vanReturns         VanReturn[]
 }
 
 model AuditLog {
@@ -1799,6 +1825,8 @@ model ProductVariant {
   price               Int
   isActive            Boolean   @default(true)
   packWeight          Decimal?
+  /// Optional: pieces (bags) in one carton, 2 or more. Falls back to the product's value.
+  piecesPerCarton     Int?
   preferredSupplierId String?
   preferredSupplier   Supplier? @relation("VariantPreferredSupplier", fields: [preferredSupplierId], references: [id], onDelete: SetNull)
   createdAt           DateTime  @default(now())
@@ -1808,6 +1836,9 @@ model ProductVariant {
   orderLines          PurchaseOrderLine[]
   stockMovements      StockMovement[]
   stockHolds          StockHold[]
+  transferLines       StockTransferLine[]
+  vanReturnLines      VanReturnLine[]
+  damagedStocks       DamagedStock[]
 
   @@unique([organizationId, sku])
   @@unique([organizationId, barcode])
@@ -1934,6 +1965,12 @@ model StockMovement {
   note           String?
   userId         String?
   user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Transfer record this movement belongs to (TRANSFER rows made since transfer records exist).
+  transferId     String?
+  transfer       StockTransfer?  @relation(fields: [transferId], references: [id], onDelete: SetNull)
+  /// Van return this RETURN movement belongs to.
+  vanReturnId    String?
+  vanReturn      VanReturn?      @relation(fields: [vanReturnId], references: [id], onDelete: SetNull)
   createdAt      DateTime        @default(now())
 
   @@index([organizationId, branchId, createdAt])
@@ -1941,6 +1978,9 @@ model StockMovement {
   /// SALE movement of a sales-order delivery.
   salesOrderId   String?
   salesOrder     SalesOrder?     @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+
+  @@index([transferId])
+  @@index([vanReturnId])
 }
 
 model StockHold {
@@ -2188,6 +2228,8 @@ model Vehicle {
   notes          String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+  transfers      StockTransfer[]
+  vanReturns     VanReturn[]
 
   @@index([organizationId, isActive])
 }
@@ -2501,4 +2543,271 @@ model BusinessFile {
 
   @@index([organizationId, purpose])
   @@index([purchaseOrderId])
+}
+
+/// Unit a transfer or van-return line was entered in. Stock itself is always pieces (or grams for weight goods).
+enum StockUnit {
+  /// One piece (a bag for pack-size variants).
+  PIECE
+  /// A carton of `piecesPerCarton` pieces.
+  CARTON
+  /// Kilograms of a weight product (stored as grams).
+  KG
+}
+
+/// One-step stock transfer between two locations (stock moves when it is saved).
+model StockTransfer {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Human reference, e.g. TR-000123.
+  reference           String?             @unique @default(dbgenerated("nc_ref('TR-'::text, 'nc_transfer_ref_seq'::regclass)"))
+  fromBranchId        String
+  fromBranch          Branch              @relation("StockTransferFrom", fields: [fromBranchId], references: [id])
+  toBranchId          String
+  toBranch            Branch              @relation("StockTransferTo", fields: [toBranchId], references: [id])
+  createdByUserId     String
+  createdBy           User                @relation("StockTransferCreatedBy", fields: [createdByUserId], references: [id])
+  transferredByUserId String?
+  transferredBy       User?               @relation("StockTransferTransferredBy", fields: [transferredByUserId], references: [id], onDelete: SetNull)
+  authorisedByUserId  String?
+  authorisedBy        User?               @relation("StockTransferAuthorisedBy", fields: [authorisedByUserId], references: [id], onDelete: SetNull)
+  vehicleId           String?
+  vehicle             Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  /// Vehicle name and plate when the transfer was made (later edits do not rewrite history).
+  vehicleName         String?
+  vehiclePlate        String?
+  note                String?
+  createdAt           DateTime            @default(now())
+  lines               StockTransferLine[]
+  movements           StockMovement[]
+
+  @@index([organizationId, createdAt])
+  @@index([fromBranchId])
+  @@index([toBranchId])
+}
+
+model StockTransferLine {
+  id              String          @id @default(cuid())
+  transferId      String
+  transfer        StockTransfer   @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product         @relation(fields: [productId], references: [id])
+  variantId       String?
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  unit            StockUnit
+  /// Quantity as entered in `unit` (kg may have decimals).
+  enteredQty      Decimal         @db.Decimal(12, 3)
+  /// Pieces per carton used for a CARTON line.
+  piecesPerCarton Int?
+  /// Quantity in stock units: pieces, or grams for weight goods.
+  baseQty         Int
+  /// Source unit cost when moved (whole dirhams per piece, or per kg for weight goods).
+  unitCost        Int?
+  /// Value moved (whole dirhams): baseQty x unitCost, grams x cost per kg / 1000 for weight goods.
+  lineValue       Int             @default(0)
+  fromBefore      Int
+  fromAfter       Int
+  toBefore        Int
+  toAfter         Int
+
+  @@index([transferId])
+  @@index([productId])
+}
+
+enum VanReturnStatus {
+  /// Collected from the customer, still in the van (not sellable stock).
+  IN_VAN
+  /// Converted into a warehouse return at the main store.
+  RECEIVED
+}
+
+enum ReturnCondition {
+  GOOD
+  DAMAGED
+}
+
+enum VanReturnPayStatus {
+  UNPAID
+  PAID
+}
+
+/// How money moved for a van return payment (cash, bank) or a damaged-stock sale (also card).
+enum ReturnMoneyMethod {
+  CASH
+  BANK
+  CARD
+}
+
+/// Goods a van driver collected back from a customer. Not a till refund.
+model VanReturn {
+  id                  String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version             Int                @default(1)
+  organizationId      String
+  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Human reference, e.g. VR-000045.
+  reference           String?            @unique @default(dbgenerated("nc_ref('VR-'::text, 'nc_van_return_ref_seq'::regclass)"))
+  status              VanReturnStatus    @default(IN_VAN)
+  vanBranchId         String
+  vanBranch           Branch             @relation("VanReturnVan", fields: [vanBranchId], references: [id])
+  vehicleId           String?
+  vehicle             Vehicle?           @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  vehicleName         String?
+  vehiclePlate        String?
+  customerId          String?
+  customer            Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerName        String?
+  customerPhone       String?
+  collectedByUserId   String
+  collectedBy         User               @relation("VanReturnCollectedBy", fields: [collectedByUserId], references: [id])
+  createdByUserId     String
+  createdBy           User               @relation("VanReturnCreatedBy", fields: [createdByUserId], references: [id])
+  collectedAt         DateTime           @default(now())
+  /// Owed to the customer, whole dirhams (0 allowed).
+  amountOwed          Int                @default(0)
+  note                String?
+  paymentStatus       VanReturnPayStatus @default(UNPAID)
+  paidMethod          ReturnMoneyMethod?
+  paidReference       String?
+  paidByUserId        String?
+  paidBy              User?              @relation("VanReturnPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
+  paidAt              DateTime?
+  /// Van till session the cash left from (cash payments only). Expected cash at close subtracts it.
+  cashSessionId       String?
+  cashSession         CashSession?       @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  receivedBranchId    String?
+  receivedBranch      Branch?            @relation("VanReturnReceivedAt", fields: [receivedBranchId], references: [id])
+  receivedAt          DateTime?
+  broughtBackByUserId String?
+  broughtBackBy       User?              @relation("VanReturnBroughtBackBy", fields: [broughtBackByUserId], references: [id], onDelete: SetNull)
+  receivedByUserId    String?
+  receivedBy          User?              @relation("VanReturnReceivedBy", fields: [receivedByUserId], references: [id], onDelete: SetNull)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  lines               VanReturnLine[]
+  photos              VanReturnPhoto[]
+  paymentProof        VanReturnPaymentProof?
+  movements           StockMovement[]
+  damagedStocks       DamagedStock[]
+
+  @@index([organizationId, status])
+  @@index([vanBranchId, createdAt])
+  @@index([receivedAt])
+  @@index([paidAt])
+  @@index([cashSessionId])
+}
+
+model VanReturnLine {
+  id              String          @id @default(cuid())
+  vanReturnId     String
+  vanReturn       VanReturn       @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product         @relation(fields: [productId], references: [id])
+  variantId       String?
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  unit            StockUnit
+  enteredQty      Decimal         @db.Decimal(12, 3)
+  piecesPerCarton Int?
+  /// Pieces, or grams for weight goods.
+  baseQty         Int
+  condition       ReturnCondition
+  /// Evidence photo (required for a damaged line).
+  photoId         String?
+  photo           VanReturnPhoto? @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  /// Cost per unit at receipt (whole dirhams; per kg for weight goods).
+  unitCost        Int?
+  /// Cost reversed at receipt (whole dirhams).
+  costAmount      Int?
+  damagedStock    DamagedStock?
+
+  @@index([vanReturnId])
+  @@index([productId])
+}
+
+/// Evidence photo of a returned line, re-encoded as WebP without metadata. Private.
+model VanReturnPhoto {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId    String
+  vanReturn      VanReturn       @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  mime           String
+  size           Int
+  width          Int?
+  height         Int?
+  /// Bytes in the database when file storage is off.
+  content        Bytes?
+  /// Object key in the private "van-return-photos" bucket.
+  storagePath    String?
+  createdAt      DateTime        @default(now())
+  lines          VanReturnLine[]
+  damagedStocks  DamagedStock[]
+
+  @@index([vanReturnId])
+}
+
+enum DamagedStockStatus {
+  /// Kept out of sale, waiting for the owner.
+  HELD
+  WRITTEN_OFF
+  SOLD
+}
+
+/// Damaged goods from a received van return. Never part of sellable stock.
+model DamagedStock {
+  id               String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int                @default(1)
+  organizationId   String
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId      String
+  vanReturn        VanReturn          @relation(fields: [vanReturnId], references: [id])
+  vanReturnLineId  String             @unique
+  vanReturnLine    VanReturnLine      @relation(fields: [vanReturnLineId], references: [id])
+  /// Where the damaged goods are kept.
+  branchId         String
+  branch           Branch             @relation(fields: [branchId], references: [id])
+  productId        String
+  product          Product            @relation(fields: [productId], references: [id])
+  variantId        String?
+  variant          ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  /// Pieces, or grams for weight goods.
+  quantity         Int
+  unitCost         Int?
+  /// Cost of the goods (whole dirhams).
+  costAmount       Int                @default(0)
+  photoId          String?
+  photo            VanReturnPhoto?    @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  status           DamagedStockStatus @default(HELD)
+  /// Reduced-price sale: amount (whole dirhams) and how it was paid.
+  saleAmount       Int?
+  saleMethod       ReturnMoneyMethod?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  resolvedBy       User?              @relation("DamagedStockResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  resolveNote      String?
+  createdAt        DateTime           @default(now())
+
+  @@index([organizationId, status])
+  @@index([branchId])
+  @@index([resolvedAt])
+}
+
+/// Proof of a van-return payment (required for a bank transfer, optional for cash). Private.
+/// Images are re-encoded as WebP without metadata; PDFs are kept as sent (checked by their bytes).
+model VanReturnPaymentProof {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId    String       @unique
+  vanReturn      VanReturn    @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  fileName       String
+  mime           String
+  size           Int
+  /// Bytes in the database when file storage is off.
+  content        Bytes?
+  /// Object key in the private "van-return-proofs" bucket.
+  storagePath    String?
+  createdAt      DateTime     @default(now())
 }

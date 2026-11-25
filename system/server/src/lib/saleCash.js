@@ -80,7 +80,8 @@ export function cardPortionFromSale(sale) {
 
 /**
  * Cash-up figures for a till session (FR-102, FR-109), in whole dirhams:
- * expected cash = opening float + cash sales + cash account collections − cash refunds paid from this session,
+ * expected cash = opening float + cash sales + cash account collections − cash refunds paid from this session
+ * − van returns paid back in cash from this session,
  * whichever session the refunded sale was in. Card total = card taken − card refunds in this session.
  *
  * @param {import("@prisma/client").PrismaClient | import("@prisma/client").Prisma.TransactionClient} db
@@ -171,6 +172,13 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
   salesOrderCash = d(soCash._sum.amount);
   // Shown on the cash-up for reference only (not in the drawer).
   const bankTransferSales = sessionSales.filter((s) => s.paymentMethod === "BANK_TRANSFER").reduce((acc, s) => acc + d(s.amountPaid), 0);
+  // Van returns paid back in cash from this session (routes/vanReturns.js links them).
+  let vanReturnsCash = 0;
+  const vanReturns = await db.vanReturn.findMany({
+    where: { cashSessionId: session.id, paidMethod: "CASH" },
+    select: { amountOwed: true },
+  });
+  for (const r of vanReturns) vanReturnsCash += d(r.amountOwed);
 
   return {
     openingFloat: opening,
@@ -178,7 +186,8 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
     cashCollections,
     salesOrderCash,
     cashRefunds,
-    expectedCash: opening + cashSales + cashCollections + salesOrderCash - cashRefunds,
+    vanReturnsCash,
+    expectedCash: opening + cashSales + cashCollections + salesOrderCash - cashRefunds - vanReturnsCash,
     cardSales,
     cardRefunds,
     cardTotal: cardSales - cardRefunds,

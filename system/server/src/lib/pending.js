@@ -153,6 +153,35 @@ export async function pendingPayments(orgId, query = {}) {
     }
   }
 
+  // Van returns (routes/vanReturns.js): money owed back to customers until paid.
+  if (!customerId && !supplierId && side !== "tous") {
+    const returns = await prisma.vanReturn.findMany({
+      where: {
+        organizationId: orgId,
+        amountOwed: { gt: 0 },
+        collectedAt: { lt: end },
+        OR: [{ paymentStatus: "UNPAID" }, { paidAt: { gte: end } }],
+      },
+      select: { id: true, reference: true, customerName: true, customer: { select: { name: true } }, amountOwed: true, collectedAt: true },
+    });
+    for (const r of returns) {
+      const owed = d(r.amountOwed);
+      const due = new Date(`${qatarDayKey(r.collectedAt)}T00:00:00Z`);
+      byUs.push({
+        kind: "VAN_RETURN",
+        id: r.id,
+        vanReturnId: r.id,
+        reference: r.reference || r.id.slice(-8).toUpperCase(),
+        counterparty: r.customerName || r.customer?.name || "",
+        dueDate: dayOf(due),
+        amount: owed,
+        paid: 0,
+        owed,
+        ...dueFlags(due, day, weekEnd, owed),
+      });
+    }
+  }
+
   const sort = (a, b) => String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || a.counterparty.localeCompare(b.counterparty);
   toUs.sort(sort);
   byUs.sort(sort);

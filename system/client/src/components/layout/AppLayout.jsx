@@ -31,6 +31,7 @@ function navSectionForPath(pathname) {
     p.startsWith("/purchases") ||
     p.startsWith("/transfer") ||
     p.startsWith("/count") ||
+    p.startsWith("/damaged-stock") ||
     p.startsWith("/returns")
   ) {
     return "inventory";
@@ -327,7 +328,7 @@ export function AppLayout() {
                 <span>{t("shop.finance")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {(isAdmin || isManager || canModule("returns", "view")) ? (
               <NavLink to="/vehicles" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />
                 <span>{t("shop.vehicles")}</span>

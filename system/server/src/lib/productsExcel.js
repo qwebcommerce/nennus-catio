@@ -24,6 +24,7 @@ export const PRODUCT_IMPORT_COLUMNS = [
   { key: "barcode", header: "Barcode" },
   { key: "stockQty", header: "Stock" },
   { key: "minStock", header: "Stock threshold" },
+  { key: "piecesPerCarton", header: "Pieces per carton" },
 ];
 
 const HEADER_ALIASES = {
@@ -68,6 +69,9 @@ const HEADER_ALIASES = {
   "stock threshold": "minStock",
   minstock: "minStock",
   minstocklevel: "minStock",
+  "pieces per carton": "piecesPerCarton",
+  piecespercarton: "piecesPerCarton",
+  "carton size": "piecesPerCarton",
 };
 
 function canonicalizeImportRow(raw) {
@@ -102,6 +106,7 @@ export function buildProductSampleExcelBuffer() {
     "",
     4,
     2,
+    "",
   ];
   const ws = XLSX.utils.aoa_to_sheet([headers, example]);
   ws["!cols"] = headers.map((header) => ({ wch: Math.max(18, header.length + 2) }));
@@ -126,6 +131,7 @@ export function buildProductSampleExcelBuffer() {
     ["Barcode", "Optional. Leave blank to generate one later in the product form."],
     ["Stock", "Quantity for the branch selected when you import."],
     ["Stock threshold", "Low-stock alert level for that branch."],
+    ["Pieces per carton", "Optional. A whole number of 2 or more; lets staff transfer by the carton."],
     ["", "Delete the example row before you import. Imported products are saved as drafts."],
   ]);
   notes["!cols"] = [{ wch: 28 }, { wch: 78 }];
@@ -163,6 +169,7 @@ export function buildProductsExcelBuffer(products, inventoryByProductId) {
       isActive: p.isActive ? "yes" : "no",
       stockQty: inv ? inv.quantity : "",
       minStock: inv ? inv.minStockLevel : "",
+      piecesPerCarton: p.piecesPerCarton ?? "",
       description: p.description ?? "",
     };
   });
@@ -239,6 +246,7 @@ export function normalizeImportPreviewRows(rawRows) {
       imageUrl: cellText(r.imageUrl),
       stockQty: r.stockQty ?? "",
       minStock: r.minStock ?? "",
+      piecesPerCarton: r.piecesPerCarton ?? "",
       shortTitle: cellText(r.shortTitle),
       shortTitleEn: cellText(r.shortTitleEn),
       description: cellText(r.description),
