@@ -838,9 +838,14 @@ function buildPlan(ctx, now) {
       if (qty > 0) lines.push({ item: it, quantity: qty });
     }
     if (!lines.length) return;
+    // Transfer record: the van's driver (or the shop cashier) moves it, the owner authorises it;
+    // the vehicle defaults to the van's. Cartons where the line is a whole number of them.
+    const mover = to === "shop" ? S.staff.cashier : S.staff[to];
     await api("POST", "/api/inventory/transfer", {
       fromBranchId: L.warehouse, toBranchId: L[to],
-      items: lines.map((l) => ({ productId: l.item.productId, variantId: l.item.variantId, quantity: l.quantity })),
+      ...(mover ? { transferredByUserId: mover } : {}),
+      authorisedByUserId: ctx.owner.id,
+      items: lines.map((l) => ({ productId: l.item.productId, variantId: l.item.variantId, unit: "PIECE", quantity: l.quantity })),
     }, owner);
     for (const l of lines) {
       addStock(S, L.warehouse, l.item, -l.quantity);
@@ -994,6 +999,79 @@ function buildPlan(ctx, now) {
       at(day, hhmm(9 * 60 + i * 75 + between(0, 50)), `${van} sale ${day}/${i}`, sale(van, van, { method: pick(vanMethods), lines: between(1, 2) }));
     }
     at(day, "14:00", `close ${van} till`, closeTill(van, van));
+  }
+
+  // ---- van returns: goods a driver collects back from a customer (some still in the van, some
+  // received at the warehouse, one with a damaged line and its photo; paid in cash or by bank with a
+  // proof file, and one unpaid).
+  const vr = {};
+  // The cheaper van lines (what is paid back in cash must fit in the van's drawer).
+  const returnGoods = () => S.items.filter((it) => vanGoods(it) && it.sellBy !== "WEIGHT" && it.takesStock && it.price <= 5000).sort((a, b) => a.price - b.price || a.key.localeCompare(b.key));
+  const demoPhoto = async () => {
+    const { default: sharp } = await import("sharp");
+    const buf = await sharp({ create: { width: 160, height: 120, channels: 3, background: { r: 176, g: 120, b: 72 } } })
+      .composite([{ input: Buffer.from('<svg width="160" height="120"><path d="M20 20 L140 100 M140 20 L20 100" stroke="#5a2d0c" stroke-width="10"/></svg>'), top: 0, left: 0 }])
+      .jpeg({ quality: 80 }).toBuffer();
+    return { dataBase64: buf.toString("base64") };
+  };
+  const demoProof = () => ({
+    fileName: "bank-transfer-receipt.pdf",
+    dataBase64: Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n").toString("base64"),
+  });
+  const vanReturn = (key, van, { lines, customer, payment }) => async () => {
+    const goods = returnGoods();
+    if (!goods.length) return;
+    const body = {
+      vanBranchId: L[van],
+      customerName: customer.name, customerPhone: customer.phone,
+      ...(S.staff[van] ? { collectedByUserId: S.staff[van] } : {}),
+      lines: await Promise.all(lines.map(async (l, i) => ({
+        productId: goods[(l.pick + i) % goods.length].productId,
+        variantId: goods[(l.pick + i) % goods.length].variantId,
+        unit: "PIECE", quantity: l.quantity, condition: l.condition,
+        ...(l.condition === "DAMAGED" ? { photo: await demoPhoto() } : {}),
+      }))),
+      note: customer.note,
+    };
+    body.amountOwed = riyals(body.lines.reduce((sum, l) => sum + (goods.find((g) => g.productId === l.productId && g.variantId === l.variantId)?.price || 0) * l.quantity, 0));
+    if (payment) body.payment = { method: payment, ...(payment === "BANK" ? { reference: `FT${between(100000, 999999)}`, proof: demoProof() } : {}) };
+    const row = await staffCall(van, "POST", "/api/van-returns", body);
+    vr[key] = row;
+    if (row.cashSessionId) drawer[van] = (drawer[van] || 0) - dirhams(row.amountOwed);
+  };
+  const receiveReturn = (key) => async () => {
+    if (!vr[key]) return;
+    vr[key] = await api("POST", `/api/van-returns/${vr[key].id}/receive`, { version: vr[key].version, branchId: L.warehouse }, owner);
+    // Good lines are back in the warehouse's sellable stock (damaged ones are kept apart).
+    for (const line of vr[key].lines || []) {
+      if (line.condition !== "GOOD") continue;
+      const it = S.items.find((x) => x.productId === line.product?.id && (x.variantId || null) === (line.variant?.id || null));
+      if (it) addStock(S, L.warehouse, it, line.baseQty);
+    }
+  };
+  const payReturn = (key, van, method) => async () => {
+    if (!vr[key] || vr[key].paymentStatus === "PAID") return;
+    const row = await staffCall(van, "POST", `/api/van-returns/${vr[key].id}/pay`, {
+      version: vr[key].version, method, ...(method === "BANK" ? { reference: `FT${between(100000, 999999)}`, proof: demoProof() } : {}),
+    });
+    vr[key] = row;
+    if (row.cashSessionId) drawer[van] = (drawer[van] || 0) - dirhams(row.amountOwed);
+  };
+  const vanDay = (van, from) => vanDays.filter(([d, v]) => v === van && d >= from && weekdayOf(d) !== 5)[0]?.[0];
+  {
+    const d1 = vanDay("van1", -20), d2 = vanDay("van2", -16), d3 = vanDay("van1", -11), d4 = vanDay("van1", -6);
+    if (d1 != null) at(d1, "11:40", "van1 return (good, paid cash)", vanReturn("a", "van1", { customer: { name: "Fatima Al Kuwari", phone: "+974 5000 2101", note: "Wrong flavour, unopened" }, lines: [{ pick: 0, quantity: 2, condition: "GOOD" }], payment: "CASH" }));
+    if (d2 != null) {
+      at(d2, "12:10", "van2 return (good + damaged)", vanReturn("b", "van2", { customer: { name: "Ahmed Al Marri", phone: "+974 5000 2102", note: "One bag torn on delivery" }, lines: [{ pick: 1, quantity: 1, condition: "GOOD" }, { pick: 2, quantity: 1, condition: "DAMAGED" }] }));
+      at(d2, "13:40", "van2 receive return at warehouse", receiveReturn("b"));
+      at(d2, "13:45", "van2 pay return by bank", payReturn("b", "van2", "BANK"));
+    }
+    if (d3 != null) at(d3, "12:20", "van1 return (still in the van, unpaid)", vanReturn("c", "van1", { customer: { name: "Sara Ibrahim", phone: "+974 5000 2103", note: "Ordered twice" }, lines: [{ pick: 3, quantity: 1, condition: "GOOD" }] }));
+    if (d4 != null) {
+      at(d4, "10:50", "van1 return (received, paid later)", vanReturn("d", "van1", { customer: { name: "Mohammed Hassan", phone: "+974 5000 2104", note: "Customer moved away" }, lines: [{ pick: 4, quantity: 2, condition: "GOOD" }] }));
+      at(d4, "12:30", "van1 receive return at warehouse", receiveReturn("d"));
+      at(d4, "13:10", "van1 pay return in cash", payReturn("d", "van1", "CASH"));
+    }
   }
 
   // ---- till refunds: one money-only, one with the goods returned
