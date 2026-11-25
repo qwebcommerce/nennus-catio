@@ -121,6 +121,7 @@ export default function Cash() {
               <div style={{ marginTop: 8, display: "grid", gap: 2, fontSize: 14 }}>
                 <div>{t("cash.cashSales")} {cashUp.cashSales.toFixed(2)}</div>
                 <div>{t("cash.cashRefunds")} {cashUp.cashRefunds.toFixed(2)}</div>
+                {cashUp.vanReturnsCash ? <div data-testid="cash-van-returns">{t("cash.vanReturns")} {Number(cashUp.vanReturnsCash).toFixed(2)}</div> : null}
                 <div>
                   <strong>{t("cash.expected")}: {cashUp.expectedCash.toFixed(2)} {t("common.currency")}</strong>
                 </div>

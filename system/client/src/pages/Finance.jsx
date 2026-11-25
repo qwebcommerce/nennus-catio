@@ -116,7 +116,11 @@ export default function Finance() {
             {CHANNELS.map((key) => <Row key={key} indent label={statusLabel("channel", key, locale)} value={summary.channels?.[key]?.revenue} />)}
             <Row label={t("shop.refunds")} value={-summary.refunds} />
             {CHANNELS.map((key) => (summary.channels?.[key]?.refunds ? <Row key={key} indent label={statusLabel("channel", key, locale)} value={-summary.channels[key].refunds} /> : null))}
+            {summary.vanReturns ? <Row indent label={t("fd.vanReturns")} value={-summary.vanReturns} /> : null}
             <Row label={t("shop.cogs")} value={-summary.cogs} />
+            {summary.vanReturnsCost ? <Row indent label={t("fd.vanReturnsCost")} value={summary.vanReturnsCost} /> : null}
+            {summary.stockWrittenOff ? <Row indent label={t("fd.stockWrittenOff")} value={-summary.stockWrittenOff} /> : null}
+            {summary.damagedSales ? <Row indent label={t("fd.damagedSales")} value={summary.damagedSales} /> : null}
             <Row label={t("shop.gross")} value={summary.grossProfit} strong />
             <Row label={t("shop.expenses")} value={-summary.expenses} />
             <Row label={t("shop.net")} value={summary.netProfit} strong />
@@ -131,6 +135,7 @@ export default function Finance() {
             <Row indent label={t("fd.groomingIn")} value={mi?.grooming} />
             <Row indent label={t("fd.relocationIn")} value={mi?.relocation} />
             <Row indent label={t("fd.collections")} value={mi?.accountCollections} />
+            {mi?.damagedSales ? <Row indent label={t("fd.damagedSales")} value={mi.damagedSales} /> : null}
             {["cash", "card", "bank", "fawran"].map((key) => (
               <Row key={`in-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mi?.[key]} />
             ))}
@@ -139,6 +144,8 @@ export default function Finance() {
             <Row indent label={t("fd.refundsCard")} value={mo?.refundsCard} />
             <Row indent label={t("fd.refundsBank")} value={mo?.refundsBank} />
             <Row indent label={t("fd.refundsFawran")} value={mo?.refundsFawran} />
+            <Row indent label={t("fd.vanReturnsCash")} value={mo?.vanReturnsCash} />
+            <Row indent label={t("fd.vanReturnsBank")} value={mo?.vanReturnsBank} />
             <Row indent label={t("fd.supplierCash")} value={mo?.supplierPaymentsCash} />
             <Row indent label={t("fd.supplierBank")} value={mo?.supplierPaymentsBank} />
             <Row indent label={t("fd.expensesCash")} value={mo?.expensesCash} />

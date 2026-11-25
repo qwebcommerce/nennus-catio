@@ -1,6 +1,7 @@
 /** @typedef {'ar' | 'en'} Locale */
 import { fdEntries } from "./translationsFd.js";
 import { pwEntries } from "./translationsPw.js";
+import { vrEntries } from "./translationsVr.js";
 
 const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
@@ -879,7 +880,7 @@ const entries = [
   ["appointments.cancel", "إلغاء", "Cancel"],
 
   ["transfer.title", "تحويل بين الفروع", "Inter-branch transfer"],
-  ["transfer.intro", "يُنقص مخزون فرع المصدر ويُزاد في فرع الوجهة مع نقل دفعات الصلاحية (FEFO). يتطلب توفر الكمية في المصدر.", "Decrements source stock, increments destination, and moves expiry lots (FEFO). Quantity must exist at source."],
+  ["transfer.intro", "ينتقل المخزون فور الحفظ: يُنقص من موقع المصدر ويُضاف إلى الوجهة، ويُحفظ سجل التحويل برقم مرجعي. يجب أن تتوفر الكمية في المصدر.", "Stock moves as soon as you save: it leaves the source and arrives at the destination, and the transfer is kept with a reference. The quantity must be at the source."],
   ["transfer.from", "من فرع", "From branch"],
   ["transfer.to", "إلى فرع", "To branch"],
   ["transfer.submit", "تنفيذ التحويل", "Transfer"],
@@ -1169,7 +1170,7 @@ const entries = [
 ];
 
 const ROOT = {};
-for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries]) {
+for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries]) {
   const parts = path.split(".");
   let cur = ROOT;
   for (let i = 0; i < parts.length - 1; i++) {

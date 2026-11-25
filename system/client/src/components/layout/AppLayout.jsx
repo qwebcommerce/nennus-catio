@@ -30,6 +30,7 @@ function navSectionForPath(pathname) {
     p.startsWith("/purchases") ||
     p.startsWith("/transfer") ||
     p.startsWith("/count") ||
+    p.startsWith("/damaged-stock") ||
     p.startsWith("/returns")
   ) {
     return "inventory";
@@ -111,7 +112,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
 }
 
 export function AppLayout() {
-  const { user, logout, isAdmin, isManager, isOrgOwner, can } = useAuth();
+  const { user, logout, isAdmin, isManager, isOrgOwner, can, canModule } = useAuth();
   const {
     branches,
     activeBranchId,
@@ -320,7 +321,7 @@ export function AppLayout() {
                 <span>{t("shop.finance")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {(isAdmin || isManager || canModule("returns", "view")) ? (
               <NavLink to="/vehicles" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />
                 <span>{t("shop.vehicles")}</span>

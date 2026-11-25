@@ -43,6 +43,7 @@ function emptyProductForm() {
     leadTimeDays: "",
     houseDeliveryFee: "0",
     takesStock: true,
+    piecesPerCarton: "",
   };
 }
 
@@ -230,6 +231,7 @@ export default function Products() {
       leadTimeDays: p.leadTimeDays != null ? String(p.leadTimeDays) : "",
       houseDeliveryFee: p.houseDeliveryFee != null ? String(p.houseDeliveryFee) : "0",
       takesStock: p.takesStock !== false,
+      piecesPerCarton: p.piecesPerCarton != null ? String(p.piecesPerCarton) : "",
       // NFR-13: the save names the version this copy was loaded at.
       version: p.version,
       variants: Array.isArray(p.variants)
@@ -241,6 +243,8 @@ export default function Products() {
             sku: v.sku || "",
             price: String(v.price ?? ""),
             packWeight: v.packWeight != null ? String(v.packWeight) : "",
+            barcode: v.barcode || "",
+            piecesPerCarton: v.piecesPerCarton != null ? String(v.piecesPerCarton) : "",
             isActive: v.isActive !== false,
             ...(() => {
               const st = Array.isArray(v.stocks) ? v.stocks.find((row) => row.branchId === activeBranchId) : null;
@@ -344,6 +348,7 @@ export default function Products() {
         leadTimeDays: form.leadTimeDays,
         houseDeliveryFee: form.houseDeliveryFee,
         takesStock: form.takesStock !== false,
+        piecesPerCarton: form.sellBy === "WEIGHT" ? "" : form.piecesPerCarton ?? "",
         petTypeIds: form.petTypeIds || [],
         gallery: String(form.galleryText || "")
           .split("\n")
@@ -359,6 +364,8 @@ export default function Products() {
             sku: v.sku || null,
             price: Number(v.price),
             packWeight: v.packWeight === "" || v.packWeight == null ? null : Number(v.packWeight),
+            barcode: String(v.barcode || "").trim() || null,
+            piecesPerCarton: v.piecesPerCarton ?? "",
             isActive: v.isActive !== false,
             // New variants on a new product: opening stock and low-stock level at this location.
             ...(formMode === "create"
@@ -1319,6 +1326,22 @@ export default function Products() {
                   <option value="WEIGHT">{t("products.sellWeight")}</option>
                 </select>
               </label>
+              {form.sellBy !== "WEIGHT" ? (
+                <label style={fld}>
+                  <span>{t("products.piecesPerCarton")}</span>
+                  <input
+                    style={inp}
+                    type="number"
+                    min={2}
+                    step={1}
+                    inputMode="numeric"
+                    value={form.piecesPerCarton ?? ""}
+                    onChange={(e) => setForm({ ...form, piecesPerCarton: e.target.value })}
+                    placeholder={t("products.piecesPerCartonHint")}
+                    data-testid="pieces-per-carton"
+                  />
+                </label>
+              ) : null}
               <fieldset style={{ ...fld, gridColumn: "1 / -1", border: 0, padding: 0, margin: 0 }}>
                 <legend style={{ padding: 0, marginBottom: 6 }}>{t("products.petTypes")}</legend>
                 {petTypes.filter((row) => row.isActive !== false).length ? (
@@ -1412,6 +1435,16 @@ export default function Products() {
                         <span>{t("products.price")}</span>
                         <input style={inp} type="number" min={0} step="0.01" value={variant.price} onChange={(e) => setVariant({ price: e.target.value })} />
                       </label>
+                      <label style={fldSm}>
+                        <span>{t("products.variantBarcode")}</span>
+                        <input style={inp} value={variant.barcode ?? ""} onChange={(e) => setVariant({ barcode: e.target.value })} />
+                      </label>
+                      {form.sellBy !== "WEIGHT" ? (
+                        <label style={fldSm}>
+                          <span>{t("products.piecesPerCarton")}</span>
+                          <input style={inp} type="number" min={2} step={1} inputMode="numeric" value={variant.piecesPerCarton ?? ""} onChange={(e) => setVariant({ piecesPerCarton: e.target.value })} />
+                        </label>
+                      ) : null}
                       {showStock ? (
                         <>
                           <label style={fldSm}>
@@ -1454,7 +1487,7 @@ export default function Products() {
                       ...f,
                       variants: [
                         ...(f.variants || []),
-                        { label: "", labelEn: "", sku: "", price: f.price || "", packWeight: "", isActive: true, stock: "", minStockLevel: "" },
+                        { label: "", labelEn: "", sku: "", price: f.price || "", packWeight: "", barcode: "", piecesPerCarton: "", isActive: true, stock: "", minStockLevel: "" },
                       ],
                     }))
                   }
