@@ -20,6 +20,7 @@ function navSectionForPath(pathname) {
     p.startsWith("/dashboard") ||
     p.startsWith("/alerts") ||
     p.startsWith("/reports") ||
+    p.startsWith("/analytics") ||
     (p.startsWith("/sales") && !p.startsWith("/sales-orders"))
   ) {
     return "dashboard";
@@ -264,6 +265,12 @@ export function AppLayout() {
               <NavLink to="/reports" className={sidebarLinkClass}>
                 <SidebarIcon name="reports" />
                 <span>{t("nav.reports")}</span>
+              </NavLink>
+            ) : null}
+            {canModule("finance", "view") ? (
+              <NavLink to="/analytics" className={sidebarLinkClass}>
+                <SidebarIcon name="analytics" />
+                <span>{t("nav.businessAnalytics")}</span>
               </NavLink>
             ) : null}
             {(can("pos") || can("reports")) ? (

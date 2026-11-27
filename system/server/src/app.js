@@ -41,6 +41,8 @@ import promotionRoutes from "./routes/promotions.js";
 import financeRoutes from "./routes/finance.js";
 import vehicleRoutes from "./routes/vehicles.js";
 import exportRoutes from "./routes/exports.js";
+// Analytics and reports: grooming / product / user / peak-hour analytics and the transactions and expenses history (fix-rc).
+import analyticsRoutes from "./routes/analytics.js";
 import customerAccountsRoutes from "./routes/customerAccounts.js";
 import expensesRoutes from "./routes/expenses.js";
 import reportsRoutes from "./routes/reports.js";
@@ -188,6 +190,7 @@ app.use("/api/promotions", promotionRoutes);
 app.use("/api/finance", financeRoutes);
 app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/exports", exportRoutes);
+app.use("/api/analytics", analyticsRoutes);
 app.use("/api/online-orders", onlineOrderRoutes);
 app.use("/api/delivery-setup", deliverySetupRoutes);
 app.use("/api/cron", cronRoutes);

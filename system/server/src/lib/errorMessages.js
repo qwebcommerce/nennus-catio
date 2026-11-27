@@ -42,6 +42,9 @@ const EXACT = [
   ["غير مسموح", "Not allowed"],
   ["تاريخ غير صالح", "Invalid date"],
   ["تواريخ غير صالحة", "Invalid dates"],
+  // Analytics and reports (fix-rc)
+  ["الفترة طويلة جداً (سنتان كحد أقصى)", "The date range is too long (two years at most)"],
+  ["رابط الصفحة التالية غير صالح", "Invalid page cursor"],
   ["حالة غير صالحة", "Invalid status"],
   ["القائمة غير معروفة", "Unknown list"],
   ["فشلت عملية التنظيف", "cleanup failed"],

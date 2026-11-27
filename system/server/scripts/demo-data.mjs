@@ -38,6 +38,7 @@ import * as C from "./demo/content.mjs";
 import { demoPdf, planSalesOrdersDemo } from "./demo/salesOrders.mjs";
 import { planB2bDemo } from "./demo/b2b.mjs";
 import { planDispatchDemo } from "./demo/dispatch.mjs";
+import * as A from "./demo/analytics.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -484,8 +485,8 @@ function makeApi(baseUrl) {
       res = await fetch(baseUrl + path, { method, headers, body: body == null ? undefined : JSON.stringify(body) });
       text = await res.text();
       // Lanes run in parallel: a database deadlock or busy pool rolls the request back; try again.
-      // (The till answers a rolled-back deadlock with 400, the webhook with 500.)
-      const transient = (res.status >= 400 && /deadlock detected|40P01|P2034|could not serialize/i.test(text)) || res.status === 503;
+      // (The till answers a rolled-back deadlock with 400 or 409 TRY_AGAIN, the webhook with 500.)
+      const transient = (res.status >= 400 && /deadlock detected|40P01|P2034|could not serialize|"TRY_AGAIN"/i.test(text)) || res.status === 503;
       if (!transient || attempt >= 4) break;
       call.retries += 1;
       await new Promise((r) => setTimeout(r, 150 * attempt + Math.floor(Math.random() * 200)));
@@ -902,8 +903,7 @@ function buildPlan(ctx, now) {
   // ---- customers
   const webCustomers = C.CUSTOMERS.filter((c) => c.web);
   const walkIns = C.CUSTOMERS.filter((c) => !c.web);
-  webCustomers.forEach((c, i) => {
-    at(-29 + i, `${String(between(18, 22)).padStart(2, "0")}:${String(between(0, 59)).padStart(2, "0")}`, `register ${c.email}`, async () => {
+  const registerWeb = (c) => async () => {
       const password = crypto.randomBytes(24).toString("base64url");
       const reg = await api("POST", "/api/shop/register", { name: c.name, email: c.email, password, phone: c.phone, locale: c.locale });
       // The confirmation link is in the (never sent) e-mail; open it the way the customer would.
@@ -919,8 +919,12 @@ function buildPlan(ctx, now) {
         S.customers[c.key].pets[p.name] = pet.id;
       }
       await api("POST", "/api/shop/me/addresses", { label: "Home", line1: c.address, area: c.area, city: "Doha", isDefault: true }, ctok);
-    });
+  };
+  webCustomers.forEach((c, i) => {
+    at(-29 + i, `${String(between(18, 22)).padStart(2, "0")}:${String(between(0, 59)).padStart(2, "0")}`, `register ${c.email}`, registerWeb(c));
   });
+  // Analytics demo (fix-rc): more sign-ups spread over the month, at different hours.
+  for (const c of A.EXTRA_SIGNUPS) at(c.day, c.time, `register ${c.email}`, registerWeb(c));
   walkIns.forEach((c, i) => {
     at(-28 + i * 2, "10:05", `customer at the till ${c.email}`, async () => {
       const row = await staffCall("cashier", "POST", "/api/customers", { name: c.name, phone: c.phone, email: c.email, address: `${c.address}, Doha` });
@@ -1196,6 +1200,8 @@ function buildPlan(ctx, now) {
   order("w14", 0, "08:10", "noora", [["adultCat:1.5 kg", 1], ["catTreats", 1]], { pickup: true, steps: [[0, "09:40", "PREPARING"]] });
   order("w15", 0, "09:05", "priya", [["kittenDry:400 g", 2], ["featherWand", 1]], { deliverDay: 1, window: 2 });
   order("w16", -6, "12:10", "fatima", [["aviary", 1], ["budgieSeed", 1]], { steps: delivered(-4, "10:30", "12:30"), deliverDay: -4, window: 0 });
+  // Analytics demo (fix-rc): a late-night order (23:35 Qatar time counts on its own Qatar day).
+  order("w17", -9, "23:35", "khalid", [["catTreats", 2], ["wetPouch", 3]], { steps: delivered(-8), deliverDay: -8 });
 
   // ---- grooming (booked and paid on the website; staff run the day)
   const bookings = [
@@ -1267,6 +1273,27 @@ function buildPlan(ctx, now) {
     }
   }
 
+  // ---- analytics demo (fix-rc): bookings taken at the desk, two cancelled by phone and one no-show
+  for (const [key, day0, time0, cust, pkgKey, outcome] of A.DESK_BOOKINGS) {
+    const pkg = S.pkg[pkgKey];
+    const fit = pkg && fitSlot(day0, time0, pkg.durationMin);
+    if (!fit) continue;
+    at(fit.day - 2, "10:40", `grooming desk booking ${key}`, async () => {
+      const c = S.customers[cust];
+      const pet = c?.def.pets[0];
+      web[key] = await staffCall("owner", "POST", "/api/appointments", {
+        branchId: L.shop, serviceId: pkg.id, customerId: c?.id, startAt: qAt(fit.day, fit.time, now).toISOString(),
+        petName: pet?.name, petType: pet?.type === "dogs" ? "DOG" : pet?.type === "cats" ? "CAT" : "OTHER", notes: "Booked by phone",
+      });
+    }, { optional: true });
+    const startMin = toMin(fit.time);
+    if (outcome === "cancel") {
+      at(fit.day - 1, "12:15", `grooming desk ${key} cancelled`, async () => web[key] && staffCall("owner", "PATCH", `/api/appointments/${web[key].id}`, { status: "CANCELLED", version: web[key].version }), { optional: true });
+    } else {
+      at(fit.day, hhmm(startMin + 40), `grooming desk ${key} no-show`, async () => web[key] && staffCall("owner", "PATCH", `/api/appointments/${web[key].id}`, { status: "NO_SHOW", version: web[key].version }), { optional: true });
+    }
+  }
+
   // ---- pet relocation requests
   const relocation = (key, day, time, cust, petNames, destination, steps) => {
     at(day, time, `relocation ${key}`, async () => {
@@ -1305,8 +1332,10 @@ function buildPlan(ctx, now) {
   relocation("r3", -2, "19:30", "priya", ["Oreo"], "Kochi, India", []);
 
   // ---- expenses
-  const expense = (day, time, category, amount, paidFrom, description) =>
-    at(day, time, `expense ${description}`, async () => api("POST", "/api/expenses", { category, amount, paidFrom, description, expenseDate: qDay(day) }, owner));
+  const expense = (day, time, category, amount, paidFrom, description) => {
+    const [payee, reference] = A.EXPENSE_PAYEES[description] || [];
+    at(day, time, `expense ${description}`, async () => api("POST", "/api/expenses", { category, amount, paidFrom, description, payee, reference, expenseDate: qDay(day) }, owner));
+  };
   expense(-28, "11:00", "RENT", "9500.00", "BANK", "Shop rent – Al Waab (monthly)");
   expense(-28, "11:05", "RENT", "3500.00", "BANK", "Warehouse rent – Industrial Area (monthly)");
   expense(-20, "12:10", "ELECTRICITY", "980.50", "BANK", "Kahramaa – shop electricity and water");

@@ -271,6 +271,10 @@ model Expense {
   category         ExpenseCategory
   amount           Int
   description      String?
+  /// Who was paid (landlord, utility, supplier of small items). Optional.
+  payee            String?
+  /// Receipt / bill number from the payee. Optional, searchable.
+  reference        String?
   /// تاريخ انتماء المصروف للتقارير (يوم/شهر/سنة)
   expenseDate      DateTime
   /// Paid from the cash drawer or from the bank.
@@ -704,6 +708,10 @@ model Customer {
   vanReturns     VanReturn[]
   b2bInvoices    B2bInvoice[]
   b2bReceipts    B2bReceipt[]
+  /// When the customer created a website account (set on register; backfilled from createdAt).
+  registeredAt    DateTime?
+
+  @@index([organizationId, registeredAt])
 }
 
 /// حركات ذمم الزبائن
@@ -1412,6 +1420,7 @@ model Appointment {
   @@index([organizationId, branchId, startAt])
   @@index([organizationId, groomerId, startAt])
   @@index([organizationId, status])
+  @@index([organizationId, startAt])
 }
 
 model AppointmentReminder {
@@ -1507,6 +1516,9 @@ model Sale {
   payments         Payment[]
 
   @@unique([invoiceNumber])
+  @@index([branchId, createdAt])
+  @@index([createdAt])
+  @@index([customerId])
   /// Why goods on this sale were given free (required when any line is free).
   freeReason       String?
   /// fix-rb: delivery job (website delivery or a till sale "for delivery").
@@ -1586,6 +1598,7 @@ model Refund {
   items            RefundItem[]
 
   @@index([cashSessionId])
+  @@index([branchId, createdAt])
 }
 
 model OfflineInventoryReceipt {
@@ -1753,6 +1766,8 @@ model SaleItem {
   lotUsages SaleItemLot[]
   /// Complimentary (free) line: no revenue, cost reported as Complimentary.
   isFree    Boolean  @default(false)
+
+  @@index([saleId])
 }
 
 /// لوتات المخزون (دفعات استلام منفصلة) لتتبع الصلاحية واستهلاك FEFO
@@ -2312,6 +2327,7 @@ model Payment {
   @@index([appointmentId])
   @@index([relocationRequestId])
   @@index([organizationId, status])
+  @@index([organizationId, createdAt])
 }
 
 /// FR-76: server-side SkipCash status lookups (customer return, staff check, expiry sweep).
@@ -2598,6 +2614,7 @@ model SalesOrderDelivery {
   lines             SalesOrderDeliveryLine[]
 
   @@index([orderId])
+  @@index([deliveredAt])
 }
 
 model SalesOrderDeliveryLine {

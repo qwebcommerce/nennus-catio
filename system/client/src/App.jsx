@@ -51,6 +51,8 @@ import Dispatch from "./pages/Dispatch.jsx";
 import DriverApprovals from "./pages/DriverApprovals.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
+// Business analytics (fix-rc).
+const Analytics = React.lazy(() => import("./pages/Analytics.jsx"));
 
 const Reports = React.lazy(loadReports);
 const Appointments = React.lazy(loadAppointments);
@@ -193,6 +195,14 @@ export default function App() {
             element={
               <Protected permission="reports">
                 <Reports />
+              </Protected>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <Protected module={["finance", "view"]}>
+                <Analytics />
               </Protected>
             }
           />

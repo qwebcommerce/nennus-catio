@@ -339,11 +339,12 @@ router.post("/register", async (req, res) => {
     // confirmed; the customer edits the profile after signing in.
     customer = await prisma.customer.update({
       where: { id: existing.id },
-      data: { passwordHash, verifyTokenHash, verifyExpiresAt, emailVerifiedAt: null, ...(locale ? { locale } : {}) },
+      // registeredAt: first website registration (analytics, "new registered users").
+      data: { passwordHash, verifyTokenHash, verifyExpiresAt, emailVerifiedAt: null, registeredAt: existing.registeredAt || new Date(), ...(locale ? { locale } : {}) },
     });
   } else {
     customer = await prisma.customer.create({
-      data: { organizationId: org.id, name, email, phone, passwordHash, verifyTokenHash, verifyExpiresAt, ...(locale ? { locale } : {}) },
+      data: { organizationId: org.id, name, email, phone, passwordHash, verifyTokenHash, verifyExpiresAt, registeredAt: new Date(), ...(locale ? { locale } : {}) },
     });
   }
   const mail = await sendVerifyEmail(customer, token, req);
