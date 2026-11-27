@@ -284,6 +284,8 @@ export function itemView(input) {
     kind,
     sourceId: row.id,
     reference: f.reference,
+    /** fix-ra: a B2B delivery note (paid later by a cash receipt on its invoice). */
+    b2b: Boolean(f.b2b),
     status,
     customer: f.customer,
     address: job?.address ?? f.address,

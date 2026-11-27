@@ -118,15 +118,15 @@ export function planDispatchDemo(h) {
     const l = it.lines[0];
     await driverCall("van1", D.keys.soA, "change-requests", { lines: [{ lineId: l.id, quantity: Math.max(1, l.quantity - 1) }], reason: "Clinic asked for one bag less at the door" });
   });
-  // approved request: van 3 changes SO B to 2 and the delivery entrance; the accountant approves
+  // approved request: van 3 changes SO B to 2 and the delivery entrance; the supervisor approves (fix-ra: 30-user limit)
   at(-1, "11:10", "dispatch change request SO B", async () => {
     if (!D.keys.soB) return;
     const it = await api("GET", `/api/dispatch/items/${D.keys.soB}`, null, supTok());
     D.requestB = await driverCall("van3", D.keys.soB, "change-requests", { lines: [{ lineId: it.lines[0].id, quantity: 2 }], address: "Doha Animal Hospital, back entrance (Gate 3)", reason: "Hospital storeroom has room for two cartons" });
   });
-  at(-1, "11:40", "dispatch accountant approves SO B change", async () => {
+  at(-1, "11:40", "dispatch supervisor approves SO B change", async () => {
     if (!D.requestB) return;
-    await api("POST", `/api/driver-approvals/${D.requestB.id}/approve`, { version: D.requestB.version, note: "OK – invoice follows the new quantity" }, D.tok.accountant || owner);
+    await api("POST", `/api/driver-approvals/${D.requestB.id}/approve`, { version: D.requestB.version, note: "OK – invoice follows the new quantity" }, D.tok.supervisor || owner);
   });
   at(-1, "13:15", "dispatch van 1 delivers till delivery 1", async () => {
     if (!D.keys.pos1) return;
