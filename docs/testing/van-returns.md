@@ -212,3 +212,15 @@ returns 428; with an older version it returns 409 `STALE_EDIT`.
   - no page errors and no sideways scroll.
 - **Demo data** loads van returns and transfer records with staff and vehicles; load → remove still
   restores every table exactly.
+
+## Update (fix-rd): recorded by sales, moved by the driver
+
+Client decision, see `payment-confirmation.md`. Rights are now: **create** = record a return into a
+van (Sales; not Drivers), **edit** = move it to the warehouse (Drivers, own van only; another van is
+403), **refund** = pay the customer back (Sales, Accountant; not Drivers; the *Mark paid* action now
+needs `returns.refund` instead of create / edit). Sales record returns from the new *Van returns*
+desk (`/van-returns`, any van; *collected by* defaults to the van's driver) or a vehicle dashboard.
+The driver dashboard shows the returns in the van with lines and photos and a **Move to
+warehouse** button (receive logic unchanged; brought back by and received by = the driver;
+default location: first warehouse, else the main location). The legacy cashier keeps view / create
+and may pay back.

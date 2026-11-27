@@ -616,7 +616,7 @@ function InvoiceDetail({ id, meta, onBack, onOpenNote, onOpenReceipt }) {
   const [printView, setPrintView] = useState(false);
   const [pay, setPay] = useState({ amount: "", method: "CASH", bankReference: "", paidAt: qatarYmd(), note: "", proofFileId: "", collectedById: "" });
   const [proofKey, setProofKey] = useState(0);
-  const load = () => api(`/api/b2b/invoices/${id}`).then((row) => { setInv(row); setPay((p) => ({ ...p, amount: p.amount || row.balance })); }).catch((e) => setMsg(e.message));
+  const load = () => api(`/api/b2b/invoices/${id}`).then((row) => { setInv(row); setPay((p) => ({ ...p, amount: p.amount || (row.openToCollect ?? row.balance) })); }).catch((e) => setMsg(e.message));
   useEffect(() => { load(); }, [id]);
   if (!inv) return msg ? <div role="alert" className="fd-alert">{msg}</div> : <div className="card">{t("common.loading")}</div>;
   const open = inv.status === "ISSUED" || inv.status === "PART_PAID";
@@ -630,7 +630,7 @@ function InvoiceDetail({ id, meta, onBack, onOpenNote, onOpenReceipt }) {
       setPay({ amount: "", method: "CASH", bankReference: "", paidAt: qatarYmd(), note: "", proofFileId: "", collectedById: "" });
       setProofKey((k) => k + 1);
       setInv(r.invoice);
-      setPay((p) => ({ ...p, amount: r.invoice.balance }));
+      setPay((p) => ({ ...p, amount: r.invoice.openToCollect ?? r.invoice.balance }));
     } catch (err) {
       setMsg(editErrorMessage(err, t));
     } finally {
@@ -702,6 +702,7 @@ function InvoiceDetail({ id, meta, onBack, onOpenNote, onOpenReceipt }) {
           <span>{t("common.total")}: <strong data-testid="b2b-inv-total">{money(inv.total)}</strong></span>
           <span>{t("so.paid")}: <strong data-testid="b2b-inv-paid">{money(inv.amountPaid)}</strong></span>
           <span>{t("so.balance")}: <strong data-testid="b2b-inv-balance">{money(inv.balance)}</strong></span>
+          {Number(inv.amountPending) ? <span>{t("pc.awaiting")}: <strong data-testid="b2b-inv-awaiting">{money(inv.amountPending)}</strong></span> : null}
         </div>
         <h3>{t("b2b.tabNotes")}</h3>
         <ul className="b2b-mini-list">
@@ -729,7 +730,7 @@ function InvoiceDetail({ id, meta, onBack, onOpenNote, onOpenReceipt }) {
           <div className="biz-grid">
             <label>
               <span>{t("fd.amount")} *</span>
-              <input required type="number" min="0.01" step="0.01" max={inv.balance} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} aria-label={t("fd.amount")} />
+              <input required type="number" min="0.01" step="0.01" max={inv.openToCollect ?? inv.balance} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} aria-label={t("fd.amount")} />
             </label>
             <label>
               <span>{t("b2b.methodLabel")}</span>

@@ -197,3 +197,9 @@ The old `fix-so/vr/verify-demo.mjs` (written before sales orders were added to t
 differences on the demo: its P&L sums leave out sales-order revenue / cost and its bill checks
 predate prepayments and freight. They are not caused by this work (the revenue gap equals the demo's
 sales-order revenue exactly).
+
+## Update (fix-rd)
+
+Recording, confirming or rejecting collected money (`payment-confirmation.md`) does not change the
+analytics or the transactions history: they report revenue (sales, deliveries, grooming payments),
+not collections. Finance money in counts confirmed collections only.

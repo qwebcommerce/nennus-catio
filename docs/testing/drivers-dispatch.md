@@ -307,3 +307,15 @@ These are the points the merge must reconcile:
 - Driver address, time and note edits are stored on the job, not written back to the sale or the
   booking.
 - No Google Maps or automatic assignment (out of scope; the data is ready).
+
+## Update (fix-rd)
+
+- Drivers now **record money collected** on their orders (`POST /api/driver/jobs/:id/collect`): it is
+  saved awaiting the accountant's confirmation and logged as a `PAYMENT_COLLECTED` event. *To
+  collect* excludes amounts already awaiting confirmation. This closes the "no way to collect cash on
+  delivery" item above. Details: `payment-confirmation.md`.
+- Drivers add new customers (*New customer*, `customers.create`).
+- Van returns: drivers no longer record them (`returns.create` off); they see the returns sales put
+  in their van and **Move to warehouse** (`returns.edit`, own van only). They cannot pay customers
+  back (`returns.refund`).
+- A driver's edit cannot bring a sales order below paid + awaiting confirmation.

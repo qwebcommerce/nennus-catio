@@ -44,3 +44,12 @@ A proof file (JPEG, PNG, WebP or PDF, checked by its bytes, at most 10 MB, metad
 ## Tests (fix-so)
 
 The scripts are in the session scratchpad, `tests/fix-so/`: `api-test.cjs` (150 checks), `ui-test.cjs` (116 browser checks, including 1280 / 390 in English and Arabic), and `business-day.cjs` (323/323; two steps adapted: the customer form now has two checkboxes, and a bank bill payment uploads a proof). The demo was loaded, checked with status and removed, and every table was restored exactly (row count + checksum).
+
+## Update (fix-rd): payments wait for the accountant
+
+Owner decision: a sales-order payment (and a customer-account payment) is recorded **awaiting
+confirmation**; it reaches the installments (oldest first, allocated at confirmation), the order's
+paid amount, its status and finance money in only when someone other than the person who recorded or
+collected it confirms it. A rejected payment frees its amount. Payments awaiting confirmation count
+against the balance (no overpaying) and are shown in pending payments as *received, awaiting
+confirmation*. Cash in an open till session stays in that cash-up. See `payment-confirmation.md`.

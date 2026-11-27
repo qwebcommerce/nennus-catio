@@ -89,3 +89,14 @@ Adds AB Trading W.L.L. with three notes from the warehouse: one invoiced and ful
 - **One delivery path.** `lib/soDelivery.js` (`deliverSalesOrder` / `deliverOrderLines`) is used by `/api/sales-orders/:id/deliveries`, B2B delivery notes and the driver's "Mark delivered" (fix-rb's `lib/salesOrderDelivery.js` was folded in). A B2B delivery note issued without delivering is a `SALES_ORDER` dispatch job; dispatch shows its DN number and `b2b: true`, with nothing for the driver to collect (the money comes in by a cash receipt on the invoice). When the driver marks it delivered, stock and revenue move then, and the note becomes "Delivered — not invoiced".
 - **Demo.** The demo accountant and supervisor come from the main staff list; fix-rb's dispatch demo reuses them, and the supervisor approves the driver's change. Load → remove restores all 103 tables exactly.
 - **UI.** Dashboard and analytics-card arrows point the reading direction (← in Arabic), as does the driver change summary. The sidebar entry that opened the Dashboard under the name "Analytics" is now named Dashboard; the single "Analytics" entry opens fix-rc's `/analytics`.
+
+## Update (fix-rd): cash receipts wait for confirmation
+
+A cash receipt is now recorded **awaiting the accountant's confirmation**: the invoice's
+`amountPaid`, the notes' installments and the statuses (Part paid, Paid, COMPLETED), finance money in
+and the exports count it only once it is confirmed (`/payment-confirmations`, module
+`paymentConfirm`). Until then it is in `B2bInvoice.amountPending` / `SalesOrder.amountPending`,
+shown as *awaiting confirmation* and counted against the balance (no overpaying). Cash in an open
+till session still counts in that cash-up. Role defaults added: Accountant `paymentConfirm`
+view / edit and `returns` view / refund; Sales `returns` view / create / refund; Driver `returns`
+view / edit (no create) and `customers.create`. See `payment-confirmation.md`.

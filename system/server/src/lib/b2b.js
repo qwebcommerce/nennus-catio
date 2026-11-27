@@ -160,6 +160,8 @@ export function invoiceView(inv, today = qatarDayKey()) {
     invoiceDate: dayOf(inv.invoiceDate),
     dueDate: due,
     balance: fmt2(balance),
+    // fix-rd: what can still be collected (receipts awaiting confirmation are not collected twice).
+    openToCollect: fmt2(Math.max(0, balance - d(inv.amountPending || 0))),
     overdue,
     daysOverdue,
     orders: (inv.orders || []).map((o) => ({
