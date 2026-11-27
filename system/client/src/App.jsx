@@ -46,6 +46,8 @@ import SalesHistory from "./pages/SalesHistory.jsx";
 import SalesOrders from "./pages/SalesOrders.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
+// Business analytics (fix-rc).
+const Analytics = React.lazy(() => import("./pages/Analytics.jsx"));
 
 const Reports = React.lazy(loadReports);
 const Appointments = React.lazy(loadAppointments);
@@ -175,6 +177,14 @@ export default function App() {
             element={
               <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="reports">
                 <Reports />
+              </Protected>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <Protected module={["finance", "view"]}>
+                <Analytics />
               </Protected>
             }
           />

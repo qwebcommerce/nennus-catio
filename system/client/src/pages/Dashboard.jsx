@@ -18,6 +18,7 @@ import { TopTenList } from "../components/TopTenList.jsx";
 import { DashIcon } from "../components/DashIcon.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { PendingSummaryCard } from "../components/PendingPanels.jsx";
+import { AnalyticsTodayCard } from "../components/AnalyticsTodayCard.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
@@ -189,6 +190,7 @@ export default function Dashboard() {
                 <div className="dash-mini-kpi"><strong>{summary.todayGrooming || 0}</strong><span>{t("shop.todayGrooming")}</span></div>
               </div>
               {canModule("finance", "view") ? <PendingSummaryCard /> : null}
+              {canModule("finance", "view") ? <AnalyticsTodayCard /> : null}
               <div className="dash-hero-kpis">
                 <DashboardCard
                   title={t("dashboard.salesTodayValue")}
