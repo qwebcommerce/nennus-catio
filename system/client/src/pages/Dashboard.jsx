@@ -24,6 +24,7 @@ import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import { printPaperClass } from "../utils/printPaper.js";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { LowStockList } from "../components/LowStockList.jsx";
+import { DispatchDashboardCards } from "../components/DispatchDashboardCards.jsx";
 
 const tooltipStyle = {
   background: "var(--surface)",
@@ -62,6 +63,8 @@ export default function Dashboard() {
   useEffect(() => {
     const q = branchId ? `?branchId=${branchId}` : "";
     const run = async () => {
+      // fix-rb: roles without the till right (supervisor / accountant) see only the cards above.
+      if (!canModule("pos", "view")) return;
       // Load dashboard in small batches — parallel fan-out exhausts Supabase session pools.
       const s = await api(`/api/dashboard/summary${q}`);
       setSummary(s);
@@ -170,8 +173,10 @@ export default function Dashboard() {
             </Link>
           </div>
         </header>
+        {/* fix-rb: dispatch / driver-approval counts */}
+        <DispatchDashboardCards />
 
-        {!summary ? (
+        {!summary && !canModule("pos", "view") ? null : !summary ? (
           <div className="dash-shell-card dash-loading">{t("common.loading")}</div>
         ) : (
           <div className="dash-layout">

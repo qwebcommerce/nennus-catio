@@ -43,7 +43,7 @@ function money(v, t) {
 }
 
 /** Recording a return collected from a customer into the van (nothing becomes sellable yet). */
-function VanReturnForm({ van, vehicle, options, onSaved, onCancel }) {
+export function VanReturnForm({ van, vehicle, options, onSaved, onCancel }) {
   const { t, locale } = useI18n();
   const { user } = useAuth();
   const [products, setProducts] = useState([]);
@@ -205,7 +205,7 @@ function VanReturnForm({ van, vehicle, options, onSaved, onCancel }) {
 }
 
 /** One return: lines, payment and the receive / mark-paid actions. */
-function ReturnCard({ row, options, onChanged, setError }) {
+export function ReturnCard({ row, options, onChanged, setError }) {
   const { t, locale } = useI18n();
   const { canModule } = useAuth();
   const [open, setOpen] = useState(false);

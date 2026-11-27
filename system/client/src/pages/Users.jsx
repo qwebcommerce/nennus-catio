@@ -189,6 +189,10 @@ export default function Users() {
           >
             <option value="MANAGER">{t("role.MANAGER")}</option>
             <option value="CASHIER">{t("role.CASHIER")}</option>
+            {/* fix-rb: drivers / dispatch roles (fix-ra owns the full role list) */}
+            <option value="SUPERVISOR">{t("role.SUPERVISOR")}</option>
+            <option value="ACCOUNTANT">{t("role.ACCOUNTANT")}</option>
+            <option value="DRIVER">{t("role.DRIVER")}</option>
           </select>
           <select
             value={form.branchId}
@@ -255,6 +259,9 @@ export default function Users() {
                         <option value="ADMIN">{t("role.ADMIN")}</option>
                         <option value="MANAGER">{t("role.MANAGER")}</option>
                         <option value="CASHIER">{t("role.CASHIER")}</option>
+                        <option value="SUPERVISOR">{t("role.SUPERVISOR")}</option>
+                        <option value="ACCOUNTANT">{t("role.ACCOUNTANT")}</option>
+                        <option value="DRIVER">{t("role.DRIVER")}</option>
                                   </select>
                     )}
                   </td>

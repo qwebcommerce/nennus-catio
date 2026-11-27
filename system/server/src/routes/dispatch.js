@@ -58,10 +58,11 @@ dispatchRouter.get("/queue", async (req, res) => {
   const kinds = kindsFrom(req.query.kind);
   const show = ["assigned", "all"].includes(String(req.query.show)) ? String(req.query.show) : "unassigned";
   const statuses = show === "unassigned" ? ["UNASSIGNED", "DECLINED"] : show === "assigned" ? ON_VAN : OPEN_JOB;
-  const [candidates, jobs, vans] = await Promise.all([
+  const [candidates, jobs, vans, areas] = await Promise.all([
     show === "assigned" ? [] : candidateSources(prisma, orgId, kinds),
     prisma.dispatchJob.findMany({ where: { organizationId: orgId, kind: { in: kinds }, status: { in: statuses } }, include: JOB_INC, orderBy: { createdAt: "asc" }, take: 500 }),
     vansWithDrivers(prisma, orgId),
+    prisma.deliveryArea.findMany({ where: { organizationId: orgId, isActive: true }, select: { id: true, name: true, nameEn: true, city: true, zone: true }, orderBy: { name: "asc" } }),
   ]);
   const items = [
     ...candidates.map((c) => itemView(c)),
@@ -84,6 +85,7 @@ dispatchRouter.get("/queue", async (req, res) => {
     unassigned: items.filter((i) => ["UNASSIGNED", "DECLINED"].includes(i.status)).length,
     groups: out,
     vans,
+    areas,
   });
 });
 

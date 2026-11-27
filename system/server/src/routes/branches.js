@@ -1,13 +1,29 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
-import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 
 const router = Router();
 router.use(authMiddleware);
-router.use(requireModule("warehouses", "view"));
-router.use((req, res, next) => requireModule("warehouses", req.method === "GET" ? "view" : "edit")(req, res, next));
+// fix-rb: drivers, dispatchers and approvers (no warehouse right) still need the location list
+// (till location, van names). Writes keep the warehouse rights.
+router.use(async (req, res, next) => {
+  try {
+    if (req.method === "GET") {
+      for (const [mod, action] of [["driver", "view"], ["dispatch", "view"], ["driverApprovals", "view"]]) {
+        if (await hasModule(req, mod, action)) {
+          req._branchListOk = true;
+          return next();
+        }
+      }
+    }
+    return requireModule("warehouses", "view")(req, res, next);
+  } catch (e) {
+    next(e);
+  }
+});
+router.use((req, res, next) => (req.method === "GET" && req._branchListOk ? next() : requireModule("warehouses", req.method === "GET" ? "view" : "edit")(req, res, next)));
 
 const LOCATION_KINDS = new Set(["WAREHOUSE", "SHOP", "VAN"]);
 
