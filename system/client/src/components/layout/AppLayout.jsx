@@ -257,9 +257,11 @@ export function AppLayout() {
             onToggle={() => toggleNavSection("dashboard")}
             t={t}
           >
+            {/* fix-ra merge: this link opens the Dashboard, so it is named Dashboard; the one
+                "Analytics" entry is fix-rc's /analytics below. */}
             <NavLink to="/dashboard" className={sidebarLinkClass}>
-              <SidebarIcon name="analytics" />
-              <span>{t("nav.analytics")}</span>
+              <SidebarIcon name="dashboard" />
+              <span>{t("nav.section.dashboard")}</span>
             </NavLink>
             {can("reports") ? (
               <NavLink to="/reports" className={sidebarLinkClass}>
@@ -270,7 +272,7 @@ export function AppLayout() {
             {canModule("finance", "view") ? (
               <NavLink to="/analytics" className={sidebarLinkClass}>
                 <SidebarIcon name="analytics" />
-                <span>{t("nav.businessAnalytics")}</span>
+                <span>{t("nav.analytics")}</span>
               </NavLink>
             ) : null}
             {(can("pos") || can("reports")) ? (

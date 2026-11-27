@@ -1,5 +1,6 @@
 import React from "react";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { forwardArrowText } from "./ForwardArrow.jsx";
 import { ProductImagePreview } from "./ProductImagePreview.jsx";
 import { formatDate, formatDateTime } from "../utils/qatarDate.js";
 
@@ -89,12 +90,12 @@ export function ChangeSummary({ request }) {
         return (
           <li key={l.lineId}>
             <span>{was ? lineName(was, locale) : l.lineId}</span>
-            <b>{was ? qtyText(was.quantity, was.sellBy, t) : ""} → {l.quantity === 0 ? t("apr.removed") : qtyText(l.quantity, was?.sellBy, t)}</b>
+            <b>{was ? qtyText(was.quantity, was.sellBy, t) : ""} {forwardArrowText(locale)} {l.quantity === 0 ? t("apr.removed") : qtyText(l.quantity, was?.sellBy, t)}</b>
           </li>
         );
       })}
       {["address", "note", "timeNote", "deliveryDate"].filter((f) => f in c).map((f) => (
-        <li key={f}><span>{t(`apr.field.${f}`)}</span><b>{b[f] || "—"} → {c[f] || "—"}</b></li>
+        <li key={f}><span>{t(`apr.field.${f}`)}</span><b>{b[f] || "—"} {forwardArrowText(locale)} {c[f] || "—"}</b></li>
       ))}
     </ul>
   );

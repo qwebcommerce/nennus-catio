@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
+import { ForwardArrow } from "./ForwardArrow.jsx";
 
 /**
  * Dashboard: today at a glance (fix-rc) — today's grooming (done / pending / cancelled), today's
@@ -20,7 +21,7 @@ export function AnalyticsTodayCard() {
     <section className="dash-shell-card an-today" data-testid="analytics-today">
       <div className="an-today-head">
         <h3>{t("an.today.title")}</h3>
-        <Link to="/analytics" className="dash-link-all">{t("an.today.open")} <span aria-hidden>→</span></Link>
+        <Link to="/analytics" className="dash-link-all">{t("an.today.open")} <ForwardArrow /></Link>
       </div>
       <div className="an-today-grid">
         <div className="an-today-block">

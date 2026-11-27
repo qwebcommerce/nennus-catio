@@ -26,6 +26,7 @@ import { printPaperClass } from "../utils/printPaper.js";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { LowStockList } from "../components/LowStockList.jsx";
 import { DispatchDashboardCards } from "../components/DispatchDashboardCards.jsx";
+import { ForwardArrow } from "../components/ForwardArrow.jsx";
 
 const tooltipStyle = {
   background: "var(--surface)",
@@ -260,7 +261,7 @@ export default function Dashboard() {
                   <h3>{t("dashboard.topCustomersMonth")}</h3>
                   <Link to="/customers" className="dash-link-all">
                     {t("dashboard.viewAll")}
-                    <span aria-hidden>→</span>
+                    <ForwardArrow />
                   </Link>
                 </div>
                 {!filteredCustomers.length ? (
