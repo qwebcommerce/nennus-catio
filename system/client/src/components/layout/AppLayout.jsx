@@ -316,31 +316,31 @@ export function AppLayout() {
                 <span>{t("shop.staffOrders")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("promotions", "view") ? (
               <NavLink to="/promotions" className={sidebarLinkClass}>
                 <SidebarIcon name="coupons" />
                 <span>{t("shop.promotions")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("finance", "view") ? (
               <NavLink to="/finance" className={sidebarLinkClass}>
                 <SidebarIcon name="purchases" />
                 <span>{t("shop.finance")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager || canModule("returns", "view")) ? (
+            {(canModule("delivery", "create") || canModule("returns", "view")) ? (
               <NavLink to="/vehicles" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />
                 <span>{t("shop.vehicles")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("grooming", "view") ? (
               <NavLink to="/admin/grooming" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
                 <span>{t("shop.grooming")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("relocation", "view") ? (
               <NavLink to="/admin/relocation" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
                 <span>{t("shop.relocation")}</span>
@@ -398,7 +398,7 @@ export function AppLayout() {
                 <span>{t("nav.accounts")}</span>
               </NavLink>
             ) : null}
-            {isAdmin || isManager ? (
+            {canModule("grooming", "view") ? (
               <NavLink to="/appointments" className={sidebarLinkClass}>
                 <SidebarIcon name="appointments" />
                 <span>{t("nav.appointments")}</span>

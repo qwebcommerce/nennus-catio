@@ -81,7 +81,8 @@ async function main() {
       passwordHash: cashierHash,
       name: "كاشير",
       nameEn: "Cashier",
-      role: "CASHIER",
+      // Sales staff (the old "Cashier" role was moved to SALES, migration 20261128100100_roles_data).
+      role: "SALES",
       branchId: mainBranch.id,
     },
   });

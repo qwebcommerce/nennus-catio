@@ -6,6 +6,8 @@ import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVer
 import {
   DEFAULT_CASHIER_PERMISSIONS,
   DEFAULT_MANAGER_PERMISSIONS,
+  EDITABLE_ROLES,
+  LEGACY_ROLES,
   MODULES,
   MODULE_ACTIONS,
   MODULE_ACTIONS_FOR,
@@ -19,23 +21,39 @@ router.use(authMiddleware);
 /** FR-09: roles and permissions are reserved for the organisation owner. */
 router.use(requireOwner);
 
-/** GET /api/permissions — matrices for Manager + Employee */
+const perRole = (fn) => Object.fromEntries(EDITABLE_ROLES.map((role) => [role, fn(role)]));
+
+function parseRoleModules(raw) {
+  if (!raw) return {};
+  if (typeof raw === "object") return { ...raw };
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** GET /api/permissions — the module map of every editable role (all roles but the top admin). */
 router.get("/", async (req, res) => {
   const org = await prisma.organization.findUnique({
     where: { id: req.user.organizationId },
   });
-  if (!org) return res.status(404).json({ error: "Organization not found" });
+  if (!org) return res.status(404).json({ error: "Organization not found", errorAr: "المؤسسة غير موجودة", errorEn: "Organization not found" });
+  const counts = await prisma.user.groupBy({
+    by: ["role"],
+    where: { organizationId: org.id, active: true },
+    _count: true,
+  });
   res.json({
     version: org.version,
+    roles: EDITABLE_ROLES,
+    legacyRoles: LEGACY_ROLES,
+    /** Active users per role (the screen hides empty legacy roles). */
+    userCounts: Object.fromEntries(counts.map((c) => [c.role, c._count])),
     matrices: orgPermissionMatrices(org),
-    modules: {
-      MANAGER: resolveModulePermissions(org, "MANAGER"),
-      CASHIER: resolveModulePermissions(org, "CASHIER"),
-    },
-    moduleDefaults: {
-      MANAGER: defaultModuleMap("MANAGER"),
-      CASHIER: defaultModuleMap("CASHIER"),
-    },
+    modules: perRole((role) => resolveModulePermissions(org, role)),
+    moduleDefaults: perRole((role) => defaultModuleMap(role)),
     moduleKeys: MODULES,
     moduleActions: MODULE_ACTIONS,
     moduleActionsFor: MODULE_ACTIONS_FOR,
@@ -48,7 +66,9 @@ router.get("/", async (req, res) => {
 
 /**
  * PUT /api/permissions
- * body: { modules: { MANAGER?: {...}, CASHIER?: {...} } }
+ * body: { version, modules: { SUPERVISOR?: {...}, SALES?: {...}, ... } }
+ * Stored in Organization.roleModules (one JSON map keyed by role). MANAGER / CASHIER are also
+ * written to their old columns so an older server reading them still agrees.
  */
 router.put("/", async (req, res) => {
   const body = req.body || {};
@@ -56,30 +76,37 @@ router.put("/", async (req, res) => {
   const org = await prisma.organization.findUnique({
     where: { id: req.user.organizationId },
   });
-  if (!org) return res.status(404).json({ error: "Organization not found" });
+  if (!org) return res.status(404).json({ error: "Organization not found", errorAr: "المؤسسة غير موجودة", errorEn: "Organization not found" });
   assertVersion(org, version);
 
-  // Legacy key maps are derived from the module matrix; only `modules` is stored.
+  const stored = parseRoleModules(org.roleModules);
   const data = {};
   const changed = [];
-  for (const role of ["MANAGER", "CASHIER"]) {
+  const after = {};
+  for (const role of EDITABLE_ROLES) {
     const input = body.modules?.[role];
     if (!input || typeof input !== "object") continue;
-    const clean = resolveModulePermissions(
-      { managerModules: org.managerModules, cashierModules: org.cashierModules },
-      role
-    );
+    const clean = resolveModulePermissions(org, role);
     for (const mod of MODULES) {
       for (const action of MODULE_ACTIONS) {
         if (typeof input?.[mod]?.[action] === "boolean") clean[mod][action] = input[mod][action];
       }
     }
-    data[role === "MANAGER" ? "managerModules" : "cashierModules"] = JSON.stringify(clean);
+    stored[role] = clean;
+    after[role] = clean;
+    if (role === "MANAGER") data.managerModules = JSON.stringify(clean);
+    if (role === "CASHIER") data.cashierModules = JSON.stringify(clean);
     changed.push(role);
   }
-  if (Object.keys(data).length === 0) {
-    return res.status(400).json({ error: "No permission updates provided" });
+  if (!changed.length) {
+    return res.status(400).json({
+      error: "لم تُرسل أي تغييرات على الصلاحيات",
+      errorAr: "لم تُرسل أي تغييرات على الصلاحيات",
+      errorEn: "No permission updates provided",
+      code: "NO_CHANGES",
+    });
   }
+  data.roleModules = stored;
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await versionedUpdate(tx, "organization", { id: org.id, version, data });
@@ -93,11 +120,8 @@ router.put("/", async (req, res) => {
         summary: `Updated role permissions: ${changed.join(", ")}`,
         meta: {
           updatedRoles: changed,
-          before: {
-            MANAGER: resolveModulePermissions(org, "MANAGER"),
-            CASHIER: resolveModulePermissions(org, "CASHIER"),
-          },
-          after: Object.fromEntries(changed.map((r) => [r, JSON.parse(data[r === "MANAGER" ? "managerModules" : "cashierModules"])])),
+          before: Object.fromEntries(changed.map((r) => [r, resolveModulePermissions(org, r)])),
+          after,
         },
       },
       tx
@@ -109,10 +133,7 @@ router.put("/", async (req, res) => {
     ok: true,
     version: updated.version,
     matrices: orgPermissionMatrices(updated),
-    modules: {
-      MANAGER: resolveModulePermissions(updated, "MANAGER"),
-      CASHIER: resolveModulePermissions(updated, "CASHIER"),
-    },
+    modules: perRole((role) => resolveModulePermissions(updated, role)),
   });
 });
 

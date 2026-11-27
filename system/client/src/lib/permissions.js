@@ -53,6 +53,9 @@ export const DEFAULT_CASHIER_PERMISSIONS = Object.freeze({
   audit: false,
 });
 
+/** Roles whose fallback (before the server answers) is the full manager set. */
+const FULL_ROLES = ["SUPERVISOR", "MANAGER"];
+
 export function resolveClientPermissions(user) {
   if (!user) return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false]));
   if (user.role === "ADMIN") {
@@ -60,16 +63,15 @@ export function resolveClientPermissions(user) {
   }
   const fromApi = user.permissions;
   if (fromApi && typeof fromApi === "object") {
-    const base =
-      user.role === "MANAGER"
-        ? { ...DEFAULT_MANAGER_PERMISSIONS }
-        : { ...DEFAULT_CASHIER_PERMISSIONS };
+    const base = FULL_ROLES.includes(user.role)
+      ? { ...DEFAULT_MANAGER_PERMISSIONS }
+      : { ...DEFAULT_CASHIER_PERMISSIONS };
     for (const key of PERMISSION_KEYS) {
       if (typeof fromApi[key] === "boolean") base[key] = fromApi[key];
     }
     return base;
   }
-  return user.role === "MANAGER"
+  return FULL_ROLES.includes(user.role)
     ? { ...DEFAULT_MANAGER_PERMISSIONS }
     : { ...DEFAULT_CASHIER_PERMISSIONS };
 }

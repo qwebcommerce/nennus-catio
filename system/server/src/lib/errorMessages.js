@@ -82,6 +82,7 @@ const EXACT = [
   ["لا يمكن تعديل حساب مالك المؤسسة (المشرف الأعلى)", "The owner account cannot be changed here"],
   ["لا يمكن تعطيل حسابك الحالي", "You cannot deactivate your own account"],
   ["تم بلوغ الحد الأقصى للمستخدمين (10)", "User limit reached (10)"],
+  ["لم تُرسل أي تغييرات على الصلاحيات", "No permission updates provided"],
   ["لم تُرسل أي تعديلات على الصلاحيات", "No permission updates provided"],
   ["المؤسسة غير موجودة", "Organization not found"],
   ["أدخل اسم النشاط (حتى 120 حرفاً)", "Enter the business name (up to 120 characters)"],
@@ -582,6 +583,7 @@ const EXACT = [
 ];
 
 const PATTERNS = [
+  { ar: "تم بلوغ الحد الأقصى للمستخدمين النشطين ({n})", en: "Active user limit reached ({n})" },
   { ar: "لا يوجد منتج بهذا الرمز: {code}", en: "No product with this code: {code}" },
   { ar: "أدخل كمية أكبر من صفر: {name}", en: "Enter a quantity above zero: {name}" },
   { ar: "وحدة غير معروفة: {name}", en: "Unknown unit: {name}" },

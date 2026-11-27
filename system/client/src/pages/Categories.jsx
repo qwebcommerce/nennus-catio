@@ -17,7 +17,8 @@ function labelOf(row, locale) {
 }
 
 export default function Categories() {
-  const { isManager } = useAuth();
+  const { canModule } = useAuth();
+  const isManager = canModule("products", "edit");
   const { t, locale } = useI18n();
   const { showToast } = useToast();
   const [tab, setTab] = useState("categories");

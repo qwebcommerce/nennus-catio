@@ -6,6 +6,7 @@ import { findOrganizationOwnerId, isOrganizationOwner } from "../lib/orgOwner.js
 import { writeAudit } from "../lib/auditLog.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { authMiddleware, requireModule, requireOwner } from "../middleware/auth.js";
+import { ROLES, ROLES_WITHOUT_BRANCH } from "../lib/permissions.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -14,7 +15,29 @@ router.use(requireModule("team", "view"));
 /** FR-07 / FR-09: creating staff, assigning a role and deactivating are reserved for the owner. */
 router.use((req, res, next) => (req.method === "GET" ? next() : requireOwner(req, res, next)));
 
-const ROLES = ["ADMIN", "MANAGER", "CASHIER"];
+/**
+ * Most active staff accounts an organisation may have (owner decision: 30). MAX_ACTIVE_USERS
+ * overrides it; a missing or invalid value (not a whole number of at least 1) keeps 30.
+ * Only active users count: a deactivated account frees its seat.
+ */
+export function maxActiveUsers() {
+  const raw = String(process.env.MAX_ACTIVE_USERS ?? "").trim();
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw);
+    if (Number.isSafeInteger(n) && n >= 1) return n;
+  }
+  return 30;
+}
+
+function userLimitError(res, maxUsers) {
+  return err(res, 403, `تم بلوغ الحد الأقصى للمستخدمين النشطين (${maxUsers})`, `Active user limit reached (${maxUsers})`, {
+    code: "USER_LIMIT",
+    maxUsers,
+  });
+}
+
+/** Roles that may work business-wide; the others need a location (e.g. a van for a driver). */
+const needsBranch = (role) => !ROLES_WITHOUT_BRANCH.includes(String(role));
 
 const userSelect = {
   id: true,
@@ -43,7 +66,7 @@ router.get("/", async (req, res) => {
     }),
     findOrganizationOwnerId(prisma, orgId),
   ]);
-  const maxUsers = 10;
+  const maxUsers = maxActiveUsers();
   res.json({
     users: users.map((u) => ({
       ...u,
@@ -68,7 +91,7 @@ router.post("/", async (req, res) => {
   }
   const roleStr = String(role);
   const resolvedBranchId = branchId != null && String(branchId).trim() ? String(branchId).trim() : null;
-  if (roleStr !== "ADMIN" && !resolvedBranchId) {
+  if (needsBranch(roleStr) && !resolvedBranchId) {
     return err(res, 400, "يجب تعيين فرع للمستخدم", "Assign a branch to this user");
   }
   if (resolvedBranchId) {
@@ -76,14 +99,9 @@ router.post("/", async (req, res) => {
     if (!b) return err(res, 400, "فرع غير صالح", "Invalid branch");
   }
 
-  const maxUsers = 10;
+  const maxUsers = maxActiveUsers();
   const userCount = await prisma.user.count({ where: { organizationId: req.user.organizationId, active: true } });
-  if (userCount >= maxUsers) {
-    return err(res, 403, `تم بلوغ الحد الأقصى للمستخدمين (${maxUsers})`, `User limit reached (${maxUsers})`, {
-      code: "USER_LIMIT",
-      maxUsers,
-    });
-  }
+  if (userCount >= maxUsers) return userLimitError(res, maxUsers);
 
   try {
     const hash = await bcrypt.hash(String(password), 10);
@@ -169,7 +187,7 @@ router.patch("/:id", async (req, res) => {
   }
   const nextRole = data.role || target.role;
   const nextBranch = branchId !== undefined ? branchId || null : target.branchId;
-  if (nextRole !== "ADMIN" && !nextBranch) {
+  if (needsBranch(nextRole) && !nextBranch) {
     return err(res, 400, "يجب تعيين فرع للمستخدم", "Assign a branch to this user");
   }
   if (password) {
@@ -178,7 +196,14 @@ router.patch("/:id", async (req, res) => {
     }
     data.passwordHash = await bcrypt.hash(String(password), 10);
   }
-  if (data.passwordHash || data.active === false) data.sessionVersion = { increment: 1 };
+  if (data.active === true && !target.active) {
+    const maxUsers = maxActiveUsers();
+    const count = await prisma.user.count({ where: { organizationId: req.user.organizationId, active: true } });
+    if (count >= maxUsers) return userLimitError(res, maxUsers);
+  }
+  // A role change also ends the user's sessions, so their menus and rights reload at sign-in.
+  const roleChanged = Boolean(data.role && data.role !== target.role);
+  if (data.passwordHash || data.active === false || roleChanged) data.sessionVersion = { increment: 1 };
   if (!Object.keys(data).length) return err(res, 400, "لا توجد تغييرات", "Nothing to update");
 
   const user = await prisma.$transaction(async (tx) => {
@@ -216,10 +241,9 @@ async function setActive(req, res, active) {
     return err(res, 400, "لا يمكن تعطيل حسابك الحالي", "You cannot deactivate your own account");
   }
   if (active) {
+    const maxUsers = maxActiveUsers();
     const count = await prisma.user.count({ where: { organizationId: req.user.organizationId, active: true } });
-    if (!target.active && count >= 10) {
-      return err(res, 403, "تم بلوغ الحد الأقصى للمستخدمين (10)", "User limit reached (10)", { code: "USER_LIMIT" });
-    }
+    if (!target.active && count >= maxUsers) return userLimitError(res, maxUsers);
   }
   const user = await prisma.$transaction(async (tx) => {
     const row = await tx.user.update({

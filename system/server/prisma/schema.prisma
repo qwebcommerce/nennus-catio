@@ -73,6 +73,9 @@ model Organization {
   /// Module rights for manager and cashier. Admin always has every action.
   managerModules  String?
   cashierModules  String?
+  /// Module rights per role: { "SUPERVISOR": { module: { action: bool } }, "SALES": {...}, ... }.
+  /// Read first; managerModules / cashierModules are the fallback for MANAGER / CASHIER.
+  roleModules     Json?
 
   /// Onboarding: account created → profile/docs → Stripe payment → complete
   profileDocsDone Boolean @default(false)
@@ -457,11 +460,19 @@ model LoanRepayment {
 }
 
 enum Role {
+  /// Top admin: full access always.
   ADMIN
+  /// Legacy: migrated to SUPERVISOR (20261128100100_roles_data). Still accepted for old rows.
   MANAGER
+  /// Legacy: migrated to SALES (shop) or DRIVER (van staff). Still accepted for old rows.
   CASHIER
   /// Floor sales associate — scan & checkout only (mobile)
   ASSOCIATE
+  SUPERVISOR
+  SALES
+  ACCOUNTANT
+  B2B
+  DRIVER
 }
 
 enum PetType {

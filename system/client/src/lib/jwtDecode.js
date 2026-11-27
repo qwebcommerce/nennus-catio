@@ -21,7 +21,7 @@ export function minimalUserFromTokenPayload(p) {
     email: "",
     name: "",
     nameEn: null,
-    role: p.role || "CASHIER",
+    role: p.role || "SALES",
     branchId: p.branchId ?? null,
     branchName: null,
     branchNameEn: null,

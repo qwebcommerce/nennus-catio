@@ -4,7 +4,7 @@ import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { assertVersion, isStaleEditError, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
-import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { RELOCATION_DOCUMENTS_BUCKET, removeObjects } from "../lib/storage.js";
 
 const router = Router();
@@ -88,8 +88,9 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
     });
     if (taken) return res.status(409).json({ error: "This email already belongs to a customer" });
   }
-  if (opening > 0 && req.user.role === "CASHIER") {
-    return res.status(403).json({ error: "لا يمكن للكاشير تعيين رصيد افتتاحي" });
+  // An opening balance is a finance entry: it needs Finance → create (any role).
+  if (opening > 0 && !(await hasModule(req, "finance", "create"))) {
+    return res.status(403).json({ error: "لا يمكن للكاشير تعيين رصيد افتتاحي", errorAr: "لا يمكن للكاشير تعيين رصيد افتتاحي", errorEn: "A cashier cannot set an opening balance", code: "FORBIDDEN" });
   }
 
   const row = await prisma.$transaction(async (tx) => {

@@ -155,7 +155,7 @@ export default function App() {
           <Route
             path="/sales"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} anyPermission={["pos", "reports"]}>
+              <Protected anyPermission={["pos", "reports"]}>
                 <SalesHistory />
               </Protected>
             }
@@ -173,7 +173,7 @@ export default function App() {
           <Route
             path="/reports"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="reports">
+              <Protected permission="reports">
                 <Reports />
               </Protected>
             }
@@ -181,7 +181,7 @@ export default function App() {
           <Route
             path="/appointments"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["grooming", "view"]}>
                 <Appointments />
               </Protected>
             }
@@ -253,7 +253,7 @@ export default function App() {
           <Route
             path="/returns"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="refunds">
+              <Protected permission="refunds">
                 <Returns />
               </Protected>
             }
@@ -261,7 +261,7 @@ export default function App() {
           <Route
             path="/purchase-orders"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="purchases">
+              <Protected permission="purchases">
                 <PurchaseOrders />
               </Protected>
             }
@@ -269,7 +269,7 @@ export default function App() {
           <Route
             path="/online-orders"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]}>
+              <Protected module={["orders", "view"]}>
                 <OnlineOrders />
               </Protected>
             }
@@ -277,7 +277,7 @@ export default function App() {
           <Route
             path="/promotions"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["promotions", "view"]}>
                 <Promotions />
               </Protected>
             }
@@ -285,7 +285,7 @@ export default function App() {
           <Route
             path="/finance"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["finance", "view"]}>
                 <Finance />
               </Protected>
             }
@@ -318,7 +318,7 @@ export default function App() {
           <Route
             path="/admin/grooming"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["grooming", "view"]}>
                 <GroomingDesk />
               </Protected>
             }
@@ -326,7 +326,7 @@ export default function App() {
           <Route
             path="/admin/relocation"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["relocation", "view"]}>
                 <RelocationDesk />
               </Protected>
             }
@@ -334,7 +334,7 @@ export default function App() {
           <Route
             path="/pet-types"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["products", "edit"]}>
                 <PetTypes />
               </Protected>
             }
@@ -342,7 +342,7 @@ export default function App() {
           <Route
             path="/purchases"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="purchases">
+              <Protected permission="purchases">
                 <Purchases />
               </Protected>
             }
@@ -350,7 +350,7 @@ export default function App() {
           <Route
             path="/transfer"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="transfer">
+              <Protected permission="transfer">
                 <Transfer />
               </Protected>
             }
@@ -374,7 +374,7 @@ export default function App() {
           <Route
             path="/count"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="stockCount">
+              <Protected permission="stockCount">
                 <Count />
               </Protected>
             }
@@ -390,7 +390,7 @@ export default function App() {
           <Route
             path="/audit"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="audit">
+              <Protected permission="audit">
                 <Audit />
               </Protected>
             }
