@@ -23,7 +23,7 @@ export const MONEY_FIELDS = {
   GroomingService: ["price"],
   Product: ["price", "wholesalePrice", "cost", "houseDeliveryFee"],
   Inventory: ["unitCost"],
-  Appointment: ["homeFee", "amount", "amountPaid"],
+  Appointment: ["homeFee", "amount", "amountPaid", "couponDiscount"],
   Sale: [
     "deliveryFee",
     "promotionDiscount",
@@ -53,7 +53,10 @@ export const MONEY_FIELDS = {
   DeliveryArea: ["fee"],
   RelocationRequest: ["quoteAmount", "amountPaid"],
   Promotion: ["amount", "bundlePrice", "minOrderAmount"],
-  Payment: ["amount"],
+  Payment: ["amount", "couponDiscount"],
+  // fix-re: generated grooming coupons (migration 20261202100000_grooming_coupons).
+  CouponBatch: ["amount", "minAmount"],
+  CouponRedemption: ["grossAmount", "discount"],
   // Sales orders, supplier prepayments (migration 20261126100000_sales_orders_payments).
   SalesOrder: ["subtotal", "discountAmount", "total", "amountPaid", "deliveredRevenue", "amountPending"],
   SalesOrderLine: ["listPrice", "unitPrice", "subtotal", "discountShare"],

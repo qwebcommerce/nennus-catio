@@ -179,6 +179,8 @@ model Organization {
   dispatchJobs            DispatchJob[]
   dispatchEvents          DispatchEvent[]
   driverChangeRequests    DriverChangeRequest[]
+  /// fix-re: generated grooming coupon batches (docs/testing/coupons.md)
+  couponBatches CouponBatch[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -1219,6 +1221,8 @@ model GroomingService {
   updatedAt      DateTime     @updatedAt
   appointments   Appointment[]
   petLinks       GroomingPackagePet[]
+  /// fix-re: coupon batches limited to this package
+  couponBatches  CouponBatchPackage[]
 
   @@index([organizationId, active])
 }
@@ -1444,6 +1448,13 @@ model Appointment {
   payments        Payment[]
   /// fix-rb: home visit assigned to a grooming van.
   dispatchJob     DispatchJob?
+  /// fix-re: generated coupon used on this booking. amount is already net of couponDiscount
+  /// (whole dirhams); couponCode keeps the code as printed.
+  couponCodeId    String?
+  couponCodeRow   CouponCode?       @relation(fields: [couponCodeId], references: [id], onDelete: SetNull)
+  couponCode      String?
+  couponDiscount  Int               @default(0)
+  couponUse       CouponRedemption?
 
   @@index([organizationId, branchId, startAt])
   @@index([organizationId, groomerId, startAt])
@@ -2350,6 +2361,9 @@ model Payment {
   userId              String?
   note                String?
   createdAt           DateTime           @default(now())
+  /// fix-re: generated coupon on the booking this payment paid (the amount is already net).
+  couponCode          String?
+  couponDiscount      Int                @default(0)
 
   @@index([saleId])
   @@index([appointmentId])
@@ -3173,4 +3187,134 @@ model DriverChangeRequest {
 
   @@index([organizationId, status])
   @@index([jobId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// fix-re: generated grooming coupons (docs/testing/coupons.md). A batch holds N unique codes;
+// each use of a code is a CouponRedemption (HELD while a website booking waits for payment,
+// COMMITTED when paid / booked at the desk, RELEASED when the booking is cancelled unpaid).
+// Money columns are whole dirhams (NFR-03).
+
+enum CouponDiscountType {
+  PERCENT
+  AMOUNT
+}
+
+enum CouponBatchChannel {
+  WEBSITE
+  DESK
+  BOTH
+}
+
+enum CouponUseChannel {
+  WEBSITE
+  DESK
+}
+
+enum CouponUseStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}
+
+model CouponBatch {
+  id                  String               @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version             Int                  @default(1)
+  organizationId      String
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                String
+  nameEn              String?
+  prefix              String?
+  discountType        CouponDiscountType
+  /// Whole percent 1–100 (PERCENT).
+  percent             Int?
+  /// Whole dirhams (AMOUNT).
+  amount              Int?
+  /// true = every grooming package; otherwise the packages in `packages`.
+  allPackages         Boolean              @default(false)
+  /// Valid from the start of validFrom's Qatar day until the end of validUntil's Qatar day.
+  validFrom           DateTime
+  validUntil          DateTime
+  codeCount           Int
+  usesPerCode         Int                  @default(1)
+  onePerCustomer      Boolean              @default(false)
+  /// Optional minimum booking value (package + home-visit fee), whole dirhams.
+  minAmount           Int?
+  channel             CouponBatchChannel   @default(BOTH)
+  /// Cancelling a PAID booking gives the use back only when this is on (default off).
+  releaseOnPaidCancel Boolean              @default(false)
+  active              Boolean              @default(true)
+  createdByUserId     String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  packages            CouponBatchPackage[]
+  codes               CouponCode[]
+  redemptions         CouponRedemption[]
+
+  @@index([organizationId, createdAt])
+}
+
+model CouponBatchPackage {
+  batchId   String
+  batch     CouponBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   GroomingService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([batchId, serviceId])
+  @@index([serviceId])
+}
+
+model CouponCode {
+  id             String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version        Int                @default(1)
+  organizationId String
+  batchId        String
+  batch          CouponBatch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  /// As printed, e.g. GROOM-7KQ4-X9PM.
+  code           String
+  /// Upper-case letters and digits only: what a typed code is matched on (case and dashes ignored).
+  codeKey        String
+  /// Uses allowed (copied from the batch) and uses taken (HELD + COMMITTED): one guarded UPDATE
+  /// "usedCount < maxUses" claims a use, so parallel bookings cannot over-use a code.
+  maxUses        Int                @default(1)
+  usedCount      Int                @default(0)
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  redemptions    CouponRedemption[]
+  appointments   Appointment[]
+
+  @@unique([organizationId, codeKey])
+  @@index([batchId])
+}
+
+model CouponRedemption {
+  id             String           @id @default(cuid())
+  organizationId String
+  batchId        String
+  batch          CouponBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  codeId         String
+  codeRow        CouponCode       @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  appointmentId  String           @unique
+  appointment    Appointment      @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  customerId     String?
+  channel        CouponUseChannel
+  status         CouponUseStatus  @default(HELD)
+  /// Booking value before the coupon and the coupon discount (whole dirhams).
+  grossAmount    Int
+  discount       Int
+  /// "<batchId>:<customerId>" while a one-per-customer use is live (HELD / COMMITTED), else null:
+  /// the unique index stops one customer holding two uses of such a batch, even in parallel.
+  customerKey    String?          @unique
+  userId         String?
+  createdAt      DateTime         @default(now())
+  committedAt    DateTime?
+  releasedAt     DateTime?
+  releaseReason  String?
+
+  @@index([batchId, status])
+  @@index([codeId])
+  @@index([organizationId, createdAt])
 }
