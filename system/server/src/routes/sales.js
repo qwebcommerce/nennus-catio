@@ -21,6 +21,7 @@ import QRCode from "qrcode";
 import { heldQuantity } from "../lib/webOrder.js";
 import { d, fmt, lineAmount, toDirhams } from "../lib/money.js";
 import { toApi } from "../lib/moneyFields.js";
+import { parseTillDelivery } from "../lib/dispatch.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -254,6 +255,13 @@ router.post("/checkout", async (req, res) => {
     return res.status(403).json({ error: "لا يمكن البيع لفرع آخر" });
   }
   const orgId = req.user.organizationId;
+  // fix-rb: a till sale "for delivery" (customer, address, area, date / window) becomes a delivery job.
+  let tillDelivery = null;
+  try {
+    tillDelivery = await parseTillDelivery(prisma, orgId, req.body, { customerId, deliveryAddress });
+  } catch (e) {
+    return res.status(e.status || 400).json({ error: e.errorAr, errorAr: e.errorAr, errorEn: e.errorEn, code: e.code });
+  }
 
   const clientMutationId =
     clientMutationIdRaw != null && String(clientMutationIdRaw).trim()
@@ -550,6 +558,7 @@ router.post("/checkout", async (req, res) => {
           promotionDiscount: promo.discount,
           orderNote,
           deliveryAddress,
+          ...(tillDelivery || {}),
           ...(anyFree ? { freeReason } : {}),
           items: {
             create: lineData.map((l) => ({

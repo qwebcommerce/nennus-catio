@@ -9,6 +9,7 @@ import { refundSkipcashPayment } from "../lib/skipcash.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { checkGatewayPayment } from "../lib/paymentLookup.js";
 import { mailCustomer } from "../lib/mailer.js";
+import { changeWebOrderStatus } from "../lib/webOrderStatus.js";
 
 /** Money columns are whole dirhams (NFR-03). */
 const cents = (v) => d(v);
@@ -259,59 +260,8 @@ router.post("/:id/refund", requireModule("orders", "refund"), async (req, res) =
 router.post("/:id/status", requireModule("orders", "edit"), async (req, res) => {
   const next = String(req.body?.status || "").toUpperCase();
   try {
-    const sale = await prisma.$transaction(async (tx) => {
-      const row = await tx.sale.findFirst({
-        where: { id: req.params.id, orderChannel: "WEBSITE", branch: { organizationId: req.user.organizationId } },
-      });
-      if (!row?.webStatus) {
-        const err = new Error("Order not found");
-        err.status = 404;
-        throw err;
-      }
-      const allowed = NEXT[row.webStatus] || [];
-      if (!allowed.includes(next)) {
-        const err = new Error("That status change is not allowed");
-        err.status = 400;
-        throw err;
-      }
-      if (next === "OUT_FOR_DELIVERY" && row.fulfillment !== "DELIVERY") {
-        const err = new Error("Pickup orders become ready for pickup");
-        err.status = 400;
-        throw err;
-      }
-      if (next === "READY_FOR_PICKUP" && row.fulfillment !== "PICKUP") {
-        const err = new Error("Delivery orders go out for delivery");
-        err.status = 400;
-        throw err;
-      }
-      // Guarded transition: of several parallel changes (or instances) only one applies.
-      const moved = await tx.sale.updateMany({
-        where: { id: row.id, webStatus: row.webStatus },
-        data: {
-          webStatus: next,
-          ...(next === "CANCELLED" ? { invoiceStatus: "CANCELLED" } : {}),
-          ...(next === "CANCELLED" && d(row.amountPaid) > 0 ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}),
-        },
-      });
-      if (!moved.count) {
-        const err = new Error("The order changed. Refresh and try again.");
-        err.status = 409;
-        throw err;
-      }
-      if (next === "CANCELLED") await restoreCommittedHolds(tx, row.id);
-      return tx.sale.findUnique({ where: { id: row.id } });
-    });
-    await writeAudit({
-      userId: req.user.sub,
-      action: "ORDER_STATUS",
-      entityType: "Sale",
-      entityId: sale.id,
-      summary: sale.webStatus,
-    });
-    if (sale.customerId) {
-      const buyer = await prisma.customer.findUnique({ where: { id: sale.customerId } });
-      await mailCustomer(buyer, "order", { reference: sale.reference || sale.invoiceNumber || sale.id.slice(-8).toUpperCase(), status: sale.webStatus });
-    }
+    // fix-rb: the change itself lives in lib/webOrderStatus.js (the driver dashboard uses it too).
+    const sale = await changeWebOrderStatus({ orgId: req.user.organizationId, saleId: req.params.id, next, userId: req.user.sub });
     res.json({ id: sale.id, status: sale.webStatus });
   } catch (e) {
     res.status(e.status || 400).json({ error: e.message || "Could not update the order" });

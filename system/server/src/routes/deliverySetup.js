@@ -25,6 +25,8 @@ function readArea(body, partial) {
   }
   if (body.nameEn !== undefined) data.nameEn = body.nameEn ? String(body.nameEn).trim() : null;
   if (body.city !== undefined) data.city = body.city ? String(body.city).trim() : null;
+  // fix-rb: dispatch zone (groups areas on the assignment screen).
+  if (body.zone !== undefined) data.zone = body.zone ? String(body.zone).trim().slice(0, 80) : null;
   if (!partial || body.fee !== undefined) {
     // Whole dirhams (NFR-03); at most two decimals.
     const fee = body.fee === "" || body.fee == null ? 0 : toDirhams(body.fee);
