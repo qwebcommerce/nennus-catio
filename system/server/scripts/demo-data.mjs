@@ -36,6 +36,7 @@ import "../src/loadEnv.js";
 import { DemoRecords, countByTable } from "./demo/records.mjs";
 import * as C from "./demo/content.mjs";
 import { demoPdf, planSalesOrdersDemo } from "./demo/salesOrders.mjs";
+import { planDispatchDemo } from "./demo/dispatch.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -700,7 +701,7 @@ async function setup(ctx, now) {
   const areas = await api("GET", "/api/delivery-setup/areas", null, T.owner);
   await P6(C.DELIVERY_AREAS, async (a) => {
     const found = (Array.isArray(areas) ? areas : []).find((x) => x.isActive !== false && String(x.nameEn || x.name || "").toLowerCase() === a.nameEn.toLowerCase());
-    S.area[a.nameEn] = found ? found.id : (await api("POST", "/api/delivery-setup/areas", { name: a.name, nameEn: a.nameEn, city: "Doha", fee: a.fee }, T.owner)).id;
+    S.area[a.nameEn] = found ? found.id : (await api("POST", "/api/delivery-setup/areas", { name: a.name, nameEn: a.nameEn, city: "Doha", zone: a.zone, fee: a.fee }, T.owner)).id;
   });
   for (const w of C.DELIVERY_WINDOWS) {
     S.windows.push((await api("POST", "/api/delivery-setup/windows", { ...w, weekday: null }, T.owner)).id);
@@ -1315,6 +1316,8 @@ function buildPlan(ctx, now) {
 
   // ---- sales orders, free goods, bank transfers, PO quotation / prepayment / freight (scripts/demo/salesOrders.mjs)
   planSalesOrdersDemo({ at, api, owner, S, L, plan, addStock, onHand, basket, qDay, riyals, upload: api.upload });
+  // ---- fix-rb: vans and drivers, dispatch, driver change requests, grooming vans (scripts/demo/dispatch.mjs)
+  planDispatchDemo({ at, api, owner, S, L, ctx, basket, addStock, qDay });
 
   return plan;
 }

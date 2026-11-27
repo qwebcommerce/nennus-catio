@@ -329,12 +329,12 @@ export const HOUSES = [
 ];
 
 export const DELIVERY_AREAS = [
-  { name: "الخليج الغربي", nameEn: "West Bay", fee: "15.00" },
-  { name: "السد", nameEn: "Al Sadd", fee: "15.00" },
-  { name: "اللؤلؤة", nameEn: "The Pearl", fee: "20.00" },
-  { name: "لوسيل", nameEn: "Lusail", fee: "20.00" },
-  { name: "الريان", nameEn: "Al Rayyan", fee: "20.00" },
-  { name: "الوكرة", nameEn: "Al Wakrah", fee: "25.00" },
+  { name: "الخليج الغربي", nameEn: "West Bay", zone: "Doha Centre", fee: "15.00" },
+  { name: "السد", nameEn: "Al Sadd", zone: "Doha Centre", fee: "15.00" },
+  { name: "اللؤلؤة", nameEn: "The Pearl", zone: "North", fee: "20.00" },
+  { name: "لوسيل", nameEn: "Lusail", zone: "North", fee: "20.00" },
+  { name: "الريان", nameEn: "Al Rayyan", zone: "West", fee: "20.00" },
+  { name: "الوكرة", nameEn: "Al Wakrah", zone: "South", fee: "25.00" },
 ];
 
 export const DELIVERY_WINDOWS = [
