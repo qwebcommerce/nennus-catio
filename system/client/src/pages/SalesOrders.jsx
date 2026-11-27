@@ -10,6 +10,7 @@ import { formatDate, formatDateTime, qatarYmd } from "../utils/qatarDate.js";
 import { lineDirhams, money2, percentDirhams } from "../utils/soMoney.js";
 import { FileLink, PageTabs, ProofUpload, downloadExport, money, proofNeeded } from "../components/BizShared.jsx";
 import { PendingPayments, PendingStock } from "../components/PendingPanels.jsx";
+import { ConfirmBadge } from "../components/PaymentConfirmShared.jsx";
 
 const PAY_METHODS = ["CASH", "CARD", "BANK_TRANSFER", "FAWRAN", "PAYMENT_LINK"];
 const STATUSES = ["DRAFT", "CONFIRMED", "PARTLY_DELIVERED", "DELIVERED", "COMPLETED", "CANCELLED"];
@@ -673,6 +674,7 @@ function OrderDetail({ id, onBack, onEdit }) {
               <span>{statusLabel("payment", p.method, locale)}</span>
               {p.reference ? <span>· {p.reference}</span> : null}
               {p.proofFile ? <FileLink file={p.proofFile} label={t("so.viewProof")} /> : null}
+              <ConfirmBadge status={p.confirmStatus} reason={p.rejectReason} />
             </div>
           ))}
         </section>

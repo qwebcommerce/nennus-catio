@@ -179,6 +179,9 @@ export default function Finance() {
               <Row key={`out-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mo?.[key]} />
             ))}
             <Row label={t("fd.net")} value={summary.net} strong />
+            {/* fix-rd: recorded money the accountant has not confirmed is not in money in. */}
+            {summary.paymentConfirmation ? <Row label={t("pc.financeAwaiting")} value={summary.paymentConfirmation.awaiting} /> : null}
+            {summary.paymentConfirmation && Number(summary.paymentConfirmation.rejected) ? <Row label={t("pc.financeRejected")} value={summary.paymentConfirmation.rejected} /> : null}
             {channel ? <p className="fd-muted">{t("fd.channelNote")}</p> : null}
           </section>
           <section className="card fd-card">

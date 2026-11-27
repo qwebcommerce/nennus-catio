@@ -38,6 +38,7 @@ import * as C from "./demo/content.mjs";
 import { demoPdf, planSalesOrdersDemo } from "./demo/salesOrders.mjs";
 import { planB2bDemo } from "./demo/b2b.mjs";
 import { planDispatchDemo } from "./demo/dispatch.mjs";
+import { decidePayment, planPaymentConfirmDemo } from "./demo/payments.mjs";
 import * as A from "./demo/analytics.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
@@ -1058,13 +1059,15 @@ function buildPlan(ctx, now) {
     };
     body.amountOwed = riyals(body.lines.reduce((sum, l) => sum + (goods.find((g) => g.productId === l.productId && g.variantId === l.variantId)?.price || 0) * l.quantity, 0));
     if (payment) body.payment = { method: payment, ...(payment === "BANK" ? { reference: `FT${between(100000, 999999)}`, proof: demoProof() } : {}) };
-    const row = await staffCall(van, "POST", "/api/van-returns", body);
+    // fix-rd: the sales lady records the return into the van (the driver only moves it to the warehouse).
+    const row = await staffCall("cashier", "POST", "/api/van-returns", body);
     vr[key] = row;
     if (row.cashSessionId) drawer[van] = (drawer[van] || 0) - dirhams(row.amountOwed);
   };
-  const receiveReturn = (key) => async () => {
+  const receiveReturn = (key, van) => async () => {
     if (!vr[key]) return;
-    vr[key] = await api("POST", `/api/van-returns/${vr[key].id}/receive`, { version: vr[key].version, branchId: L.warehouse }, owner);
+    // fix-rd: the van's driver moves it to the warehouse from the driver dashboard.
+    vr[key] = await staffCall(van, "POST", `/api/van-returns/${vr[key].id}/receive`, { version: vr[key].version, branchId: L.warehouse });
     // Good lines are back in the warehouse's sellable stock (damaged ones are kept apart).
     for (const line of vr[key].lines || []) {
       if (line.condition !== "GOOD") continue;
@@ -1074,7 +1077,8 @@ function buildPlan(ctx, now) {
   };
   const payReturn = (key, van, method) => async () => {
     if (!vr[key] || vr[key].paymentStatus === "PAID") return;
-    const row = await staffCall(van, "POST", `/api/van-returns/${vr[key].id}/pay`, {
+    // fix-rd: paying the customer back is for sales (returns → refund), never the driver.
+    const row = await staffCall("cashier", "POST", `/api/van-returns/${vr[key].id}/pay`, {
       version: vr[key].version, method, ...(method === "BANK" ? { reference: `FT${between(100000, 999999)}`, proof: demoProof() } : {}),
     });
     vr[key] = row;
@@ -1086,13 +1090,13 @@ function buildPlan(ctx, now) {
     if (d1 != null) at(d1, "11:40", "van1 return (good, paid cash)", vanReturn("a", "van1", { customer: { name: "Fatima Al Kuwari", phone: "+974 5000 2101", note: "Wrong flavour, unopened" }, lines: [{ pick: 0, quantity: 2, condition: "GOOD" }], payment: "CASH" }));
     if (d2 != null) {
       at(d2, "12:10", "van2 return (good + damaged)", vanReturn("b", "van2", { customer: { name: "Ahmed Al Marri", phone: "+974 5000 2102", note: "One bag torn on delivery" }, lines: [{ pick: 1, quantity: 1, condition: "GOOD" }, { pick: 2, quantity: 1, condition: "DAMAGED" }] }));
-      at(d2, "13:40", "van2 receive return at warehouse", receiveReturn("b"));
+      at(d2, "13:40", "van2 receive return at warehouse", receiveReturn("b", "van2"));
       at(d2, "13:45", "van2 pay return by bank", payReturn("b", "van2", "BANK"));
     }
     if (d3 != null) at(d3, "12:20", "van1 return (still in the van, unpaid)", vanReturn("c", "van1", { customer: { name: "Sara Ibrahim", phone: "+974 5000 2103", note: "Ordered twice" }, lines: [{ pick: 3, quantity: 1, condition: "GOOD" }] }));
     if (d4 != null) {
       at(d4, "10:50", "van1 return (received, paid later)", vanReturn("d", "van1", { customer: { name: "Mohammed Hassan", phone: "+974 5000 2104", note: "Customer moved away" }, lines: [{ pick: 4, quantity: 2, condition: "GOOD" }] }));
-      at(d4, "12:30", "van1 receive return at warehouse", receiveReturn("d"));
+      at(d4, "12:30", "van1 receive return at warehouse", receiveReturn("d", "van1"));
       at(d4, "13:10", "van1 pay return in cash", payReturn("d", "van1", "CASH"));
     }
   }
@@ -1345,11 +1349,15 @@ function buildPlan(ctx, now) {
   for (const [d, amt] of [[-27, "140.00"], [-20, "155.00"], [-13, "150.00"], [-6, "160.00"]]) expense(d, "08:15", "OTHER", amt, "CASH", "Fuel – sales vans");
 
   // ---- sales orders, free goods, bank transfers, PO quotation / prepayment / freight (scripts/demo/salesOrders.mjs)
-  planSalesOrdersDemo({ at, api, owner, S, L, plan, addStock, onHand, basket, qDay, riyals, upload: api.upload });
+  // fix-rd: collected money is confirmed by someone other than who recorded it (accountant / supervisor).
+  const confirm = (key, who = "accountant") => decidePayment(api, T[who] || owner, key);
+  planSalesOrdersDemo({ at, api, owner, S, L, plan, addStock, onHand, basket, qDay, riyals, upload: api.upload, confirm });
   // ---- B2B / Wholesale: paid, invoiced-unpaid, delivered-not-invoiced (scripts/demo/b2b.mjs, fix-ra)
-  planB2bDemo({ at, api, T, owner, S, L, addStock, onHand, qDay, upload: api.upload });
+  planB2bDemo({ at, api, T, owner, S, L, addStock, onHand, qDay, upload: api.upload, confirm });
   // ---- fix-rb: vans and drivers, dispatch, driver change requests, grooming vans (scripts/demo/dispatch.mjs)
   planDispatchDemo({ at, api, owner, S, L, ctx, basket, addStock, qDay });
+  // ---- fix-rd: payments awaiting confirmation, a rejected one (scripts/demo/payments.mjs)
+  planPaymentConfirmDemo({ at, api, T, owner, S, L, ctx, basket, addStock, qDay, upload: api.upload });
 
   return plan;
 }

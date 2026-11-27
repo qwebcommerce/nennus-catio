@@ -10,6 +10,103 @@ import { statusLabel } from "../utils/statusLabels.js";
 import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { ChangeSummary, JobFacts, JobLines, KindBadge, StatusBadge, lineName, money, qtyText } from "../components/DispatchShared.jsx";
 import { DamagedList, ReturnCard, VanReturnForm } from "./VehicleDashboard.jsx";
+import { ProofUpload } from "../components/BizShared.jsx";
+
+/**
+ * fix-rd: "Record payment collected" — money the driver took on delivery. Saved as awaiting the
+ * accountant's confirmation (a bank transfer needs its proof file).
+ */
+function CollectForm({ item, vq, onDone, onCancel }) {
+  const { t } = useI18n();
+  const [amount, setAmount] = useState(String(item.toCollect || ""));
+  const [method, setMethod] = useState("CASH");
+  const [reference, setReference] = useState("");
+  const [proofFileId, setProofFileId] = useState("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (method === "BANK_TRANSFER" && !proofFileId) return setError(t("drv.collectProofMissing"));
+    setBusy(true);
+    try {
+      const r = await api(`/api/driver/jobs/${item.jobId}/collect${vq}`, { method: "POST", body: { version: item.version, amount, method, reference, proofFileId: proofFileId || undefined, note } });
+      onDone(r);
+    } catch (x) {
+      setError(editErrorMessage(x, t));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="vr-card rb-sub" onSubmit={submit} data-testid="collect-form">
+      <h3 className="rb-h3">{t("drv.collect")}</h3>
+      <p className="vr-muted">{t("drv.collectHint")}</p>
+      {error ? <div role="alert" className="vr-alert" data-testid="collect-error">{error}</div> : null}
+      <div className="vr-grid">
+        <label className="vr-field"><span>{t("drv.collectAmount")}</span><input type="number" inputMode="decimal" min="0.01" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="collect-amount" /></label>
+        <label className="vr-field"><span>{t("drv.collectMethod")}</span>
+          <select value={method} onChange={(e) => setMethod(e.target.value)} data-testid="collect-method">
+            <option value="CASH">{t("pc.method.CASH")}</option>
+            <option value="BANK_TRANSFER">{t("pc.method.BANK_TRANSFER")}</option>
+          </select>
+        </label>
+        {method === "BANK_TRANSFER" ? (
+          <>
+            <label className="vr-field"><span>{t("drv.collectReference")}</span><input value={reference} onChange={(e) => setReference(e.target.value)} data-testid="collect-reference" /></label>
+            <ProofUpload value={proofFileId} onChange={setProofFileId} required label={t("drv.proof")} />
+          </>
+        ) : null}
+        <label className="vr-field"><span>{t("dsp.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} /></label>
+      </div>
+      <div className="vr-actions">
+        <button type="submit" className="btn-touch vr-btn vr-btn--primary" disabled={busy} data-testid="collect-save">{t("drv.collectSave")}</button>
+        <button type="button" className="btn-touch vr-btn vr-btn--ghost" onClick={onCancel}>{t("common.cancel")}</button>
+      </div>
+    </form>
+  );
+}
+
+/** fix-rd: drivers add a new customer (name, phone, optional address / area, notes). */
+function NewCustomerForm({ onDone, onCancel }) {
+  const { t } = useI18n();
+  const [f, setF] = useState({ name: "", phone: "", address: "", area: "", notes: "" });
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (!f.name.trim()) return setError(t("drv.customerNeedName"));
+    setBusy(true);
+    try {
+      const c = await api("/api/customers", { method: "POST", body: { ...f, via: "driver" } });
+      onDone(c);
+    } catch (x) {
+      setError(x.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="card vr-card" onSubmit={submit} data-testid="customer-form">
+      <h2>{t("drv.newCustomer")}</h2>
+      {error ? <div role="alert" className="vr-alert" data-testid="customer-error">{error}</div> : null}
+      <div className="vr-grid">
+        <label className="vr-field"><span>{t("drv.customerName")}</span><input value={f.name} onChange={set("name")} data-testid="customer-name" /></label>
+        <label className="vr-field"><span>{t("drv.customerPhone")}</span><input type="tel" value={f.phone} onChange={set("phone")} data-testid="customer-phone" /></label>
+        <label className="vr-field"><span>{t("drv.customerAddress")}</span><input value={f.address} onChange={set("address")} data-testid="customer-address" /></label>
+        <label className="vr-field"><span>{t("drv.customerArea")}</span><input value={f.area} onChange={set("area")} data-testid="customer-area" /></label>
+        <label className="vr-field"><span>{t("drv.customerNotes")}</span><input value={f.notes} onChange={set("notes")} data-testid="customer-notes" /></label>
+      </div>
+      <div className="vr-actions">
+        <button type="submit" className="btn-touch vr-btn vr-btn--primary" disabled={busy} data-testid="customer-save">{t("drv.customerSave")}</button>
+        <button type="button" className="btn-touch vr-btn vr-btn--ghost" onClick={onCancel}>{t("common.cancel")}</button>
+      </div>
+    </form>
+  );
+}
 
 const POLL_MS = 20000;
 
@@ -117,6 +214,12 @@ function OrderCard({ item, vq, isNew, canAct, onChanged, setError, setNotice }) 
       ) : null}
       <JobFacts item={item} />
       <JobLines lines={item.lines} />
+      {Number(item.awaitingConfirmation) > 0 ? <p className="vr-muted" data-testid="order-awaiting">{t("drv.awaiting", { amount: money(item.awaitingConfirmation, t) })}</p> : null}
+      {canAct && item.collectable && mode !== "collect" ? (
+        <div className="vr-actions">
+          <button type="button" className="btn-touch vr-btn" onClick={() => setMode("collect")} data-testid="collect-btn">{t("drv.collect")} · {money(item.toCollect, t)}</button>
+        </div>
+      ) : null}
       {canAct && item.status !== "DELIVERED" ? (
         <div className="vr-actions">
           {item.status === "ASSIGNED" && !booking ? (
@@ -150,6 +253,9 @@ function OrderCard({ item, vq, isNew, canAct, onChanged, setError, setNotice }) 
           <button type="button" className="btn-touch vr-btn vr-btn--primary" disabled={busy || !reason.trim()} onClick={() => act("decline", { reason }, "drv.declined")} data-testid="confirm-decline">{t("drv.confirmDecline")}</button>
         </div>
       ) : null}
+      {mode === "collect" ? (
+        <CollectForm item={item} vq={vq} onCancel={() => setMode("")} onDone={async (r) => { setMode(""); setNotice(t("drv.collectSaved", { amount: money(r.confirmation?.amount, t) })); await onChanged(); }} />
+      ) : null}
       {mode === "change" ? <ChangeForm item={item} vq={vq} onCancel={() => setMode("")} onDone={async () => { setMode(""); setNotice(t("drv.changeSent")); await onChanged(); }} /> : null}
       {item.deliveredAt ? <p className="vr-muted">{t("drv.deliveredAt", { at: formatDateTime(item.deliveredAt, locale) })}</p> : null}
     </li>
@@ -169,6 +275,7 @@ export default function DriverDashboard() {
   const [vanData, setVanData] = useState(null);
   const [options, setOptions] = useState({ staff: [], locations: [] });
   const [showReturnForm, setShowReturnForm] = useState(false);
+  const [showCustomerForm, setShowCustomerForm] = useState(false);
   const unseenRef = useRef(null);
   // Orders that were new when this screen loaded keep their "New" mark until the driver acts.
   const [fresh, setFresh] = useState(() => new Set());
@@ -261,12 +368,14 @@ export default function DriverDashboard() {
           {data.van.branch ? <div><dt>{t("vr.vanLocation")}</dt><dd>{branchDisplayName(data.van.branch, locale)}</dd></div> : null}
           <div><dt>{t("drv.todayDone")}</dt><dd>{data.counts.deliveredToday}</dd></div>
         </dl>
-        {canModule("pos", "create") && data.van.branch ? (
-          <div className="vr-actions">
-            <Link to="/pos" className="btn-touch vr-btn" data-testid="open-till">{t("drv.openTill")}</Link>
-          </div>
-        ) : null}
+        <div className="vr-actions">
+          {canModule("pos", "create") && data.van.branch ? <Link to="/pos" className="btn-touch vr-btn" data-testid="open-till">{t("drv.openTill")}</Link> : null}
+          {canModule("customers", "create") ? <button type="button" className="btn-touch vr-btn" onClick={() => setShowCustomerForm(true)} data-testid="new-customer">{t("drv.newCustomer")}</button> : null}
+        </div>
       </section>
+      {showCustomerForm ? (
+        <NewCustomerForm onCancel={() => setShowCustomerForm(false)} onDone={(c) => { setShowCustomerForm(false); setNotice(t("drv.customerSaved", { name: c.name })); }} />
+      ) : null}
 
       <div className="vr-tabs rb-tabs" role="tablist">
         {tabs.map((k) => (
@@ -342,12 +451,13 @@ export default function DriverDashboard() {
               <h2>{t("vr.returns")}</h2>
               {canModule("returns", "create") && data.van.branch ? <button type="button" className="btn-touch vr-btn vr-btn--primary" onClick={() => setShowReturnForm(true)} data-testid="new-return">{t("vr.newReturn")}</button> : null}
             </div>
+            {options.ownVanId ? <p className="vr-muted" data-testid="returns-hint">{t("drv.returnsHint")}</p> : null}
             {showReturnForm && data.van.branch ? (
               <VanReturnForm van={data.van.branch} vehicle={data.van} options={options} onCancel={() => setShowReturnForm(false)} onSaved={async (row) => { setShowReturnForm(false); setNotice(t("vr.saved", { reference: row.reference })); await Promise.all([load(), loadVan(data.van.id)]); }} />
             ) : null}
             {vanData?.returns?.length ? (
               <ul className="vr-list">
-                {vanData.returns.map((row) => <ReturnCard key={`${row.id}:${row.version}`} row={row} options={options} onChanged={() => loadVan(data.van.id)} setError={setError} />)}
+                {vanData.returns.map((row) => <ReturnCard key={`${row.id}:${row.version}`} row={row} options={options} driverMode={Boolean(options.ownVanId)} onChanged={() => Promise.all([load(), loadVan(data.van.id)])} setError={setError} />)}
               </ul>
             ) : <p className="vr-muted">{t("vr.noReturns")}</p>}
           </section>
@@ -367,7 +477,7 @@ export default function DriverDashboard() {
           </dl>
           <ul className="vr-simple">
             {data.pendingPayments.orders.map((o) => (
-              <li key={o.key}><span>{o.reference} · {t(`dsp.kind.${o.kind}`)} · {o.customer?.name || ""}</span><b>{money(o.toCollect, t)}</b></li>
+              <li key={o.key}><span>{o.reference} · {t(`dsp.kind.${o.kind}`)} · {o.customer?.name || ""}{Number(o.awaitingConfirmation) > 0 ? ` · ${t("drv.awaiting", { amount: money(o.awaitingConfirmation, t) })}` : ""}</span><b>{money(o.toCollect, t)}</b></li>
             ))}
             {data.pendingPayments.returns.map((r) => (
               <li key={r.id}><span>{r.reference} · {t("drv.vanReturn")} · {r.customerName || ""}</span><b>{money(r.amountOwed, t)}</b></li>

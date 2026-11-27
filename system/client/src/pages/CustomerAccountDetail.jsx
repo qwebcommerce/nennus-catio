@@ -6,6 +6,7 @@ import { formatDateTime } from "../utils/qatarDate.js";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { FileLink, ProofUpload, proofNeeded } from "../components/BizShared.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
+import { ConfirmBadge } from "../components/PaymentConfirmShared.jsx";
 
 export default function CustomerAccountDetail() {
   const { customerId } = useParams();
@@ -113,6 +114,7 @@ export default function CustomerAccountDetail() {
           <strong>
             {bal.toFixed(2)} {t("common.currency")}
           </strong>
+          {Number(customer.accountPending) > 0 ? <span className="fd-muted" data-testid="account-awaiting">{t("pc.awaitingCol")}: {Number(customer.accountPending).toFixed(2)} {t("common.currency")}</span> : null}
         </div>
       </header>
 
@@ -194,6 +196,7 @@ export default function CustomerAccountDetail() {
                         </span>
                         {row.paymentMethod ? <div className="fd-muted">{statusLabel("payment", row.paymentMethod, locale)}{row.reference ? ` · ${row.reference}` : ""}</div> : null}
                         {row.proofFile ? <FileLink file={row.proofFile} label={t("so.viewProof")} /> : null}
+                        {row.entryType === "PAYMENT" ? <div><ConfirmBadge status={row.confirmStatus} reason={row.rejectReason} /></div> : null}
                       </td>
                       <td className="ca-detail-table__amount">
                         {Number(row.amount).toFixed(2)} {t("common.currency")}

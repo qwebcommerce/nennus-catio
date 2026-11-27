@@ -8,6 +8,7 @@ import { formatDate, formatDateTime, qatarYmd } from "../utils/qatarDate.js";
 import { lineDirhams, money2 } from "../utils/soMoney.js";
 import { FileLink, PageTabs, ProofUpload, money, proofNeeded } from "../components/BizShared.jsx";
 import PosSubNav from "../components/PosSubNav.jsx";
+import { ConfirmBadge } from "../components/PaymentConfirmShared.jsx";
 
 /**
  * B2B / Wholesale (POS area): delivery note → invoice → cash receipt, on the sales-orders engine
@@ -716,6 +717,7 @@ function InvoiceDetail({ id, meta, onBack, onOpenNote, onOpenReceipt }) {
             <li key={r.id}>
               <button type="button" className="fd-linkish" onClick={() => onOpenReceipt(r.id)}>{r.reference}</button> · {formatDateTime(r.paidAt, locale)} · {t(`b2b.method.${r.method}`)} · {money(r.amount)} · {t("b2b.collectedBy")} {personName(r.collectedBy, locale)}
               {r.proofFile ? <> · <FileLink file={r.proofFile} label={t("so.viewProof")} /></> : null}
+              {" "}<ConfirmBadge status={r.confirmStatus} reason={r.rejectReason} />
             </li>
           ))}
           {!inv.receipts.length ? <li className="fd-muted">{t("b2b.noReceipts")}</li> : null}
@@ -851,7 +853,7 @@ function ReceiptDetail({ id, onBack, onOpenInvoice }) {
         {printView ? <button type="button" className="btn-touch" onClick={() => window.print()}>{t("so.print")}</button> : null}
       </div>
       {printView ? doc : null}
-      <h2>{r.reference} <span className="biz-badge">{t(`b2b.method.${r.method}`)}</span></h2>
+      <h2>{r.reference} <span className="biz-badge">{t(`b2b.method.${r.method}`)}</span> <ConfirmBadge status={r.confirmStatus} reason={r.rejectReason} /></h2>
       <section className="card fd-card">
         <div><strong>{custName(r.customer)}</strong></div>
         <div>{t("b2b.invoice")}: <button type="button" className="fd-linkish" onClick={() => onOpenInvoice(r.invoiceId)}>{r.invoice?.reference}</button></div>
@@ -901,7 +903,7 @@ function PendingByCustomer({ onOpenInvoice, onOpenNote, onInvoiced }) {
           {c.invoices.length ? (
             <div className="b2b-table-wrap">
               <table className="b2b-table">
-                <thead><tr><th>{t("b2b.invoice")}</th><th>{t("b2b.invoiceDate")}</th><th>{t("so.dueDate")}</th><th>{t("common.total")}</th><th>{t("b2b.owed")}</th><th /></tr></thead>
+                <thead><tr><th>{t("b2b.invoice")}</th><th>{t("b2b.invoiceDate")}</th><th>{t("so.dueDate")}</th><th>{t("common.total")}</th><th>{t("b2b.owed")}</th><th>{t("pc.awaiting")}</th><th /></tr></thead>
                 <tbody>
                   {c.invoices.map((inv) => (
                     <tr key={inv.id} className={inv.overdue ? "b2b-overdue" : ""}>
@@ -910,6 +912,7 @@ function PendingByCustomer({ onOpenInvoice, onOpenNote, onInvoiced }) {
                       <td>{dayText(inv.dueDate, locale)}</td>
                       <td>{money(inv.total)}</td>
                       <td>{money(inv.owed)}</td>
+                      <td data-testid="b2b-pending-awaiting">{Number(inv.awaiting) ? money(inv.awaiting) : "—"}</td>
                       <td>{inv.overdue ? <span className="biz-badge biz-badge--bad">{t("b2b.daysOverdue", { n: inv.daysOverdue })}</span> : <StatusBadge kind="invoice" value={inv.status} />}</td>
                     </tr>
                   ))}

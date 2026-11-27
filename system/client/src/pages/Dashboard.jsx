@@ -26,6 +26,7 @@ import { printPaperClass } from "../utils/printPaper.js";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { LowStockList } from "../components/LowStockList.jsx";
 import { DispatchDashboardCards } from "../components/DispatchDashboardCards.jsx";
+import { PaymentConfirmDashboardCard } from "../components/PaymentConfirmShared.jsx";
 import { ForwardArrow } from "../components/ForwardArrow.jsx";
 
 const tooltipStyle = {
@@ -179,6 +180,8 @@ export default function Dashboard() {
         </header>
         {/* fix-rb: dispatch / driver-approval counts */}
         <DispatchDashboardCards />
+        {/* fix-rd: money awaiting the accountant's confirmation */}
+        <PaymentConfirmDashboardCard />
 
         {!summary && !canModule("pos", "view") ? null : !summary ? (
           <div className="dash-shell-card dash-loading">{t("common.loading")}</div>

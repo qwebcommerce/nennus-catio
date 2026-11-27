@@ -72,6 +72,7 @@ export function PendingPayments({ side = "" }) {
               <th>{t("fd.reference")}</th>
               <th className="num">{t("fd.amount")}</th>
               <th className="num">{t("fd.bills.paidCol")}</th>
+              <th className="num">{t("pc.awaitingCol")}</th>
               <th className="num">{t("fd.bills.owed")}</th>
             </tr>
           </thead>
@@ -87,10 +88,11 @@ export function PendingPayments({ side = "" }) {
                 <td>{r.salesOrderId ? <Link to={`/sales-orders?open=${r.salesOrderId}`}>{r.reference}</Link> : r.reference || "—"}</td>
                 <td className="num">{money(r.amount)}</td>
                 <td className="num">{money(r.paid)}</td>
+                <td className="num" data-testid="pending-awaiting">{Number(r.awaiting) ? money(r.awaiting) : "—"}</td>
                 <td className="num"><strong>{money(r.owed)}</strong></td>
               </tr>
             ))}
-            {!rows.length ? <tr><td colSpan={7}>{t("so.nothingPending")}</td></tr> : null}
+            {!rows.length ? <tr><td colSpan={8}>{t("so.nothingPending")}</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -134,6 +136,7 @@ export function PendingPayments({ side = "" }) {
                 <div className="biz-kpi"><span>{t("so.owedToUs")}</span><strong>{money(data.totals.owedToUs)}</strong></div>
                 <div className="biz-kpi biz-kpi--bad"><span>{t("so.overdue")}</span><strong>{money(data.totals.overdueToUs)}</strong></div>
                 <div className="biz-kpi"><span>{t("so.dueThisWeek")}</span><strong>{money(data.totals.dueThisWeekToUs)}</strong></div>
+                <div className="biz-kpi" data-testid="kpi-awaiting"><span>{t("pc.awaitingCol")}</span><strong>{money(data.totals.awaitingToUs)}</strong></div>
               </>
             ) : null}
             {side !== "tous" ? (

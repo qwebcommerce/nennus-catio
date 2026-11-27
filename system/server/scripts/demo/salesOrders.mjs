@@ -32,6 +32,8 @@ export function demoPdf(title) {
 
 export function planSalesOrdersDemo(h) {
   const { at, api, owner, S, L, addStock, onHand, basket, qDay, riyals, upload } = h;
+  // fix-rd: the owner records payments; the accountant confirms them (scripts/demo/payments.mjs).
+  const confirm = async (r) => { if (h.confirm && r?.payment?.id) await h.confirm(`SO_PAYMENT:${r.payment.id}`); };
   const so = {};
   const piece = () => S.items.filter((it) => it.takesStock && !it.isHouse && it.sellBy !== "WEIGHT" && it.price >= 2000);
   /** n lines the warehouse can still give (keeps 3 back for transfers). */
@@ -71,7 +73,7 @@ export function planSalesOrdersDemo(h) {
     if (!so[key]) return;
     const body = { amount: amount === "all" ? riyals(Math.round(so[key].total * 100)) : amount, method, reference };
     if (method === "BANK_TRANSFER") body.proofFileId = await proof(`Transfer ${reference}`);
-    await api("POST", `/api/sales-orders/${so[key].id}/payments`, body, owner);
+    await confirm(await api("POST", `/api/sales-orders/${so[key].id}/payments`, body, owner));
   };
   const deliver = (key, share = 1) => async () => {
     if (!so[key]) return;
@@ -95,7 +97,7 @@ export function planSalesOrdersDemo(h) {
     if (!first) return;
     const body = { amount: first.owed, method, reference };
     if (method === "BANK_TRANSFER") body.proofFileId = await proof(`Transfer ${reference}`);
-    await api("POST", `/api/sales-orders/${order.id}/payments`, body, owner);
+    await confirm(await api("POST", `/api/sales-orders/${order.id}/payments`, body, owner));
   };
 
   // Business customers.

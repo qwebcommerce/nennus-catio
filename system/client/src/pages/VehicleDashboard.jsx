@@ -54,6 +54,12 @@ export function VanReturnForm({ van, vehicle, options, onSaved, onCancel }) {
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [collectedBy, setCollectedBy] = useState(user?.id || "");
+  // fix-rd: sales record the return; "collected by" defaults to the van's driver.
+  const vanDriverId = (options.vans || []).find((v) => v.id === van?.id)?.driverId || "";
+  const [pickedCollector, setPickedCollector] = useState(false);
+  useEffect(() => {
+    if (!pickedCollector && vanDriverId) setCollectedBy(vanDriverId);
+  }, [vanDriverId, pickedCollector]);
   const [date, setDate] = useState(qatarYmd());
   const [amountOwed, setAmountOwed] = useState("0");
   const [note, setNote] = useState("");
@@ -159,7 +165,7 @@ export function VanReturnForm({ van, vehicle, options, onSaved, onCancel }) {
         </label>
         <label className="vr-field">
           <span>{t("vr.collectedBy")}</span>
-          <select value={collectedBy} onChange={(e) => setCollectedBy(e.target.value)} data-testid="collected-by">
+          <select value={collectedBy} onChange={(e) => { setCollectedBy(e.target.value); setPickedCollector(true); }} data-testid="collected-by">
             {options.staff.map((s) => <option key={s.id} value={s.id}>{personName(s, locale)}</option>)}
           </select>
         </label>
@@ -205,10 +211,11 @@ export function VanReturnForm({ van, vehicle, options, onSaved, onCancel }) {
 }
 
 /** One return: lines, payment and the receive / mark-paid actions. */
-export function ReturnCard({ row, options, onChanged, setError }) {
+export function ReturnCard({ row, options, onChanged, setError, driverMode = false }) {
   const { t, locale } = useI18n();
   const { canModule } = useAuth();
-  const [open, setOpen] = useState(false);
+  // fix-rd: on the driver dashboard, returns still in the van show their lines and photos at once.
+  const [open, setOpen] = useState(driverMode && row.status === "IN_VAN");
   const [detail, setDetail] = useState(null);
   const [mode, setMode] = useState("");
   const [method, setMethod] = useState("CASH");
@@ -218,11 +225,12 @@ export function ReturnCard({ row, options, onChanged, setError }) {
   const [broughtBy, setBroughtBy] = useState(row.collectedBy?.id || "");
   const [busy, setBusy] = useState(false);
   const canReceive = canModule("returns", "edit");
-  const canPay = canModule("returns", "create") || canModule("returns", "edit");
+  // fix-rd: paying the customer back is returns → refund (sales, accountant), never the driver.
+  const canPay = canModule("returns", "refund");
 
   useEffect(() => {
     if (!locationId && options.locations?.length) {
-      const wh = options.locations.find((l) => l.kind === "WAREHOUSE") || options.locations[0];
+      const wh = options.locations.find((l) => l.id === options.defaultLocationId) || options.locations.find((l) => l.kind === "WAREHOUSE") || options.locations[0];
       setLocationId(wh.id);
     }
   }, [options.locations, locationId]);
@@ -281,7 +289,7 @@ export function ReturnCard({ row, options, onChanged, setError }) {
       </dl>
       <div className="vr-actions">
         {row.status === "IN_VAN" && canReceive ? (
-          <button type="button" className="btn-touch vr-btn" onClick={() => setMode(mode === "receive" ? "" : "receive")} data-testid="receive-btn">{t("vr.receive")}</button>
+          <button type="button" className="btn-touch vr-btn" onClick={() => setMode(mode === "receive" ? "" : "receive")} data-testid="receive-btn">{t(driverMode ? "drv.moveToWarehouse" : "vr.receive")}</button>
         ) : null}
         {row.paymentStatus === "UNPAID" && Number(row.amountOwed) > 0 && canPay ? (
           <button type="button" className="btn-touch vr-btn" onClick={() => setMode(mode === "pay" ? "" : "pay")} data-testid="pay-btn">{t("vr.markPaid")}</button>
@@ -295,15 +303,17 @@ export function ReturnCard({ row, options, onChanged, setError }) {
               {(options.locations || []).map((l) => <option key={l.id} value={l.id}>{branchDisplayName(l, locale)}</option>)}
             </select>
           </label>
-          <label className="vr-field">
-            <span>{t("vr.broughtBackBy")}</span>
-            <select value={broughtBy} onChange={(e) => setBroughtBy(e.target.value)} data-testid="brought-by">
-              {options.staff.map((s) => <option key={s.id} value={s.id}>{personName(s, locale)}</option>)}
-            </select>
-          </label>
-          <p className="vr-muted">{t("vr.receiveHint")}</p>
-          <button type="button" className="btn-touch vr-btn vr-btn--primary" disabled={busy} onClick={() => act("receive", { branchId: locationId, broughtBackByUserId: broughtBy })} data-testid="confirm-receive">
-            {t("vr.confirmReceive")}
+          {driverMode ? null : (
+            <label className="vr-field">
+              <span>{t("vr.broughtBackBy")}</span>
+              <select value={broughtBy} onChange={(e) => setBroughtBy(e.target.value)} data-testid="brought-by">
+                {options.staff.map((s) => <option key={s.id} value={s.id}>{personName(s, locale)}</option>)}
+              </select>
+            </label>
+          )}
+          <p className="vr-muted">{t(driverMode ? "drv.moveHint" : "vr.receiveHint")}</p>
+          <button type="button" className="btn-touch vr-btn vr-btn--primary" disabled={busy} onClick={() => act("receive", driverMode ? { branchId: locationId } : { branchId: locationId, broughtBackByUserId: broughtBy })} data-testid="confirm-receive">
+            {t(driverMode ? "drv.confirmMove" : "vr.confirmReceive")}
           </button>
         </div>
       ) : null}

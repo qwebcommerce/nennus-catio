@@ -49,6 +49,9 @@ import B2B from "./pages/B2B.jsx";
 import DriverDashboard from "./pages/DriverDashboard.jsx";
 import Dispatch from "./pages/Dispatch.jsx";
 import DriverApprovals from "./pages/DriverApprovals.jsx";
+// fix-rd: payment confirmation queue, sales' van returns desk
+import PaymentConfirmations from "./pages/PaymentConfirmations.jsx";
+import VanReturnsDesk from "./pages/VanReturnsDesk.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
 // Business analytics (fix-rc).
@@ -172,6 +175,9 @@ export default function App() {
           <Route path="/driver" element={<Protected module={["driver", "view"]}><DriverDashboard /></Protected>} />
           <Route path="/dispatch" element={<Protected module={["dispatch", "view"]}><Dispatch /></Protected>} />
           <Route path="/driver-approvals" element={<Protected module={["driverApprovals", "view"]}><DriverApprovals /></Protected>} />
+          {/* fix-rd: payment confirmation, van returns desk */}
+          <Route path="/payment-confirmations" element={<Protected module={["paymentConfirm", "view"]}><PaymentConfirmations /></Protected>} />
+          <Route path="/van-returns" element={<Protected module={["returns", "view"]}><VanReturnsDesk /></Protected>} />
           <Route
             path="/sales"
             element={

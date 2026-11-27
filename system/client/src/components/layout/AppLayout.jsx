@@ -10,6 +10,7 @@ import { SidebarIcon } from "../SidebarIcon.jsx";
 import { LanguageSwitcher } from "../LanguageSwitcher.jsx";
 import { FloatingCalculator } from "../FloatingCalculator.jsx";
 import { DispatchNavLinks } from "../DispatchNav.jsx";
+import { PaymentConfirmNavLinks } from "../PaymentConfirmShared.jsx";
 
 const NAV_SECTION_IDS = ["dashboard", "inventory", "customers", "admin"];
 
@@ -232,6 +233,8 @@ export function AppLayout() {
         <nav className="app-sidebar-nav">
           {/* fix-rb: driver / dispatch links; a DRIVER sees only these, the van till and the cash drawer. */}
           <DispatchNavLinks />
+          {/* fix-rd: payment confirmations (with count), sales' van returns desk */}
+          <PaymentConfirmNavLinks />
           {user?.role === "DRIVER" ? (
             <>
               {can("pos") ? (

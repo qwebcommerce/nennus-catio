@@ -53,11 +53,15 @@ export function planB2bDemo(h) {
     if (!invoice) return;
     const half = (Math.floor(Math.round(Number(invoice.total) * 100) / 2) / 100).toFixed(2);
     const proofFileId = (await upload("/api/files", demoPdf("Transfer QNB-AB-4410"), "QNB-AB-4410.pdf", "application/pdf", as("accountant"))).id;
-    invoice = (await api("POST", `/api/b2b/invoices/${invoice.id}/receipts`, { amount: half, method: "BANK_TRANSFER", bankReference: "QNB-AB-4410", proofFileId }, as("accountant"))).invoice;
+    const r = await api("POST", `/api/b2b/invoices/${invoice.id}/receipts`, { amount: half, method: "BANK_TRANSFER", bankReference: "QNB-AB-4410", proofFileId }, as("accountant"));
+    // fix-rd: the accountant recorded it, so the supervisor confirms it.
+    if (h.confirm) await h.confirm(`B2B_RECEIPT:${r.receipt.id}`, "supervisor");
+    invoice = await api("GET", `/api/b2b/invoices/${invoice.id}`, null, as("accountant"));
   });
   at(-8, "16:40", "set B2B receipt cash by driver", async () => {
     if (!invoice) return;
-    await api("POST", `/api/b2b/invoices/${invoice.id}/receipts`, { amount: invoice.balance, method: "CASH", collectedById: S.staff.van1 || undefined, note: "Cash collected on the delivery round" }, as("accountant"));
+    const r = await api("POST", `/api/b2b/invoices/${invoice.id}/receipts`, { amount: invoice.balance, method: "CASH", collectedById: S.staff.van1 || undefined, note: "Cash collected on the delivery round" }, as("accountant"));
+    if (h.confirm) await h.confirm(`B2B_RECEIPT:${r.receipt.id}`, "supervisor");
   });
   // 2) invoiced, unpaid
   note("unpaid", -6, "09:20", 3, 30);
