@@ -36,6 +36,7 @@ import "../src/loadEnv.js";
 import { DemoRecords, countByTable } from "./demo/records.mjs";
 import * as C from "./demo/content.mjs";
 import { demoPdf, planSalesOrdersDemo } from "./demo/salesOrders.mjs";
+import { planB2bDemo } from "./demo/b2b.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -1315,6 +1316,8 @@ function buildPlan(ctx, now) {
 
   // ---- sales orders, free goods, bank transfers, PO quotation / prepayment / freight (scripts/demo/salesOrders.mjs)
   planSalesOrdersDemo({ at, api, owner, S, L, plan, addStock, onHand, basket, qDay, riyals, upload: api.upload });
+  // ---- B2B / Wholesale: paid, invoiced-unpaid, delivered-not-invoiced (scripts/demo/b2b.mjs, fix-ra)
+  planB2bDemo({ at, api, T, owner, S, L, addStock, onHand, qDay, upload: api.upload });
 
   return plan;
 }
