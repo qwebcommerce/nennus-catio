@@ -43,6 +43,24 @@ export function ShopGroomingBook() {
     petName: "", breed: "", ageText: "", areaId: "", address: "", note: "", code: "",
   });
   const [msg, setMsg] = useState("");
+  // fix-re: the price with a coupon (or automatic offer), from the server, before payment.
+  const [quote, setQuote] = useState(null);
+  const [quoteMsg, setQuoteMsg] = useState("");
+  const askQuote = async (next = form) => {
+    setQuoteMsg("");
+    try {
+      setQuote(await shopApi("/api/shop/grooming/quote", { method: "POST", body: { packageId, visitKind: next.visitKind, code: next.code, email: next.email } }));
+    } catch (err) {
+      setQuote(null);
+      setQuoteMsg(err.message);
+    }
+  };
+  useEffect(() => {
+    if (pack && (quote || form.code)) askQuote();
+  }, [form.visitKind]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (pack) askQuote({ ...form, code: "" });
+  }, [pack]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     shopApi(`/api/shop/grooming/packages/${packageId}`).then(setPack).catch((e) => setMsg(e.message));
     shopApi("/api/shop/meta").then(setMeta).catch(() => {});
@@ -73,7 +91,13 @@ export function ShopGroomingBook() {
       <h1>{locale === "en" ? pack.nameEn || pack.name : pack.name}</h1>
       <p className="site-flow__lead">{locale === "en" ? pack.includedEn || pack.included : pack.included}</p>
       <div className="site-flow__card">
-        <div className="site-flow__total"><span>{t("shop.pay")}</span><span>{(Number(pack.price) + homeFee).toFixed(2)} QAR</span></div>
+        <div className="site-flow__total" data-testid="booking-total"><span>{t("shop.pay")}</span><span>{(quote ? Number(quote.total) : Number(pack.price) + homeFee).toFixed(2)} QAR</span></div>
+        {quote && Number(quote.discount) > 0 ? (
+          <div className="site-flow__alert site-flow__alert--ok" data-testid="booking-discount">
+            {quote.coupon ? t("cp.applied", { c: quote.coupon.code, d: Number(quote.discount).toFixed(2) }) : t("cp.promoApplied", { d: Number(quote.discount).toFixed(2) })}
+            {" · "}{t("cp.priceLine", { g: Number(quote.gross).toFixed(2), d: Number(quote.discount).toFixed(2), t: Number(quote.total).toFixed(2) })}
+          </div>
+        ) : null}
         <div className="site-flow__choice" role="group">
           <button type="button" className={form.visitKind === "SHOP" ? "is-active" : ""} onClick={() => setForm({ ...form, visitKind: "SHOP" })}>{t("shop.atShop")}</button>
           <button type="button" className={form.visitKind === "HOME" ? "is-active" : ""} onClick={() => setForm({ ...form, visitKind: "HOME" })}>{t("shop.homeVisit")}</button>
@@ -112,7 +136,11 @@ export function ShopGroomingBook() {
           <label className="site-flow__field"><span>{t("shop.breed")}</span><input required value={form.breed} onChange={set("breed")} /></label>
         </div>
         <label className="site-flow__field"><span>{t("shop.age")}</span><input required value={form.ageText} onChange={set("ageText")} /></label>
-        <label className="site-flow__field"><span>{t("shop.code")}</span><input value={form.code} onChange={set("code")} /></label>
+        <div className="site-flow__pair" style={{ alignItems: "end" }}>
+          <label className="site-flow__field"><span>{t("cp.codeField")}</span><input name="couponCode" dir="ltr" autoCapitalize="characters" value={form.code} onChange={(e) => { setForm({ ...form, code: e.target.value }); setQuoteMsg(""); }} /></label>
+          <button type="button" className="button button--secondary" onClick={() => askQuote()}>{t("cp.apply")}</button>
+        </div>
+        {quoteMsg ? <div className="site-flow__alert" role="alert" data-testid="coupon-error">{quoteMsg}</div> : null}
         <button className="button button--primary" type="submit">{t("shop.pay")}</button>
         {msg ? <div className="site-flow__alert">{msg}</div> : null}
       </div>
@@ -150,6 +178,7 @@ export function ShopBookings() {
           <div>{t("shop.reference")}: {one.reference}</div>
           <div>{statusLabel("booking", one.status, locale)} · {qatarDateTime(one.startAt, locale)} ({t("shop.qatarTime")})</div>
           <div>{Number(one.amount).toFixed(2)} QAR</div>
+          {one.couponCode ? <div>{t("cp.couponOnBooking", { c: one.couponCode, d: Number(one.couponDiscount).toFixed(2) })}</div> : null}
           {one.note ? <div>{t("shop.visitNote")}: {one.note}</div> : null}
           {one.canCancel ? (
             <>

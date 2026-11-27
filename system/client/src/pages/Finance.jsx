@@ -155,6 +155,8 @@ export default function Finance() {
             <Row indent label={t("fd.bankTaken")} value={mi?.bankSales} />
             <Row indent label={t("fd.fawranTaken")} value={mi?.fawranSales} />
             <Row indent label={t("fd.groomingIn")} value={mi?.grooming} />
+            {/* fix-re: coupon discounts given on grooming (information; money in above is already net) */}
+            {Number(summary.couponDiscounts?.total) ? <Row indent label={t("cp.fin.couponDiscounts")} value={summary.couponDiscounts.total} /> : null}
             <Row indent label={t("fd.relocationIn")} value={mi?.relocation} />
             <Row indent label={t("fd.collections")} value={mi?.accountCollections} />
             {mi?.damagedSales ? <Row indent label={t("fd.damagedSales")} value={mi.damagedSales} /> : null}

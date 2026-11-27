@@ -51,8 +51,21 @@ export default function Appointments() {
       startAt: toInputDateTimeLocal(start),
       endAt: toInputDateTimeLocal(end),
       notes: "",
+      couponCode: "",
     };
   });
+  // fix-re: price check of a generated coupon at the desk (server answer, before booking).
+  const [couponQuote, setCouponQuote] = useState(null);
+  const [couponMsg, setCouponMsg] = useState("");
+  const checkCoupon = async () => {
+    setCouponMsg("");
+    setCouponQuote(null);
+    try {
+      setCouponQuote(await api("/api/appointments/coupon-quote", { method: "POST", body: { serviceId: form.serviceId, couponCode: form.couponCode, customerId: form.customerId || undefined } }));
+    } catch (x) {
+      setCouponMsg(x.message);
+    }
+  };
 
   const selectedService = useMemo(
     () => services.find((s) => s.id === form.serviceId) || null,
@@ -136,8 +149,11 @@ export default function Appointments() {
           startAt: fromQatarInput(form.startAt),
           endAt: fromQatarInput(form.endAt),
           notes: form.notes || undefined,
+          couponCode: form.couponCode.trim() || undefined,
         },
       });
+      setForm((f) => ({ ...f, couponCode: "" }));
+      setCouponQuote(null);
       // Show the day the booking was made for, so it is visible straight away.
       const bookedDay = String(form.startAt || "").slice(0, 10);
       if (bookedDay && bookedDay !== day) setDay(bookedDay);
@@ -272,6 +288,25 @@ export default function Appointments() {
             })}
           </div>
         ) : null}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            style={{ ...inp, minWidth: 0, flex: "1 1 180px" }}
+            name="couponCode"
+            dir="ltr"
+            value={form.couponCode}
+            onChange={(e) => { setForm((f) => ({ ...f, couponCode: e.target.value })); setCouponQuote(null); setCouponMsg(""); }}
+            placeholder={t("cp.codeField")}
+            aria-label={t("cp.codeField")}
+          />
+          <button type="button" className="btn-touch" onClick={checkCoupon} disabled={!form.couponCode.trim()}>{t("cp.check")}</button>
+        </div>
+        {couponQuote ? (
+          <div data-testid="desk-coupon-ok" style={{ color: "#067647", fontSize: 13 }}>
+            {couponQuote.coupon ? t("cp.applied", { c: couponQuote.coupon.code, d: Number(couponQuote.discount).toFixed(2) }) : null}
+            {" · "}{t("cp.priceLine", { g: Number(couponQuote.gross).toFixed(2), d: Number(couponQuote.discount).toFixed(2), t: Number(couponQuote.total).toFixed(2) })}
+          </div>
+        ) : null}
+        {couponMsg ? <div role="alert" data-testid="desk-coupon-error" style={{ color: "var(--danger, #b42318)", fontSize: 13 }}>{couponMsg}</div> : null}
         <textarea
           style={{ ...inp, minHeight: 70 }}
           value={form.notes}
@@ -313,7 +348,11 @@ export default function Appointments() {
                   <td style={td}>
                     {a.customer?.name || t("appointments.walkIn")} {a.petName ? `• ${a.petName}` : ""}
                   </td>
-                  <td style={td}>{(locale === "en" ? a.service?.nameEn || a.service?.name : a.service?.name) || "—"}</td>
+                  <td style={td}>
+                    {(locale === "en" ? a.service?.nameEn || a.service?.name : a.service?.name) || "—"}
+                    {Number(a.amount) > 0 ? <div style={{ color: "var(--muted)" }}>{t("cp.deskAmount", { a: Number(a.amount).toFixed(2) })}</div> : null}
+                    {a.couponCode ? <div data-coupon={a.couponCode} style={{ color: "#067647" }}>{t("cp.couponOnBooking", { c: a.couponCode, d: Number(a.couponDiscount).toFixed(2) })}</div> : null}
+                  </td>
                   <td style={td}>
                     {statusLabel("booking", a.status, locale)}
                     {Number(a.amountPaid) > 0 ? <div style={{ color: "var(--muted)" }}>{t("shop.paid")} {Number(a.amountPaid).toFixed(2)}</div> : null}

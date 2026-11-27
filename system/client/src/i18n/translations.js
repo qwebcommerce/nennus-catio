@@ -7,6 +7,8 @@ import { raEntries } from "./translationsRa.js";
 import { rbEntries } from "./translationsRb.js";
 import { rcEntries } from "./translationsRc.js";
 import { rdEntries } from "./translationsRd.js";
+// fix-re: generated grooming coupons
+import { reEntries } from "./translationsRe.js";
 
 const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
@@ -1174,7 +1176,7 @@ const entries = [
 ];
 
 const ROOT = {};
-for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...rbEntries, ...rcEntries, ...raEntries, ...rdEntries]) {
+for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...rbEntries, ...rcEntries, ...raEntries, ...rdEntries, ...reEntries]) {
   const parts = path.split(".");
   let cur = ROOT;
   for (let i = 0; i < parts.length - 1; i++) {

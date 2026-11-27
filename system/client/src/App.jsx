@@ -33,6 +33,8 @@ import PetTypes from "./pages/PetTypes.jsx";
 import GroomingDesk from "./pages/GroomingDesk.jsx";
 import RelocationDesk from "./pages/RelocationDesk.jsx";
 import Promotions from "./pages/Promotions.jsx";
+// fix-re: generated grooming coupons
+import Coupons from "./pages/Coupons.jsx";
 import Finance from "./pages/Finance.jsx";
 import Vehicles from "./pages/Vehicles.jsx";
 import Transfer, { TransferDetail, TransferHistory } from "./pages/Transfer.jsx";
@@ -316,6 +318,10 @@ export default function App() {
               </Protected>
             }
           />
+          {/* fix-re: generated grooming coupons (batches, codes, printable sheet) */}
+          {["/promotions/coupons", "/promotions/coupons/:id", "/promotions/coupons/:id/:view"].map((path) => (
+            <Route key={path} path={path} element={<Protected module={["promotions", "view"]}><Coupons /></Protected>} />
+          ))}
           <Route
             path="/finance"
             element={
