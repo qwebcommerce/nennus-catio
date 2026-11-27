@@ -7,6 +7,7 @@ import { qatarRange } from "../lib/qatarTime.js";
 import { financeFilters, financeSummary, financeTransactions, stockValueRows } from "../lib/financeData.js";
 import { tablePdf } from "../lib/pdfTable.js";
 import { EXTRA_ENUMS, EXTRA_HEAD, EXTRA_LISTS, EXTRA_MONEY, EXTRA_TITLES, EXTRA_VALUES, buildExtraList, extraProfitRows } from "../lib/exportExtras.js";
+import { ANALYTICS_HEAD, ANALYTICS_LISTS, ANALYTICS_MONEY, ANALYTICS_NUMERIC, ANALYTICS_TITLES, buildAnalyticsList } from "../lib/analyticsExports.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -214,9 +215,18 @@ for (const key of EXTRA_MONEY) {
   NUMERIC.add(key);
 }
 
+// Analytics and the transactions / expenses history (lib/analyticsExports.js, fix-rc).
+Object.assign(LISTS, ANALYTICS_LISTS);
+Object.assign(TITLES, ANALYTICS_TITLES);
+Object.assign(HEAD, ANALYTICS_HEAD);
+for (const key of ANALYTICS_NUMERIC) NUMERIC.add(key);
+for (const key of ANALYTICS_MONEY) MONEY_COLUMNS.add(key);
+
 async function buildList(list, req, lang) {
   const extraList = await buildExtraList(list, req, { lang, qatarStamp, pick });
   if (extraList) return extraList;
+  const analyticsList = await buildAnalyticsList(list, req, { lang, qatarStamp, pick });
+  if (analyticsList) return analyticsList;
   const orgId = req.user.organizationId;
   const q = req.query;
   const hasDates = Boolean(q.from || q.to);
