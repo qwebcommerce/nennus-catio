@@ -19,6 +19,7 @@ import { hasModule, requireModule } from "../middleware/auth.js";
 import crypto from "crypto";
 import QRCode from "qrcode";
 import { heldQuantity } from "../lib/webOrder.js";
+import { isTillKind } from "../lib/locationKinds.js";
 import { d, fmt, lineAmount, toDirhams } from "../lib/money.js";
 import { toApi } from "../lib/moneyFields.js";
 
@@ -173,7 +174,7 @@ router.post("/checkout", async (req, res) => {
     select: { id: true, kind: true, isActive: true },
   });
   if (!tillBranch) return res.status(400).json({ error: "الفرع غير موجود" });
-  if (tillBranch.isActive === false || tillBranch.kind === "WAREHOUSE") {
+  if (tillBranch.isActive === false || !isTillKind(tillBranch.kind)) {
     return res.status(400).json({
       error: "لا يمكن البيع من هذا الموقع. افتح صندوق متجر أو سيارة.",
       errorAr: "لا يمكن البيع من هذا الموقع. افتح صندوق متجر أو سيارة.",

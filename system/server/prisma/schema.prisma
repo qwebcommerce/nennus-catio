@@ -41,7 +41,7 @@ model Organization {
   businessVertical BusinessVertical?
   /// FREE | PREMIUM — يتحكم بحد الفروع والميزات لاحقاً
   plan             String   @default("FREE")
-  /// أقصى عدد فروع حسب الخطة (الافتراضي 3 للخطة المجانية)
+  /// Unused: locations are unlimited (client decision, fix-ra). Kept for old rows; nothing reads it.
   maxBranches      Int      @default(3)
   /// صلاحيات دور المدير (JSON object of permissionKey → boolean)
   managerPermissions String?
@@ -485,6 +485,10 @@ enum LocationKind {
   WAREHOUSE
   SHOP
   VAN
+  /// Production site: holds stock, no till (like a warehouse).
+  FACTORY
+  /// Any other place (kiosk, stall, office). Can run a till.
+  OTHER
 }
 
 enum OrderChannel {
@@ -876,6 +880,9 @@ model Branch {
   address        String?
   kind           LocationKind @default(SHOP)
   isActive       Boolean      @default(true)
+  /// The main location (showroom / store). One per organisation (trigger nc_branch_one_main,
+  /// migration 20261128100200_locations).
+  isMain         Boolean      @default(false)
   websiteFor     Organization[] @relation("OrgWebsiteBranch")
   supabaseId     String?
   createdAt      DateTime     @default(now())

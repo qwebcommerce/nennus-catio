@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isTillKind } from "../lib/locationKinds.js";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { PosCartPanel } from "../components/PosCartPanel.jsx";
@@ -52,7 +53,7 @@ export default function POS() {
       (branches || []).filter(
         (b) =>
           b.isActive !== false &&
-          b.kind !== "WAREHOUSE" &&
+          isTillKind(b.kind) &&
           (canChooseBranch || b.id === activeBranch?.id),
       ),
     [branches, canChooseBranch, activeBranch?.id],
@@ -68,7 +69,7 @@ export default function POS() {
     }
   };
   const tillOpen =
-    Boolean(activeBranch) && activeBranch.isActive !== false && tillKind !== "WAREHOUSE" && tillConfirmed;
+    Boolean(activeBranch) && activeBranch.isActive !== false && isTillKind(tillKind) && tillConfirmed;
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [search, setSearch] = useState("");

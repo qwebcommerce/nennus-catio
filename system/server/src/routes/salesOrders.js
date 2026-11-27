@@ -8,6 +8,7 @@ import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVer
 import { moveStock } from "../lib/stockLedger.js";
 import { stockRowKey } from "../lib/dbErrors.js";
 import { heldQuantity } from "../lib/webOrder.js";
+import { isTillKind } from "../lib/locationKinds.js";
 import { checkProof } from "../lib/businessFiles.js";
 import { qatarDayKey, qatarDayStart } from "../lib/qatarTime.js";
 import {
@@ -310,7 +311,7 @@ router.post("/:id/payments", requireModule("salesOrders", "create"), async (req,
   }
   if (method === "CASH") {
     const branch = await prisma.branch.findUnique({ where: { id: existing.branchId }, select: { kind: true } });
-    if (branch?.kind !== "WAREHOUSE") {
+    if (isTillKind(branch?.kind)) {
       const session = await prisma.cashSession.findFirst({ where: { branchId: existing.branchId, closedAt: null }, select: { id: true } });
       if (!session) throw fail(400, "CASH_SESSION_REQUIRED", "لا توجد جلسة صندوق مفتوحة في موقع الطلب — افتح الصندوق لاستلام النقد", "No till session is open at the order's location. Open the till to take cash.");
     }

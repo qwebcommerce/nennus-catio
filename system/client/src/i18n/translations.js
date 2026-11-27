@@ -90,7 +90,6 @@ const entries = [
   ["branches.emptyHint", "أضف أول فرع للبدء. الحد يعتمد على خطتك.", "Add your first branch to get started. The limit depends on your plan."],
   ["branches.createFailed", "تعذر إنشاء الفرع", "Could not create branch"],
   ["errors.generic", "حدث خطأ. حاول مرة أخرى.", "Something went wrong. Please try again."],
-  ["errors.BRANCH_LIMIT", "وصلت للحد الأقصى من الفروع لهذه الخطة", "Branch limit reached for this plan"],
   ["errors.LAST_BRANCH", "لا يمكن حذف الفرع الوحيد", "Cannot delete the only branch"],
   ["errors.BRANCH_HAS_DATA", "لا يمكن حذف الفرع لوجود بيانات مرتبطة", "Cannot delete branch while related data exists"],
   ["errors.PLAN_LIMIT_TOO_LOW", "حد الفروع أقل من عدد الفروع الحالي", "Branch limit is lower than the current branch count"],

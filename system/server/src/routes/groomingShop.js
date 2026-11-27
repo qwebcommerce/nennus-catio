@@ -253,7 +253,7 @@ router.post("/book", async (req, res) => {
     if (!staff) return res.status(500).json({ error: "A booking needs a staff user on the account" });
     const branch = org.websiteBranchId
       ? await prisma.branch.findFirst({ where: { id: org.websiteBranchId, organizationId: org.id, isActive: true } })
-      : await prisma.branch.findFirst({ where: { organizationId: org.id, isActive: true, kind: { not: "VAN" } } });
+      : await prisma.branch.findFirst({ where: { organizationId: org.id, isActive: true, kind: { not: "VAN" } }, orderBy: [{ isMain: "desc" }, { createdAt: "asc" }] });
     // Whole dirhams (NFR-03).
     const homeFee = visitKind === "HOME" ? d(org.homeVisitFee) : 0;
     const gross = d(service.price) + homeFee;
