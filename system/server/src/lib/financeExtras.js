@@ -16,6 +16,7 @@
  */
 import { prisma } from "./prisma.js";
 import { d } from "./money.js";
+import { CONFIRMED } from "./paymentConfirmWhere.js";
 
 export const SALES_ORDER_CHANNEL = "SALES_ORDER";
 
@@ -36,7 +37,8 @@ export async function financeExtras(orgId, dates, filters = {}, { countedSale, s
       : [],
     withSo
       ? prisma.salesOrderPayment.findMany({
-          where: { paidAt: range, order: { organizationId: orgId }, ...(branchId ? { branchId } : {}) },
+          // fix-rd: money in counts confirmed payments only (owner decision).
+          where: { paidAt: range, order: { organizationId: orgId }, ...CONFIRMED, ...(branchId ? { branchId } : {}) },
           select: { amount: true, method: true },
         })
       : [],
@@ -70,7 +72,7 @@ export async function financeExtras(orgId, dates, filters = {}, { countedSale, s
       : { _sum: { amountPaid: 0 } },
     businessWide
       ? prisma.customerAccountLedger.aggregate({
-          where: { organizationId: orgId, entryType: "PAYMENT", paymentMethod: "BANK_TRANSFER", createdAt: range, ...(branchId ? { branchId } : {}) },
+          where: { organizationId: orgId, entryType: "PAYMENT", paymentMethod: "BANK_TRANSFER", createdAt: range, ...CONFIRMED, ...(branchId ? { branchId } : {}) },
           _sum: { amount: true },
         })
       : { _sum: { amount: 0 } },
@@ -150,4 +152,47 @@ export async function salesOrderTransactions(orgId, dates, filters = {}) {
     status: "DELIVERED",
     amount: d(row.revenue),
   }));
+}
+
+/**
+ * fix-rd: money recorded in the range that is not counted in money in: awaiting the accountant's
+ * confirmation, or rejected. Sales-order payments (B2B receipts included) by payment date,
+ * account collections by their date. Same location / channel scope as money in.
+ */
+export async function confirmationFigures(orgId, dates, filters = {}) {
+  const range = { gte: dates.from, lt: dates.to };
+  const channel = filters.channel || "";
+  const branchId = filters.branchId || "";
+  const withSo = !channel || channel === SALES_ORDER_CHANNEL;
+  const businessWide = !channel;
+  const out = { awaiting: 0, awaitingCount: 0, rejected: 0, rejectedCount: 0 };
+  const [so, ledger] = await Promise.all([
+    withSo
+      ? prisma.salesOrderPayment.groupBy({
+          by: ["confirmStatus"],
+          where: { paidAt: range, order: { organizationId: orgId }, confirmStatus: { not: "CONFIRMED" }, ...(branchId ? { branchId } : {}) },
+          _sum: { amount: true },
+          _count: { _all: true },
+        })
+      : [],
+    businessWide
+      ? prisma.customerAccountLedger.groupBy({
+          by: ["confirmStatus"],
+          where: { organizationId: orgId, entryType: "PAYMENT", createdAt: range, confirmStatus: { not: "CONFIRMED" }, ...(branchId ? { branchId } : {}) },
+          _sum: { amount: true },
+          _count: { _all: true },
+        })
+      : [],
+  ]);
+  for (const row of [...so, ...ledger]) {
+    const amount = Math.abs(d(row._sum.amount));
+    if (row.confirmStatus === "PENDING_CONFIRMATION") {
+      out.awaiting += amount;
+      out.awaitingCount += row._count._all;
+    } else if (row.confirmStatus === "REJECTED") {
+      out.rejected += amount;
+      out.rejectedCount += row._count._all;
+    }
+  }
+  return out;
 }

@@ -45,11 +45,15 @@ export const SALE_INC = {
   deliveryWindow: { select: { id: true, label: true, labelEn: true, startTime: true, endTime: true } },
   items: { include: { product: PRODUCT, variant: VARIANT } },
   branch: { select: { id: true, name: true, nameEn: true, kind: true } },
+  // fix-rd: collections recorded for this sale (driver cash on delivery), not rejected.
+  customerAccountLedgers: { where: { entryType: "PAYMENT", confirmStatus: { not: "REJECTED" } }, select: { amount: true, confirmStatus: true } },
 };
 export const SO_INC = {
   customer: CUSTOMER,
   lines: { orderBy: [{ sortOrder: "asc" }, { id: "asc" }], include: { product: PRODUCT, variant: VARIANT } },
   branch: { select: { id: true, name: true, nameEn: true, kind: true } },
+  // fix-rd: an invoiced B2B note can be collected on by the driver (receipt on the invoice).
+  invoice: { select: { id: true, reference: true, status: true } },
 };
 export const APPT_INC = {
   customer: CUSTOMER,
@@ -176,6 +180,9 @@ function lineOut(l, { so = false } = {}) {
 export function sourceFacts(kind, row) {
   if (kind === "WEB_ORDER" || kind === "POS_DELIVERY") {
     const refunded = false;
+    // fix-rd: collections recorded on the sale (pending or confirmed) are no longer to collect.
+    const collected = (row.customerAccountLedgers || []).reduce((a, l) => a + Math.abs(d(l.amount)), 0);
+    const awaiting = (row.customerAccountLedgers || []).filter((l) => l.confirmStatus === "PENDING_CONFIRMATION").reduce((a, l) => a + Math.abs(d(l.amount)), 0);
     return {
       reference: row.reference || row.invoiceNumber || row.id.slice(-8).toUpperCase(),
       customer: row.customer ? { id: row.customer.id, name: row.customer.name, phone: row.customer.phone } : null,
@@ -184,7 +191,8 @@ export function sourceFacts(kind, row) {
       deliveryDate: dayOf(row.deliveryDate) || qatarDayKey(row.createdAt),
       timeNote: windowText(row.deliveryWindow),
       total: d(row.total),
-      toCollect: Math.max(0, d(row.amountDue)),
+      toCollect: kind === "WEB_ORDER" ? 0 : Math.max(0, d(row.amountDue) - collected),
+      awaiting,
       paidOnline: kind === "WEB_ORDER",
       sourceStatus: kind === "WEB_ORDER" ? row.webStatus : row.invoiceStatus,
       closed: kind === "WEB_ORDER" ? ["DELIVERED", "CANCELLED", "COLLECTED"].includes(row.webStatus) : row.invoiceStatus === "CANCELLED" || refunded,
@@ -207,7 +215,11 @@ export function sourceFacts(kind, row) {
       deliveryDate: dayOf(row.deliveryDate),
       timeNote: null,
       total: d(row.total),
-      toCollect: b2b ? 0 : Math.max(0, d(row.total) - d(row.amountPaid)),
+      // fix-rd: an invoiced note can be collected on (a cash receipt on its invoice); amounts
+      // awaiting the accountant's confirmation are no longer "to collect".
+      toCollect: b2b && !(row.invoice && ["ISSUED", "PART_PAID"].includes(row.invoice.status)) ? 0 : Math.max(0, d(row.total) - d(row.amountPaid) - d(row.amountPending)),
+      awaiting: d(row.amountPending),
+      invoiceRef: row.invoice?.reference || null,
       paidOnline: false,
       sourceStatus: row.status,
       closed: !SO_OPEN.includes(row.status),
@@ -296,6 +308,10 @@ export function itemView(input) {
     note: job?.note ?? null,
     total: fmt(f.total),
     toCollect: fmt(f.toCollect),
+    /** fix-rd: recorded, waiting for the accountant's confirmation. */
+    awaitingConfirmation: fmt(f.awaiting || 0),
+    /** fix-rd: the driver may record money collected (cash on delivery) for this order. */
+    collectable: f.toCollect > 0 && (kind === "POS_DELIVERY" || kind === "SALES_ORDER") && !f.cancelled,
     paidOnline: f.paidOnline,
     sourceStatus: f.sourceStatus,
     lines: f.lines,

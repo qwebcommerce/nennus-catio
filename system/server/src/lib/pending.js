@@ -63,14 +63,20 @@ export async function pendingPayments(orgId, query = {}) {
         customer: { select: { id: true, name: true, companyName: true } },
         installments: true,
         invoice: { select: { reference: true } },
-        payments: { where: { paidAt: { lt: end } }, select: { amount: true } },
+        // fix-rd: paid = confirmed by the date; recorded but not yet confirmed = awaiting.
+        payments: { where: { paidAt: { lt: end }, OR: [{ confirmStatus: { not: "REJECTED" } }, { rejectedAt: { gte: end } }] }, select: { amount: true, confirmStatus: true, confirmedAt: true } },
       },
     });
     for (const o of orders) {
-      const paid = o.payments.reduce((s, p) => s + d(p.amount), 0);
+      const counted = (p) => p.confirmStatus === "CONFIRMED" && (!p.confirmedAt || p.confirmedAt < end);
+      const paid = o.payments.filter(counted).reduce((s, p) => s + d(p.amount), 0);
+      let awaitingLeft = o.payments.filter((p) => !counted(p)).reduce((s, p) => s + d(p.amount), 0);
       for (const inst of allocatePaid(o.installments, paid)) {
         const owed = inst.amount - inst.paid;
         if (owed <= 0) continue;
+        // Awaiting money is shown against the oldest open installments (it reduces nothing yet).
+        const awaiting = Math.min(owed, awaitingLeft);
+        awaitingLeft -= awaiting;
         toUs.push({
           kind: "SALES_ORDER",
           id: `${o.id}:${inst.seq}`,
@@ -83,17 +89,39 @@ export async function pendingPayments(orgId, query = {}) {
           dueDate: dayOf(inst.dueDate),
           amount: inst.amount,
           paid: inst.paid,
+          awaiting,
           owed,
           ...dueFlags(inst.dueDate, day, weekEnd, owed),
         });
       }
     }
     // Credit customers: on-account balance from the ledger up to the date.
-    const ledger = await prisma.customerAccountLedger.groupBy({
-      by: ["customerId"],
-      where: { organizationId: orgId, createdAt: { lt: end }, ...(customerId ? { customerId } : {}) },
-      _sum: { amount: true },
-    });
+    // fix-rd: a collection reduces the balance once confirmed (by the date); until then it is
+    // shown as "received, awaiting confirmation". Rejected collections reduce nothing.
+    const [ledger, awaitingRows] = await Promise.all([
+      prisma.customerAccountLedger.groupBy({
+        by: ["customerId"],
+        where: {
+          organizationId: orgId,
+          createdAt: { lt: end },
+          OR: [{ entryType: { not: "PAYMENT" } }, { confirmStatus: "CONFIRMED", OR: [{ confirmedAt: null }, { confirmedAt: { lt: end } }] }],
+          ...(customerId ? { customerId } : {}),
+        },
+        _sum: { amount: true },
+      }),
+      prisma.customerAccountLedger.groupBy({
+        by: ["customerId"],
+        where: {
+          organizationId: orgId,
+          entryType: "PAYMENT",
+          createdAt: { lt: end },
+          OR: [{ confirmStatus: "PENDING_CONFIRMATION" }, { confirmStatus: "CONFIRMED", confirmedAt: { gte: end } }, { confirmStatus: "REJECTED", rejectedAt: { gte: end } }],
+          ...(customerId ? { customerId } : {}),
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+    const awaitingBy = new Map(awaitingRows.map((r) => [r.customerId, Math.abs(d(r._sum.amount))]));
     const owing = ledger.filter((r) => d(r._sum.amount) > 0);
     if (owing.length) {
       const ids = owing.map((r) => r.customerId);
@@ -119,6 +147,7 @@ export async function pendingPayments(orgId, query = {}) {
           dueDate: due ? qatarDayKey(due) : null,
           amount: owed,
           paid: 0,
+          awaiting: Math.min(owed, awaitingBy.get(r.customerId) || 0),
           owed,
           ...dueFlags(due ? new Date(`${qatarDayKey(due)}T00:00:00Z`) : null, day, weekEnd, owed),
         });
@@ -197,7 +226,9 @@ export async function pendingPayments(orgId, query = {}) {
     overdueByUs: total(byUs, (r) => r.overdue),
     dueThisWeekByUs: total(byUs, (r) => r.dueThisWeek),
   };
-  const out = (r) => ({ ...r, amount: fmt(r.amount), paid: fmt(r.paid), owed: fmt(r.owed) });
+  // fix-rd: "awaiting" = received, waiting for the accountant's confirmation (still in owed).
+  totals.awaitingToUs = toUs.reduce((s, r) => s + (r.awaiting || 0), 0);
+  const out = (r) => ({ ...r, amount: fmt(r.amount), paid: fmt(r.paid), awaiting: fmt(r.awaiting || 0), owed: fmt(r.owed) });
   return {
     asOf: day,
     toUs: toUs.map(out),

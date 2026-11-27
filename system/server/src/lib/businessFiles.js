@@ -164,6 +164,8 @@ export async function fileAccess(file) {
   if (ledger) rules.push(["finance", "view"]);
   // B2B cash receipt proofs: the B2B tab, or Finance (accounts).
   if (b2bReceipt) rules.push(["b2b", "view"], ["finance", "view"]);
+  // fix-rd: the accountant's confirmation queue opens the proof of any collected payment.
+  if (soPay || ledger || b2bReceipt) rules.push(["paymentConfirm", "view"]);
   return { rules, unattached: rules.length === 0 };
 }
 

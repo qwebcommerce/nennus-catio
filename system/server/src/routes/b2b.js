@@ -342,11 +342,12 @@ router.post("/invoices/:id/cancel", requireModule("b2b", "delete"), async (req, 
   const inv = await loadInvoice(prisma, orgId, req.params.id);
   assertVersion(inv, version);
   if (inv.status === "CANCELLED") throw fail(400, "B2B_INVOICE_CANCELLED", "الفاتورة ملغاة", "This invoice is cancelled");
-  if (inv.receipts.length || d(inv.amountPaid) > 0) {
+  // fix-rd: a rejected receipt does not block cancelling (it brought no money).
+  if (inv.receipts.some((r) => r.confirmStatus !== "REJECTED") || d(inv.amountPaid) > 0 || d(inv.amountPending) > 0) {
     throw fail(400, "B2B_INVOICE_HAS_RECEIPTS", "لا يمكن إلغاء فاتورة عليها سندات قبض", "An invoice with cash receipts cannot be cancelled");
   }
   await prisma.$transaction(async (tx) => {
-    await versionedUpdate(tx, "b2bInvoice", { id: inv.id, version, where: { amountPaid: 0 }, data: { status: "CANCELLED", cancelledAt: new Date(), cancelReason: reason } });
+    await versionedUpdate(tx, "b2bInvoice", { id: inv.id, version, where: { amountPaid: 0, amountPending: 0 }, data: { status: "CANCELLED", cancelledAt: new Date(), cancelReason: reason } });
     await tx.salesOrder.updateMany({ where: { invoiceId: inv.id }, data: { invoiceId: null } });
     await writeAudit({
       userId: req.user.sub,
@@ -383,20 +384,34 @@ router.post("/invoices/:id/receipts", requireModule("b2b", "edit"), async (req, 
   const invHead = await prisma.b2bInvoice.findFirst({ where: { id: String(req.params.id), organizationId: orgId }, select: { id: true } });
   if (!invHead) throw fail(404, "B2B_INVOICE_NOT_FOUND", "الفاتورة غير موجودة", "Invoice not found");
 
-  const receiptId = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "B2bInvoice" WHERE id = ${invHead.id} FOR UPDATE`;
+  const receiptId = await prisma.$transaction(
+    (tx) => createReceipt(tx, { orgId, userId: req.user.sub, invoiceId: invHead.id, amount, method, bankReference, proofFileId: body.proofFileId, note: body.note, paidAt, collector }),
+    TX,
+  );
+  const receipt = await loadReceipt(prisma, orgId, receiptId);
+  res.status(201).json({ receipt: receiptView(receipt), invoice: invoiceView(await loadInvoice(prisma, orgId, receipt.invoiceId)) });
+});
+
+/**
+ * Records a cash receipt inside `tx` (fix-rd: also used by the driver's "Record payment
+ * collected" on an invoiced B2B delivery note, with onlyOrderId and dispatchJobId). The receipt
+ * starts PENDING_CONFIRMATION. Returns the receipt id.
+ */
+export async function createReceipt(tx, { orgId, userId, invoiceId, amount, method, bankReference = null, proofFileId: proofIn = null, note = null, paidAt = new Date(), collector, onlyOrderId = null, dispatchJobId = null }) {
+    await tx.$queryRaw`SELECT id FROM "B2bInvoice" WHERE id = ${invoiceId} FOR UPDATE`;
     const inv = await tx.b2bInvoice.findUnique({
-      where: { id: invHead.id },
+      where: { id: invoiceId },
       include: { orders: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], include: { installments: true, lines: true } } },
     });
     if (!["ISSUED", "PART_PAID"].includes(inv.status)) {
       throw fail(400, "B2B_INVOICE_NOT_OPEN", "الفاتورة مدفوعة بالكامل أو ملغاة", "This invoice is fully paid or cancelled");
     }
-    const balance = d(inv.total) - d(inv.amountPaid);
+    // fix-rd: receipts awaiting confirmation count against the balance (no double collection).
+    const balance = d(inv.total) - d(inv.amountPaid) - d(inv.amountPending);
     if (amount > balance) {
-      throw fail(400, "B2B_OVERPAY", "المبلغ أكبر من المتبقي على الفاتورة", "The amount is more than the invoice balance", { balance: fmt(balance) });
+      throw fail(400, "B2B_OVERPAY", "المبلغ أكبر من المتبقي على الفاتورة", "The amount is more than the invoice balance", { balance: fmt(balance), awaitingConfirmation: fmt(inv.amountPending) });
     }
-    const proofFileId = await checkProof(tx, { orgId, userId: req.user.sub, method, proofFileId: body.proofFileId });
+    const proofFileId = await checkProof(tx, { orgId, userId, method, proofFileId: proofIn });
     // Where the money came in: the collector's location, else the first note's.
     const branchId = collector.branchId || inv.orders[0].branchId;
     let cashSessionId = null;
@@ -415,28 +430,30 @@ router.post("/invoices/:id/receipts", requireModule("b2b", "edit"), async (req, 
         amount,
         method,
         bankReference,
-        note: optText(body.note, 500),
+        note: optText(note, 500),
         paidAt,
         proofFileId,
         collectedById: collector.id,
         branchId,
         cashSessionId,
-        userId: req.user.sub,
+        userId: userId,
+        confirmStatus: "PENDING_CONFIRMATION",
+        dispatchJobId: dispatchJobId || null,
       },
     });
-    // Spread over the notes, oldest first, each up to its balance.
+    // Spread over the notes, oldest first, each up to its open balance (confirmed + awaiting).
+    // fix-rd: the receipt and its payment rows wait for the accountant (PENDING_CONFIRMATION);
+    // installments, amountPaid and the statuses move when it is confirmed (lib/paymentConfirm.js).
+    // A driver's collection for one note (onlyOrderId) goes on that note only.
     let left = amount;
     const parts = [];
-    for (const order of inv.orders) {
+    const targets = onlyOrderId ? inv.orders.filter((o) => o.id === onlyOrderId) : inv.orders;
+    for (const order of targets) {
       if (left <= 0) break;
-      const owed = d(order.total) - d(order.amountPaid);
+      const owed = d(order.total) - d(order.amountPaid) - d(order.amountPending);
       if (owed <= 0) continue;
       const take = Math.min(owed, left);
       left -= take;
-      const before = allocatePaid(order.installments, d(order.amountPaid));
-      const after = allocatePaid(order.installments, d(order.amountPaid) + take);
-      const allocation = after.map((a, i) => ({ installmentId: a.id, seq: a.seq, amount: a.paid - before[i].paid })).filter((a) => a.amount > 0);
-      for (const a of after) await tx.salesOrderInstallment.update({ where: { id: a.id }, data: { amountPaid: a.paid } });
       await tx.salesOrderPayment.create({
         data: {
           orderId: order.id,
@@ -446,36 +463,29 @@ router.post("/invoices/:id/receipts", requireModule("b2b", "edit"), async (req, 
           reference: bankReference || receipt.reference,
           note: `Cash receipt ${receipt.reference}`,
           paidAt,
-          allocation,
           receiptId: receipt.id,
-          userId: req.user.sub,
+          userId: userId,
+          collectedByUserId: collector.id,
+          confirmStatus: "PENDING_CONFIRMATION",
+          dispatchJobId: dispatchJobId || null,
         },
       });
-      const amountPaid = d(order.amountPaid) + take;
-      const status = settledStatus({ ...order, amountPaid }, order.lines);
-      await tx.salesOrder.update({
-        where: { id: order.id },
-        data: { amountPaid, status, ...(status === "COMPLETED" ? { completedAt: new Date() } : {}) },
-      });
+      await tx.salesOrder.update({ where: { id: order.id }, data: { amountPending: { increment: take } } });
       parts.push({ orderId: order.id, dnReference: order.dnReference, amount: take });
     }
     if (left !== 0) throw fail(409, "B2B_TRY_AGAIN", "تغيّرت الفاتورة. حاول مرة أخرى.", "The invoice changed. Try again.");
-    const paid = d(inv.amountPaid) + amount;
-    await tx.b2bInvoice.update({ where: { id: inv.id }, data: { amountPaid: paid, status: invoiceStatusFor(d(inv.total), paid) } });
+    await tx.b2bInvoice.update({ where: { id: inv.id }, data: { amountPending: { increment: amount } } });
     await writeAudit({
-      userId: req.user.sub,
+      userId: userId,
       action: "B2B_RECEIPT",
       entityType: "B2bInvoice",
       entityId: inv.id,
       branchId,
       summary: `${receipt.reference} on ${inv.reference}: ${fmt(amount)} ${method}${bankReference ? ` ref ${bankReference}` : ""}, collected by ${collector.nameEn || collector.name}`,
-      meta: { receiptId: receipt.id, parts, proofFileId, cashSessionId, collectedById: collector.id },
+      meta: { receiptId: receipt.id, parts, proofFileId, cashSessionId, collectedById: collector.id, confirmStatus: "PENDING_CONFIRMATION", dispatchJobId: dispatchJobId || null },
     }, tx);
     return receipt.id;
-  }, TX);
-  const receipt = await loadReceipt(prisma, orgId, receiptId);
-  res.status(201).json({ receipt: receiptView(receipt), invoice: invoiceView(await loadInvoice(prisma, orgId, receipt.invoiceId)) });
-});
+}
 
 function receiptsWhere(req) {
   const where = { organizationId: req.user.organizationId };
@@ -529,17 +539,17 @@ router.get("/export/:kind", requireModule("b2b", "export"), async (req, res) => 
   } else if (kind === "invoices") {
     const rows = await prisma.b2bInvoice.findMany({ where: invoicesWhere(req), orderBy: { createdAt: "desc" }, take: 5000, include: INVOICE_INCLUDE });
     csv = toCsv(
-      ["Invoice", "Customer", "Invoice date", "Due date", "Status", "Overdue", "Total (QAR)", "Paid (QAR)", "Balance (QAR)", "Delivery notes"],
+      ["Invoice", "Customer", "Invoice date", "Due date", "Status", "Overdue", "Total (QAR)", "Paid (QAR)", "Balance (QAR)", "Delivery notes", "Awaiting confirmation (QAR)"],
       rows.map((inv) => {
         const v = invoiceView(inv);
-        return [inv.reference, who(inv.customer), v.invoiceDate, v.dueDate, inv.status, v.overdue ? "yes" : "no", R(inv.total), R(inv.amountPaid), v.balance, inv.orders.map((o) => o.dnReference).join(" ")];
+        return [inv.reference, who(inv.customer), v.invoiceDate, v.dueDate, inv.status, v.overdue ? "yes" : "no", R(inv.total), R(inv.amountPaid), v.balance, inv.orders.map((o) => o.dnReference).join(" "), R(inv.amountPending)];
       }),
     );
   } else if (kind === "receipts") {
     const rows = await prisma.b2bReceipt.findMany({ where: receiptsWhere(req), orderBy: { paidAt: "desc" }, take: 5000, include: RECEIPT_INCLUDE });
     csv = toCsv(
-      ["Receipt", "Invoice", "Customer", "Paid at", "Method", "Bank reference", "Amount (QAR)", "Collected by", "Location", "Cash session"],
-      rows.map((r) => [r.reference, r.invoice?.reference, who(r.customer), new Date(r.paidAt).toISOString(), r.method, r.bankReference || "", R(r.amount), r.collectedBy?.nameEn || r.collectedBy?.name, r.branch?.nameEn || r.branch?.name, r.cashSessionId || ""]),
+      ["Receipt", "Invoice", "Customer", "Paid at", "Method", "Bank reference", "Amount (QAR)", "Collected by", "Location", "Cash session", "Confirmation"],
+      rows.map((r) => [r.reference, r.invoice?.reference, who(r.customer), new Date(r.paidAt).toISOString(), r.method, r.bankReference || "", R(r.amount), r.collectedBy?.nameEn || r.collectedBy?.name, r.branch?.nameEn || r.branch?.name, r.cashSessionId || "", r.confirmStatus]),
     );
   } else {
     throw fail(400, "B2B_EXPORT_KIND", "نوع التصدير غير معروف", "Unknown export kind");

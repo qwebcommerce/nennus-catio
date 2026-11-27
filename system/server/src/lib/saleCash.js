@@ -1,3 +1,4 @@
+import { inDrawerWhere } from "./paymentConfirmWhere.js";
 import { d, shareOf } from "./money.js";
 
 /** All amounts here are whole dirhams (NFR-03). */
@@ -150,6 +151,9 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
         entryType: "PAYMENT",
         paymentMethod: "CASH",
         createdAt: { gte: session.openedAt, lte: closedAt },
+        // fix-rd: drawer cash counts while it awaits confirmation; a rejection made before the
+        // cash-up closed takes it out, one made later leaves the closed cash-up unchanged.
+        ...inDrawerWhere(closedAt),
       },
       select: { amount: true },
     });
@@ -166,7 +170,7 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
   // Bank transfers (and every non-cash method) never count as drawer cash.
   let salesOrderCash = 0;
   const soCash = await db.salesOrderPayment.aggregate({
-    where: { branchId: session.branchId, method: "CASH", createdAt: { gte: session.openedAt, lte: closedAt } },
+    where: { branchId: session.branchId, method: "CASH", createdAt: { gte: session.openedAt, lte: closedAt }, ...inDrawerWhere(closedAt) },
     _sum: { amount: true },
   });
   salesOrderCash = d(soCash._sum.amount);

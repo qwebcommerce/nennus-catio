@@ -610,6 +610,16 @@ const EXACT = [
   ["الإثبات يجب أن يكون صورة JPEG أو PNG أو WebP أو ملف PDF", "The proof must be a JPEG, PNG or WebP image or a PDF"],
   ["أرفق إثبات التحويل البنكي (صورة أو PDF)", "Attach the bank transfer proof (an image or a PDF)"],
   ["الإثبات غير موجود", "Payment proof not found"],
+  // ── fix-rd: payment confirmation, driver collections ────────────────────────
+  ["الدفعة غير موجودة", "Payment not found"],
+  ["لا يمكنك تأكيد أو رفض دفعة حصّلتها أو سجّلتها بنفسك", "You cannot confirm or reject a payment you collected or recorded yourself"],
+  ["تم البت في هذه الدفعة من قبل", "This payment was already confirmed or rejected"],
+  ["الرصيد كله محصّل وبانتظار تأكيد المحاسب", "The whole balance is already collected and waiting for the accountant's confirmation"],
+  ["طلب الموقع مدفوع مسبقاً عبر الإنترنت — لا يوجد ما يُحصَّل", "Website orders are paid online. There is nothing to collect."],
+  ["ادفع زيارة التجميل المنزلية من صندوق السيارة", "Take payment for a home visit on the van till"],
+  ["المبلغ أكبر من المتبقي للتحصيل (بعد المبالغ بانتظار التأكيد)", "The amount is more than what is left to collect (after amounts awaiting confirmation)"],
+  ["سند التسليم غير مُفوتر بعد — يُحصَّل المبلغ بسند قبض على الفاتورة", "This delivery note is not invoiced yet. Its money is collected with a cash receipt on the invoice."],
+  ["لا يوجد عميل على هذه الفاتورة", "This sale has no customer to collect from"],
   // ── fix-rb: drivers / dispatch / driver change requests ─────────────────────
   ["تعذر تحديث حالة طلب الموقع. حدّث الصفحة وحاول مرة أخرى.", "Could not update the website order status. Refresh and try again."],
   ["طلب غير صالح للتوصيل", "Not a valid delivery order"],

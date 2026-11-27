@@ -19,6 +19,13 @@ import { mailCustomer } from "../lib/mailer.js";
 import { deliverSalesOrder } from "../lib/soDelivery.js";
 import { changeWebOrderStatus } from "../lib/webOrderStatus.js";
 import { APPOINTMENT_NEXT } from "./appointments.js";
+// fix-rd: cash on delivery recorded by the driver (waits for the accountant's confirmation).
+import { createReceipt } from "./b2b.js";
+import { checkProof } from "../lib/businessFiles.js";
+import { toDirhams } from "../lib/money.js";
+import { lockOrder } from "../lib/salesOrders.js";
+import { requireActiveStaff } from "../lib/staffPick.js";
+import { loadConfirmation } from "../lib/paymentConfirm.js";
 import {
   JOB_INC,
   ON_VAN,
@@ -208,7 +215,7 @@ router.get("/overview", async (req, res) => {
       items: sales.map((s) => ({ id: s.id, reference: s.reference || s.invoiceNumber, createdAt: s.createdAt, total: fmt(s.total), amountDue: fmt(s.amountDue), paymentMethod: s.paymentMethod, invoiceStatus: s.invoiceStatus, customer: s.customer?.name || null, user: s.user, lines: s._count.items })),
     },
     pendingPayments: {
-      orders: collect.map((i) => ({ key: i.key, kind: i.kind, reference: i.reference, customer: i.customer, toCollect: i.toCollect, status: i.status })),
+      orders: collect.map((i) => ({ key: i.key, kind: i.kind, reference: i.reference, customer: i.customer, toCollect: i.toCollect, awaitingConfirmation: i.awaitingConfirmation, status: i.status })),
       ordersTotal: fmt(collect.reduce((a, i) => a + toDirh(i.toCollect), 0)),
       returns: unpaidReturns.map((r) => ({ id: r.id, reference: r.reference, customerName: r.customerName, amountOwed: fmt(r.amountOwed), collectedAt: r.collectedAt, status: r.status })),
       returnsTotal: fmt(unpaidReturns.reduce((a, r) => a + d(r.amountOwed), 0)),
@@ -372,6 +379,110 @@ router.post("/jobs/:id/booking-status", requireModule("driver", "create"), async
     await mailCustomer(customer, "booking", { reference: result.reference || result.appointmentId.slice(-8).toUpperCase(), status: result.status, startAt: result.startAt });
   }
   res.json(itemView({ job: await prisma.dispatchJob.findUnique({ where: { id: result.job.id }, include: JOB_INC }) }));
+});
+
+// ------------------------------------------------------------------ fix-rd: record payment collected
+
+const COLLECT_METHODS = ["CASH", "BANK_TRANSFER"];
+
+/**
+ * POST /api/driver/jobs/:id/collect { version, amount, method: CASH | BANK_TRANSFER, reference?, proofFileId?, note? }
+ * Money the driver collected on delivery, recorded as PENDING_CONFIRMATION for the accountant:
+ *  - sales order: a sales-order payment (collected by the driver, at the van's location);
+ *  - B2B delivery note on an open invoice: a cash receipt on the invoice for that note only;
+ *  - till "for delivery" sale on account / paid on delivery: a customer account collection
+ *    (a sale paid on delivery first gets its sale-credit entry, so the account shows the debt);
+ *  - website orders were paid online and home visits are paid on the van till: nothing to collect.
+ * A bank transfer needs a proof file. More than what is still open (after amounts already
+ * awaiting confirmation) is refused. Logged as a PAYMENT_COLLECTED dispatch event and audited.
+ */
+router.post("/jobs/:id/collect", requireModule("driver", "create"), async (req, res) => {
+  const orgId = req.user.organizationId;
+  const version = requireVersion(req);
+  const body = req.body || {};
+  const amount = toDirhams(body.amount, { allowZero: false });
+  if (amount == null) throw fail(400, "AMOUNT_INVALID", "المبلغ غير صالح (رقمان عشريان كحد أقصى)", "Enter a valid amount (at most 2 decimals)");
+  const method = String(body.method || "").toUpperCase();
+  if (!COLLECT_METHODS.includes(method)) throw fail(400, "DRIVER_COLLECT_METHOD", "طريقة الدفع: نقداً أو تحويل بنكي", "Payment method must be cash or bank transfer");
+  const reference = optText(body.reference, 120);
+  const note = optText(body.note, 500);
+  const { vehicle } = await myVan(req);
+  const driver = await requireActiveStaff(prisma, orgId, req.user.sub);
+  const pre = await myJob(prisma, req, req.params.id);
+  checkVersion(pre, version);
+  if (pre.kind === "WEB_ORDER") throw fail(400, "DRIVER_COLLECT_PAID_ONLINE", "طلب الموقع مدفوع مسبقاً عبر الإنترنت — لا يوجد ما يُحصَّل", "Website orders are paid online. There is nothing to collect.");
+  if (pre.kind === "GROOMING") throw fail(400, "DRIVER_COLLECT_USE_TILL", "ادفع زيارة التجميل المنزلية من صندوق السيارة", "Take payment for a home visit on the van till");
+  if (!["ASSIGNED", "ACCEPTED", "DELIVERED"].includes(pre.status)) throw fail(400, "DRIVER_JOB_NOT_ASSIGNED", "هذا الطلب ليس بانتظار قبولك", "This order is not waiting for you to accept it");
+  const overpay = (open) => fail(400, "DRIVER_COLLECT_OVERPAY", "المبلغ أكبر من المتبقي للتحصيل (بعد المبالغ بانتظار التأكيد)", "The amount is more than what is left to collect (after amounts awaiting confirmation)", { open: fmt(open) });
+  const vanBranchId = vehicle.branchId;
+
+  const result = await prisma.$transaction(async (tx) => {
+    const job = await myJob(tx, req, req.params.id);
+    checkVersion(job, version);
+    const proofFileId = await checkProof(tx, { orgId, userId: req.user.sub, method, proofFileId: body.proofFileId });
+    let key;
+    let meta;
+    if (job.kind === "SALES_ORDER") {
+      await lockOrder(tx, orgId, job.salesOrderId);
+      const order = await tx.salesOrder.findUnique({ where: { id: job.salesOrderId }, include: { invoice: { select: { id: true, reference: true, status: true } } } });
+      if (["CANCELLED", "DRAFT"].includes(order.status)) throw fail(400, "SO_NOT_OPEN", "سجّل الدفعات على طلب مؤكد فقط", "Record payments on a confirmed, open order");
+      const open = d(order.total) - d(order.amountPaid) - d(order.amountPending);
+      if (amount > open) throw overpay(open);
+      if (order.orderType === "B2B") {
+        if (!order.invoice || !["ISSUED", "PART_PAID"].includes(order.invoice.status)) {
+          throw fail(400, "DRIVER_COLLECT_B2B_NOT_INVOICED", "سند التسليم غير مُفوتر بعد — يُحصَّل المبلغ بسند قبض على الفاتورة", "This delivery note is not invoiced yet. Its money is collected with a cash receipt on the invoice.");
+        }
+        const receiptId = await createReceipt(tx, {
+          orgId, userId: req.user.sub, invoiceId: order.invoice.id, amount, method, bankReference: reference, proofFileId, note,
+          collector: { ...driver, branchId: vanBranchId || driver.branchId }, onlyOrderId: order.id, dispatchJobId: job.id,
+        });
+        key = `B2B_RECEIPT:${receiptId}`;
+        meta = { salesOrderId: order.id, invoice: order.invoice.reference, receiptId };
+      } else {
+        const created = await tx.salesOrderPayment.create({
+          data: {
+            orderId: order.id, branchId: vanBranchId || order.branchId, amount, method, reference, note: note || `Collected by driver (${vehicle.plate || ""})`,
+            paidAt: new Date(), proofFileId, userId: req.user.sub, collectedByUserId: req.user.sub, confirmStatus: "PENDING_CONFIRMATION", dispatchJobId: job.id,
+          },
+        });
+        await tx.salesOrder.update({ where: { id: order.id }, data: { amountPending: { increment: amount } } });
+        key = `SO_PAYMENT:${created.id}`;
+        meta = { salesOrderId: order.id, paymentId: created.id };
+      }
+    } else {
+      // Till sale for delivery (on account, part paid, or paid on delivery).
+      const sale = await tx.sale.findUnique({ where: { id: job.saleId }, include: { customerAccountLedgers: true } });
+      if (!sale.customerId) throw fail(400, "DRIVER_COLLECT_NO_CUSTOMER", "لا يوجد عميل على هذه الفاتورة", "This sale has no customer to collect from");
+      await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${sale.customerId} FOR UPDATE`;
+      const collected = sale.customerAccountLedgers.filter((l) => l.entryType === "PAYMENT" && l.confirmStatus !== "REJECTED").reduce((a, l) => a + Math.abs(d(l.amount)), 0);
+      const open = d(sale.amountDue) - collected;
+      if (amount > open) throw overpay(Math.max(0, open));
+      const hasCredit = sale.customerAccountLedgers.some((l) => l.entryType === "SALE_CREDIT");
+      if (!hasCredit && d(sale.amountDue) > 0) {
+        // Paid on delivery: the debt goes on the customer's account now, so the collection settles it.
+        await tx.customerAccountLedger.create({
+          data: { organizationId: orgId, customerId: sale.customerId, branchId: sale.branchId, entryType: "SALE_CREDIT", amount: d(sale.amountDue), saleId: sale.id, note: "Paid on delivery", createdByUserId: req.user.sub },
+        });
+        await tx.customer.update({ where: { id: sale.customerId }, data: { accountBalance: { increment: d(sale.amountDue) } } });
+      }
+      const entry = await tx.customerAccountLedger.create({
+        data: {
+          organizationId: orgId, customerId: sale.customerId, branchId: vanBranchId || sale.branchId, entryType: "PAYMENT", amount: -amount, saleId: sale.id,
+          paymentMethod: method, note: note || `Collected by driver (${vehicle.plate || ""})`, reference, proofFileId,
+          createdByUserId: req.user.sub, collectedByUserId: req.user.sub, confirmStatus: "PENDING_CONFIRMATION", dispatchJobId: job.id,
+        },
+      });
+      await tx.customer.update({ where: { id: sale.customerId }, data: { accountPending: { increment: amount } } });
+      key = `ACCOUNT_PAYMENT:${entry.id}`;
+      meta = { saleId: sale.id, ledgerId: entry.id, saleCreditAdded: !hasCredit };
+    }
+    const event = { amount: fmt(amount), method, reference, proofFileId, key, ...meta };
+    await logEvent(tx, job, "PAYMENT_COLLECTED", { userId: req.user.sub, note: `${fmt(amount)} ${method}`, meta: event });
+    await auditJob(tx, job, "DRIVER_COLLECT", req.user.sub, `collected ${fmt(amount)} ${method} (awaiting confirmation)`, event);
+    return { key, jobId: job.id };
+  }, TX);
+  const job = await prisma.dispatchJob.findUnique({ where: { id: result.jobId }, include: JOB_INC });
+  res.status(201).json({ confirmation: await loadConfirmation(orgId, result.key), item: itemView({ job }) });
 });
 
 export default router;

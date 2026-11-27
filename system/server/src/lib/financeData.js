@@ -1,6 +1,6 @@
 import { prisma } from "./prisma.js";
 import { d, lineAmount, money, shareOf, sum } from "./money.js";
-import { SALES_ORDER_CHANNEL, financeExtras, salesOrderTransactions } from "./financeExtras.js";
+import { SALES_ORDER_CHANNEL, confirmationFigures, financeExtras, salesOrderTransactions } from "./financeExtras.js";
 
 /** Shop sales channels (Sale rows). */
 export const SALE_CHANNELS = ["IN_STORE", "VAN", "WEBSITE"];
@@ -374,6 +374,8 @@ export async function financeSummary(orgId, dates, filters = {}) {
         organizationId: orgId,
         entryType: "PAYMENT",
         createdAt: range,
+        // fix-rd: only collections the accountant confirmed are money in.
+        confirmStatus: "CONFIRMED",
         ...(filters.branchId ? { branchId: filters.branchId } : {}),
       },
       _sum: { amount: true },
@@ -395,6 +397,8 @@ export async function financeSummary(orgId, dates, filters = {}) {
 
   // ── Sales orders, complimentary goods, bank transfer, prepayments, freight (lib/financeExtras.js) ──
   const extra = await financeExtras(orgId, dates, filters, { countedSale: COUNTED_SALE, saleChannels: SALE_CHANNELS });
+  // fix-rd: recorded money not yet in money in (awaiting confirmation / rejected), shown alongside.
+  const confirmation = await confirmationFigures(orgId, dates, filters);
   for (const row of Object.values(byChannel)) row.complimentary = 0;
   byChannel[SALES_ORDER_CHANNEL].revenue += extra.so.revenue;
   byChannel[SALES_ORDER_CHANNEL].cogs += extra.so.cogs;
@@ -509,6 +513,13 @@ export async function financeSummary(orgId, dates, filters = {}) {
       fawran: money(moneyOutBy.fawran),
     },
     net: money(moneyIn - moneyOut),
+    /** fix-rd: collected money recorded in the range but not in money in (see docs/testing/payment-confirmation.md). */
+    paymentConfirmation: {
+      awaiting: money(confirmation.awaiting),
+      awaitingCount: confirmation.awaitingCount,
+      rejected: money(confirmation.rejected),
+      rejectedCount: confirmation.rejectedCount,
+    },
   };
 }
 

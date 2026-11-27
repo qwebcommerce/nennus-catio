@@ -38,7 +38,14 @@ export const SO_INCLUDE = {
   installments: { orderBy: { seq: "asc" } },
   payments: {
     orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }],
-    include: { proofFile: { select: FILE_SELECT }, user: { select: { id: true, name: true, nameEn: true } } },
+    include: {
+      proofFile: { select: FILE_SELECT },
+      user: { select: { id: true, name: true, nameEn: true } },
+      // fix-rd: who collected it and the accountant's decision.
+      collectedBy: { select: { id: true, name: true, nameEn: true } },
+      confirmedBy: { select: { id: true, name: true, nameEn: true } },
+      rejectedBy: { select: { id: true, name: true, nameEn: true } },
+    },
   },
   deliveries: {
     orderBy: { deliveredAt: "asc" },
@@ -232,6 +239,8 @@ export function soView(order, today = qatarDayKey()) {
     lines,
     installments,
     balance: (balance / 100).toFixed(2),
+    // fix-rd: what can still be collected (balance minus payments awaiting confirmation).
+    openToCollect: (Math.max(0, balance - d(order.amountPending)) / 100).toFixed(2),
     paidStatus: paidStatus(order),
     overdue: installments.some((i) => i.overdue),
     nextDue: installments.find((i) => Number(i.owed) > 0)?.dueDate || null,

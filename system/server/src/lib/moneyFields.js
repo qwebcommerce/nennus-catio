@@ -14,7 +14,7 @@ export const MONEY_FIELDS = {
   PayrollLine: ["baseAmount", "allowancesTotal", "deductionsTotal", "loanDeduction", "netAmount"],
   EmployeeLoan: ["principal", "paidAmount"],
   LoanRepayment: ["amount"],
-  Customer: ["lifetimeSpend", "accountBalance", "creditLimit"],
+  Customer: ["lifetimeSpend", "accountBalance", "creditLimit", "accountPending"],
   CustomerAccountLedger: ["amount"],
   LoyaltyProgramSettings: ["earnEveryAmount", "minOrderForEarn"],
   Coupon: ["minOrderAmount", "maxDiscountAmount"],
@@ -55,7 +55,7 @@ export const MONEY_FIELDS = {
   Promotion: ["amount", "bundlePrice", "minOrderAmount"],
   Payment: ["amount"],
   // Sales orders, supplier prepayments (migration 20261126100000_sales_orders_payments).
-  SalesOrder: ["subtotal", "discountAmount", "total", "amountPaid", "deliveredRevenue"],
+  SalesOrder: ["subtotal", "discountAmount", "total", "amountPaid", "deliveredRevenue", "amountPending"],
   SalesOrderLine: ["listPrice", "unitPrice", "subtotal", "discountShare"],
   SalesOrderInstallment: ["amount", "amountPaid"],
   SalesOrderPayment: ["amount"],
@@ -68,7 +68,7 @@ export const MONEY_FIELDS = {
   VanReturnLine: ["unitCost", "costAmount"],
   DamagedStock: ["unitCost", "costAmount", "saleAmount"],
   // B2B / Wholesale (migration 20261128100300_b2b_wholesale).
-  B2bInvoice: ["total", "amountPaid"],
+  B2bInvoice: ["total", "amountPaid", "amountPending"],
   B2bReceipt: ["amount"],
 };
 

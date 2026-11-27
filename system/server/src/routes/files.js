@@ -27,6 +27,8 @@ const PROOF_UPLOADERS = [
   ["salesOrders", "create"],
   ["finance", "create"],
   ["b2b", "edit"],
+  // fix-rd: drivers attach the bank transfer proof of money collected on delivery.
+  ["driver", "create"],
 ];
 
 async function anyModule(req, rules) {

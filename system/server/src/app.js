@@ -56,6 +56,8 @@ import purchaseOrderExtraRoutes from "./routes/purchaseOrderExtras.js";
 // fix-rb: drivers / dispatch
 import { approvalsRouter as driverApprovalRoutes, dispatchRouter as dispatchRoutes } from "./routes/dispatch.js";
 import driverRoutes from "./routes/driver.js";
+// fix-rd: accountant confirmation of collected money
+import paymentConfirmRoutes from "./routes/paymentConfirm.js";
 import { prisma } from "./lib/prisma.js";
 import { csrfGuard } from "./middleware/auth.js";
 import {
@@ -198,6 +200,7 @@ app.use("/api/cron", cronRoutes);
 app.use("/api/dispatch", dispatchRoutes);
 app.use("/api/driver-approvals", driverApprovalRoutes);
 app.use("/api/driver", driverRoutes);
+app.use("/api/payment-confirmations", paymentConfirmRoutes);
 
 /** Unknown API paths answer JSON (bilingual) instead of Express's HTML page. */
 app.use("/api", (_req, res) => {

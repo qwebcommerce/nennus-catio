@@ -11,6 +11,7 @@ import { heldQuantity } from "../lib/webOrder.js";
 import { isTillKind } from "../lib/locationKinds.js";
 import { deliverSalesOrder } from "../lib/soDelivery.js";
 import { checkProof } from "../lib/businessFiles.js";
+import { requireActiveStaff } from "../lib/staffPick.js";
 import { qatarDayKey, qatarDayStart } from "../lib/qatarTime.js";
 import {
   OPEN_STATUSES,
@@ -208,7 +209,7 @@ router.patch("/:id", requireModule("salesOrders", "create"), async (req, res) =>
   for (const key of ["deliveryDate", "note", "paymentTerms", "paymentTermsDays"]) if (key in body) data[key] = fields[key];
   let plan = null;
   if (Array.isArray(body.plan)) {
-    if (d(existing.amountPaid) > 0) throw fail(400, "SO_PLAN_LOCKED", "لا يمكن تغيير خطة الدفع بعد تسجيل دفعة", "The payment plan cannot change after a payment was recorded");
+    if (d(existing.amountPaid) > 0 || d(existing.amountPending) > 0) throw fail(400, "SO_PLAN_LOCKED", "لا يمكن تغيير خطة الدفع بعد تسجيل دفعة", "The payment plan cannot change after a payment was recorded");
     plan = buildPlan(d(existing.total), body.plan, { termsDays: fields.paymentTermsDays });
   }
   await prisma.$transaction(async (tx) => {
@@ -271,14 +272,14 @@ router.post("/:id/cancel", requireModule("salesOrders", "delete"), async (req, r
   if (!["DRAFT", "CONFIRMED"].includes(existing.status) || existing.lines.some((l) => l.quantityDelivered > 0)) {
     throw fail(400, "SO_CANNOT_CANCEL", "لا يمكن إلغاء طلب تم تسليم جزء منه", "An order with delivered goods cannot be cancelled");
   }
-  if (d(existing.amountPaid) > 0) {
+  if (d(existing.amountPaid) > 0 || d(existing.amountPending) > 0) {
     throw fail(400, "SO_PAID_CANNOT_CANCEL", "لا يمكن إلغاء طلب عليه دفعات مسجلة", "An order with recorded payments cannot be cancelled");
   }
   await prisma.$transaction(async (tx) => {
     await versionedUpdate(tx, "salesOrder", {
       id: existing.id,
       version,
-      where: { status: { in: ["DRAFT", "CONFIRMED"] }, amountPaid: 0 },
+      where: { status: { in: ["DRAFT", "CONFIRMED"] }, amountPaid: 0, amountPending: 0 },
       data: { status: "CANCELLED", cancelledAt: new Date() },
     });
     await writeAudit({
@@ -331,17 +332,17 @@ router.post("/:id/payments", requireModule("salesOrders", "create"), async (req,
     await lockOrder(tx, orgId, existing.id);
     const order = await tx.salesOrder.findUnique({ where: { id: existing.id }, include: { installments: true, lines: true } });
     if (!OPEN_STATUSES.includes(order.status)) throw fail(400, "SO_NOT_OPEN", "سجّل الدفعات على طلب مؤكد فقط", "Record payments on a confirmed, open order");
-    const balance = d(order.total) - d(order.amountPaid);
+    // fix-rd: payments awaiting the accountant's confirmation count against the balance too, so
+    // the same debt cannot be collected twice; a rejection frees the amount again.
+    const balance = d(order.total) - d(order.amountPaid) - d(order.amountPending);
     if (amount > balance) {
-      throw fail(400, "SO_OVERPAY", "المبلغ أكبر من المتبقي على الطلب", "The payment is more than the order balance", { balance: fmt(balance) });
+      throw fail(400, "SO_OVERPAY", "المبلغ أكبر من المتبقي على الطلب", "The payment is more than the order balance", { balance: fmt(balance), awaitingConfirmation: fmt(order.amountPending) });
     }
     const proofFileId = await checkProof(tx, { orgId, userId: req.user.sub, method, proofFileId: body.proofFileId });
-    const before = allocatePaid(order.installments, d(order.amountPaid));
-    const after = allocatePaid(order.installments, d(order.amountPaid) + amount);
-    const allocation = after
-      .map((a, i) => ({ installmentId: a.id, seq: a.seq, amount: a.paid - before[i].paid }))
-      .filter((a) => a.amount > 0);
-    for (const a of after) await tx.salesOrderInstallment.update({ where: { id: a.id }, data: { amountPaid: a.paid } });
+    // fix-rd: recorded as PENDING_CONFIRMATION; installments, amountPaid and the order status move
+    // when the accountant confirms it (lib/paymentConfirm.js).
+    const allocation = null;
+    const collector = body.collectedByUserId ? await requireActiveStaff(tx, orgId, body.collectedByUserId) : null;
     const created = await tx.salesOrderPayment.create({
       data: {
         orderId: order.id,
@@ -352,16 +353,13 @@ router.post("/:id/payments", requireModule("salesOrders", "create"), async (req,
         note: optText(body.note, 500),
         paidAt,
         proofFileId,
-        allocation,
+        allocation: allocation ?? undefined,
         userId: req.user.sub,
+        collectedByUserId: collector?.id || req.user.sub,
+        confirmStatus: "PENDING_CONFIRMATION",
       },
     });
-    const amountPaid = d(order.amountPaid) + amount;
-    const status = settledStatus({ ...order, amountPaid }, order.lines);
-    await tx.salesOrder.update({
-      where: { id: order.id },
-      data: { amountPaid, status, ...(status === "COMPLETED" ? { completedAt: new Date() } : {}) },
-    });
+    await tx.salesOrder.update({ where: { id: order.id }, data: { amountPending: { increment: amount } } });
     await writeAudit({
       userId: req.user.sub,
       action: "SALES_ORDER_PAYMENT",
@@ -369,7 +367,7 @@ router.post("/:id/payments", requireModule("salesOrders", "create"), async (req,
       entityId: order.id,
       branchId: order.branchId,
       summary: `${order.reference}: ${fmt(amount)} ${method}${reference ? ` ref ${reference}` : ""}`,
-      meta: { paymentId: created.id, allocation, proofFileId },
+      meta: { paymentId: created.id, proofFileId, confirmStatus: "PENDING_CONFIRMATION" },
     }, tx);
     return created;
   }, TX);

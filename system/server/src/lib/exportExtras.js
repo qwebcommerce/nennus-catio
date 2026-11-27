@@ -51,10 +51,11 @@ export const EXTRA_HEAD = {
   billed: ["Billed (QAR)", "المفوتر (ر.ق)"],
   prepaid: ["Prepaid (QAR)", "المدفوع مقدماً (ر.ق)"],
   freight: ["Freight company", "شركة شحن"],
+  awaiting: ["Awaiting confirmation (QAR)", "بانتظار التأكيد (ر.ق)"],
 };
 
 export const EXTRA_ENUMS = ["side", "kind", "overdue", "direction", "paidStatus", "freight"];
-export const EXTRA_MONEY = ["billed", "prepaid"];
+export const EXTRA_MONEY = ["billed", "prepaid", "awaiting"];
 
 const num = (v) => Number(v);
 
@@ -65,7 +66,7 @@ export async function buildExtraList(list, req, { lang, qatarStamp, pick }) {
     const rows = await prisma.salesOrder.findMany({ where: { organizationId: orgId }, include: SO_INCLUDE, orderBy: { createdAt: "desc" }, take: 5000 });
     return {
       subtitle: "",
-      columns: ["reference", "customer", "status", "total", "paid", "owed", "deliveryDate", "overdue", "date"],
+      columns: ["reference", "customer", "status", "total", "paid", "awaiting", "owed", "deliveryDate", "overdue", "date"],
       rows: rows.map((o) => {
         const v = soView(o);
         return {
@@ -75,6 +76,8 @@ export async function buildExtraList(list, req, { lang, qatarStamp, pick }) {
           status: o.status,
           total: money(o.total),
           paid: money(o.amountPaid),
+          // fix-rd: recorded payments not yet confirmed (not in "paid"; still owed).
+          awaiting: money(o.amountPending),
           owed: money(d(o.total) - d(o.amountPaid)),
           deliveryDate: o.deliveryDate ? o.deliveryDate.toISOString().slice(0, 10) : "",
           overdue: v.overdue ? "YES" : "NO",
@@ -93,12 +96,13 @@ export async function buildExtraList(list, req, { lang, qatarStamp, pick }) {
       dueDate: r.dueDate || "",
       amount: num(r.amount),
       paid: num(r.paid),
+      awaiting: num(r.awaiting || 0),
       owed: num(r.owed),
       overdue: r.overdue ? "YES" : "NO",
     });
     return {
       subtitle: `${lang === "ar" ? "في" : "As of"} ${data.asOf}`,
-      columns: ["side", "kind", "counterparty", "reference", "dueDate", "amount", "paid", "owed", "overdue"],
+      columns: ["side", "kind", "counterparty", "reference", "dueDate", "amount", "paid", "awaiting", "owed", "overdue"],
       rows: [...data.toUs.map(row("TO_US")), ...data.byUs.map(row("BY_US"))],
     };
   }
@@ -145,6 +149,9 @@ const PL = {
   soIn: ["Sales-order payments", "دفعات طلبات البيع"],
   transfer: ["of which bank transfer", "منها تحويل بنكي"],
   prepay: ["Supplier prepayments", "دفعات مقدمة للموردين"],
+  // fix-rd: recorded but not in money in.
+  awaiting: ["Received, awaiting confirmation (not in money in)", "مستلمة بانتظار التأكيد (غير محسوبة في الأموال الواردة)"],
+  rejected: ["Rejected by the accountant (not in money in)", "مرفوضة من المحاسب (غير محسوبة في الأموال الواردة)"],
 };
 
 /** Extra P&L / money rows for the "profit" export (inserted after the standard lines). */
@@ -156,5 +163,7 @@ export function extraProfitRows(s, lang) {
     { line: `  ${L("soIn")}`, amount: s.moneyInDetail.salesOrders ?? 0 },
     { line: `  ${L("transfer")}`, amount: s.moneyInDetail.bankTransfer ?? 0 },
     { line: `  ${L("prepay")}`, amount: (s.moneyOutDetail.supplierPrepaymentsCash ?? 0) + (s.moneyOutDetail.supplierPrepaymentsBank ?? 0) },
+    { line: L("awaiting"), amount: s.paymentConfirmation?.awaiting ?? 0 },
+    { line: L("rejected"), amount: s.paymentConfirmation?.rejected ?? 0 },
   ];
 }

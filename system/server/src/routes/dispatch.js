@@ -315,7 +315,8 @@ async function applySoLines(tx, { orgId, userId, job, request }) {
   }
   if (order.lines.length !== (request.before.lines || []).length) throw stale();
   const { kept, removed, totals } = pricedSoLines(order, request.changes.lines);
-  if (totals.total < d(order.amountPaid)) {
+  // fix-rd: payments awaiting confirmation count as paid here (they may still be confirmed).
+  if (totals.total < d(order.amountPaid) + d(order.amountPending)) {
     throw fail(400, "DRIVER_CHANGE_BELOW_PAID", "بعد التعديل يصبح إجمالي الطلب أقل من المدفوع. سجّل استرداداً أولاً أو ارفض الطلب.", "After this change the order total would be less than what was paid. Reject the request or settle the refund first.", { total: fmt(totals.total), paid: fmt(order.amountPaid) });
   }
   const plan = adjustPlan(order.installments, d(order.total), totals.total);

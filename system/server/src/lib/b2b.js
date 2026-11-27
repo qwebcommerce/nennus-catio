@@ -34,13 +34,15 @@ export const NOTE_INCLUDE = {
   ...SO_INCLUDE,
   customer: CUSTOMER,
   branch: BRANCH,
-  invoice: { select: { id: true, reference: true, status: true, invoiceDate: true, dueDate: true, total: true, amountPaid: true } },
+  invoice: { select: { id: true, reference: true, status: true, invoiceDate: true, dueDate: true, total: true, amountPaid: true, amountPending: true } },
 };
 
 export const RECEIPT_INCLUDE = {
   customer: CUSTOMER,
-  invoice: { select: { id: true, reference: true, total: true, amountPaid: true, status: true, invoiceDate: true, dueDate: true } },
+  invoice: { select: { id: true, reference: true, total: true, amountPaid: true, amountPending: true, status: true, invoiceDate: true, dueDate: true } },
   collectedBy: PERSON,
+  confirmedBy: PERSON,
+  rejectedBy: PERSON,
   user: PERSON,
   branch: BRANCH,
   proofFile: { select: FILE_SELECT },
@@ -64,7 +66,7 @@ export const INVOICE_INCLUDE = {
       deliveries: { select: { deliveredAt: true }, orderBy: { deliveredAt: "asc" } },
     },
   },
-  receipts: { orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }], include: { collectedBy: PERSON, user: PERSON, proofFile: { select: FILE_SELECT } } },
+  receipts: { orderBy: [{ paidAt: "asc" }, { createdAt: "asc" }], include: { collectedBy: PERSON, user: PERSON, proofFile: { select: FILE_SELECT }, confirmedBy: PERSON, rejectedBy: PERSON } },
 };
 
 const fmt2 = (dh) => (dh / 100).toFixed(2);
@@ -268,6 +270,8 @@ export async function pendingByCustomer(db, orgId, { customerId = "" } = {}) {
       dueDate: due,
       total: fmt2(d(inv.total)),
       paid: fmt2(d(inv.amountPaid)),
+      // fix-rd: received, waiting for the accountant's confirmation (still owed).
+      awaiting: fmt2(d(inv.amountPending)),
       owed: fmt2(owed),
       overdue,
       daysOverdue: overdue ? Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${due}T00:00:00Z`)) / 86400000) : 0,

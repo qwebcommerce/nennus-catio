@@ -710,6 +710,8 @@ model Customer {
   b2bReceipts    B2bReceipt[]
   /// When the customer created a website account (set on register; backfilled from createdAt).
   registeredAt    DateTime?
+  /// fix-rd: account collections recorded but not yet confirmed (accountBalance drops on confirmation).
+  accountPending  Int          @default(0)
 
   @@index([organizationId, registeredAt])
 }
@@ -741,6 +743,23 @@ model CustomerAccountLedger {
   /// Proof of payment (required for bank transfer).
   proofFileId      String?
   proofFile        BusinessFile?           @relation("LedgerProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  // fix-rd: payment confirmation. Only PAYMENT entries (collections) are ever PENDING / REJECTED;
+  // sale credits and adjustments are CONFIRMED (the default here).
+  version          Int                     @default(1)
+  confirmStatus    PaymentConfirmStatus    @default(CONFIRMED)
+  collectedByUserId String?
+  collectedBy      User?                   @relation("LedgerCollectedBy", fields: [collectedByUserId], references: [id], onDelete: SetNull)
+  confirmedAt      DateTime?
+  confirmedByUserId String?
+  confirmedBy      User?                   @relation("LedgerConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?                   @relation("LedgerRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+  /// Driver collection: the delivery job it was collected on.
+  dispatchJobId    String?
+
+  @@index([organizationId, confirmStatus])
 }
 
 /// إعدادات برنامج الولاء والاستبدال لكل مؤسسة
@@ -1269,6 +1288,15 @@ model User {
   dispatchEvents         DispatchEvent[]
   driverChangesRequested DriverChangeRequest[] @relation("DriverChangeRequestedBy")
   driverChangesDecided   DriverChangeRequest[] @relation("DriverChangeDecidedBy")
+  // fix-rd: payment confirmation (who collected / confirmed / rejected)
+  soPaymentsCollected    SalesOrderPayment[]     @relation("SoPaymentCollectedBy")
+  soPaymentsConfirmed    SalesOrderPayment[]     @relation("SoPaymentConfirmedBy")
+  soPaymentsRejected     SalesOrderPayment[]     @relation("SoPaymentRejectedBy")
+  b2bReceiptsConfirmed   B2bReceipt[]            @relation("B2bReceiptConfirmedBy")
+  b2bReceiptsRejected    B2bReceipt[]            @relation("B2bReceiptRejectedBy")
+  ledgerCollected        CustomerAccountLedger[] @relation("LedgerCollectedBy")
+  ledgerConfirmed        CustomerAccountLedger[] @relation("LedgerConfirmedBy")
+  ledgerRejected         CustomerAccountLedger[] @relation("LedgerRejectedBy")
 }
 
 model Product {
@@ -2423,6 +2451,8 @@ model B2bInvoice {
   /// Sum of the delivery notes' totals (dirhams).
   total            Int              @default(0)
   amountPaid       Int              @default(0)
+  /// fix-rd: receipts recorded but not yet confirmed by the accountant (not in amountPaid).
+  amountPending    Int              @default(0)
   status           B2bInvoiceStatus @default(ISSUED)
   note             String?
   cancelReason     String?
@@ -2465,7 +2495,19 @@ model B2bReceipt {
   user           User                @relation("B2bReceiptRecordedBy", fields: [userId], references: [id], onDelete: Restrict)
   createdAt      DateTime            @default(now())
   payments       SalesOrderPayment[]
+  // fix-rd: payment confirmation (new receipts start PENDING_CONFIRMATION).
+  version          Int                  @default(1)
+  confirmStatus    PaymentConfirmStatus @default(PENDING_CONFIRMATION)
+  confirmedAt      DateTime?
+  confirmedByUserId String?
+  confirmedBy      User?                @relation("B2bReceiptConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?                @relation("B2bReceiptRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+  dispatchJobId    String?
 
+  @@index([organizationId, confirmStatus])
   @@index([organizationId, paidAt])
   @@index([invoiceId])
   @@index([customerId])
@@ -2506,6 +2548,8 @@ model SalesOrder {
   discountAmount   Int                     @default(0)
   total            Int                     @default(0)
   amountPaid       Int                     @default(0)
+  /// fix-rd: payments recorded but not yet confirmed (not in amountPaid; they block overpaying).
+  amountPending    Int                     @default(0)
   /// Revenue recognised so far (delivered value).
   deliveredRevenue Int                     @default(0)
   freeReason       String?
@@ -2593,8 +2637,30 @@ model SalesOrderPayment {
   userId      String
   user        User          @relation(fields: [userId], references: [id], onDelete: Restrict)
   createdAt   DateTime      @default(now())
+  // fix-rd: payment confirmation. New rows start PENDING_CONFIRMATION; the order's amountPaid and
+  // the installments only count CONFIRMED rows (allocation is set at confirmation).
+  version          Int                  @default(1)
+  confirmStatus    PaymentConfirmStatus @default(PENDING_CONFIRMATION)
+  collectedByUserId String?
+  collectedBy      User?                @relation("SoPaymentCollectedBy", fields: [collectedByUserId], references: [id], onDelete: SetNull)
+  confirmedAt      DateTime?
+  confirmedByUserId String?
+  confirmedBy      User?                @relation("SoPaymentConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?                @relation("SoPaymentRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+  dispatchJobId    String?
 
   @@index([orderId])
+  @@index([confirmStatus])
+}
+
+/// fix-rd: money collected outside the till drawer flow waits for the accountant.
+enum PaymentConfirmStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  REJECTED
 }
 
 model SalesOrderDelivery {
@@ -3006,6 +3072,8 @@ enum DispatchEventType {
   CHANGE_APPROVED
   CHANGE_REJECTED
   EDITED
+  /// fix-rd: the driver recorded money collected for the order.
+  PAYMENT_COLLECTED
 }
 
 enum DriverChangeStatus {
