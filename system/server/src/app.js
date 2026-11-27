@@ -38,6 +38,8 @@ import { relocationFiles, relocationShop, relocationStaff } from "./routes/reloc
 import onlineOrderRoutes from "./routes/onlineOrders.js";
 import deliverySetupRoutes from "./routes/deliverySetup.js";
 import promotionRoutes from "./routes/promotions.js";
+// fix-re: generated grooming coupons
+import couponRoutes from "./routes/coupons.js";
 import financeRoutes from "./routes/finance.js";
 import vehicleRoutes from "./routes/vehicles.js";
 import exportRoutes from "./routes/exports.js";
@@ -189,6 +191,8 @@ app.use("/api/relocation", relocationStaff);
 app.use("/api/relocation-files", relocationFiles);
 app.use("/api/shop", shopRoutes);
 app.use("/api/promotions", promotionRoutes);
+// fix-re: generated grooming coupons (docs/testing/coupons.md)
+app.use("/api/coupons", couponRoutes);
 app.use("/api/finance", financeRoutes);
 app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/exports", exportRoutes);

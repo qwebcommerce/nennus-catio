@@ -10,6 +10,8 @@ import { writeAudit } from "../lib/auditLog.js";
 import { checkGatewayPayment } from "../lib/paymentLookup.js";
 import { assertVersion, clientVersion, isStaleEditError, requireVersion, staleEditError, versionedUpdate } from "../lib/recordVersion.js";
 import { mailCustomer } from "../lib/mailer.js";
+import { claimCoupon, commitCoupon, couponErrorBody, isCouponError, releaseCouponFor } from "../lib/coupons.js";
+import { priceGrooming, priceBody } from "../lib/groomingPrice.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -252,6 +254,24 @@ router.post("/schedule", requireModule("grooming", "edit"), async (req, res) => 
   res.status(201).json(row);
 });
 
+/** fix-re: desk price check — package price, a generated coupon's discount and the total. Takes no use. */
+router.post("/coupon-quote", requireModule("grooming", "create"), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const service = await prisma.groomingService.findFirst({ where: { id: String(b.serviceId || ""), organizationId: req.user.organizationId, active: true } });
+    if (!service) return res.status(400).json(couponErrorBody({ code: "COUPON_NEEDS_PACKAGE", errorAr: "اختر الباقة لاستخدام القسيمة", errorEn: "Choose a package to use a coupon" }));
+    const customerId = b.customerId ? String(b.customerId) : null;
+    if (customerId && !(await prisma.customer.count({ where: { id: customerId, organizationId: req.user.organizationId } }))) {
+      return res.status(400).json({ error: "العميل غير صالح" });
+    }
+    const priced = await priceGrooming(prisma, { organizationId: req.user.organizationId, service, code: b.couponCode, channel: "DESK", customerId });
+    res.json(priceBody(priced, (v) => Number((v / 100).toFixed(2))));
+  } catch (e) {
+    if (isCouponError(e)) return res.status(e.status || 400).json(couponErrorBody(e));
+    res.status(e.status || 400).json({ error: e.message });
+  }
+});
+
 router.post("/", requireModule("grooming", "create"), async (req, res) => {
   try {
     const b = req.body || {};
@@ -270,8 +290,9 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
     const serviceId = b.serviceId ? String(b.serviceId) : null;
     const customerId = b.customerId ? String(b.customerId) : null;
 
+    let service = null;
     if (serviceId) {
-      const service = await prisma.groomingService.findFirst({
+      service = await prisma.groomingService.findFirst({
         where: { id: serviceId, organizationId: req.user.organizationId, active: true },
       });
       if (!service) return res.status(400).json({ error: "الخدمة غير صالحة" });
@@ -300,6 +321,17 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
       }
     }
 
+    // fix-re: the desk booking carries its price (package price, less a generated coupon); a
+    // coupon needs a package, and its use is committed with the booking (docs/testing/coupons.md).
+    const typedCoupon = String(b.couponCode || "").trim();
+    let priced = null;
+    if (service) {
+      priced = await priceGrooming(prisma, { organizationId: req.user.organizationId, service, code: typedCoupon, channel: "DESK", customerId });
+    } else if (typedCoupon) {
+      return res.status(400).json(couponErrorBody({ code: "COUPON_NEEDS_PACKAGE", errorAr: "اختر الباقة لاستخدام القسيمة", errorEn: "Choose a package to use a coupon" }));
+    }
+    const coupon = priced?.coupon || null;
+
     const reminder24hAt = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
     const reminder2hAt = new Date(startAt.getTime() - 2 * 60 * 60 * 1000);
     // Email is the only notification channel (FR-87): one email reminder the day before.
@@ -311,7 +343,7 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
     const row = await prisma.$transaction(async (tx) => {
       // Staff bookings respect grooming hours and capacity too (FR-48, NFR-06).
       await claimSlot(tx, { organizationId: req.user.organizationId, startAt, endAt, grid: null });
-      return tx.appointment.create({
+      const created = await tx.appointment.create({
       data: {
         organizationId: req.user.organizationId,
         branchId,
@@ -330,15 +362,23 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
         reminder2hAt,
         createdByUserId: req.user.sub,
         reminders: { create: reminders },
+        ...(priced ? { amount: priced.amount } : {}),
+        ...(coupon ? { couponCodeId: coupon.codeRow.id, couponCode: coupon.codeRow.code, couponDiscount: priced.discount } : {}),
       },
       include: {
         customer: { select: { id: true, name: true, phone: true } },
         service: { select: { id: true, name: true, nameEn: true, durationMin: true, price: true } },
       },
       });
+      if (coupon) {
+        await claimCoupon(tx, { checked: coupon, appointmentId: created.id, customerId, channel: "DESK", status: "COMMITTED", gross: priced.gross, userId: req.user.sub });
+        await writeAudit({ userId: req.user.sub, action: "COUPON_REDEEM", entityType: "Appointment", entityId: created.id, branchId, summary: `${coupon.codeRow.code} on ${created.reference || created.id} (desk) -${(priced.discount / 100).toFixed(2)}` }, tx);
+      }
+      return created;
     }, LOCK_TX);
     res.status(201).json(toApi("Appointment", row));
   } catch (e) {
+    if (isCouponError(e)) return res.status(e.status || 400).json(couponErrorBody(e));
     res.status(e.status || 400).json({
       error: e.errorAr || (e instanceof Error ? e.message : "فشل إنشاء الموعد"),
       ...(e.errorEn ? { errorEn: e.errorEn, errorAr: e.errorAr } : {}),
@@ -413,6 +453,8 @@ router.patch("/:id", requireModule("grooming", "edit"), async (req, res) => {
       }
       return tx.appointment.findUnique({ where: { id: existing.id } });
     }, LOCK_TX);
+    // fix-re: a cancelled booking gives its coupon use back when nothing was paid (exactly once).
+    if (next === "CANCELLED") await releaseCouponFor(prisma, row.id, "STAFF_CANCEL");
     if (next || move) {
       await writeAudit({
         userId: req.user.sub,
@@ -497,11 +539,17 @@ router.post("/:id/resolve-payment", requireModule("grooming", "edit"), async (re
           where: { id: current.id },
           data: { status: "CONFIRMED", amountPaid: accepted, paidAt: new Date(), paymentReview: false, paymentReviewReason: null },
         });
+        // fix-re: the coupon use is committed with the accepted payment (taken again if its hold had ended).
+        if (current.couponCodeId) {
+          await commitCoupon(tx, current.id);
+          await tx.payment.updateMany({ where: { appointmentId: current.id, kind: "PAYMENT" }, data: { couponCode: current.couponCode, couponDiscount: current.couponDiscount || 0 } });
+        }
       }, LOCK_TX);
     } else {
       await rejectReviewPayments({ parentKind: "appointment", parentId: existing.id, userId: req.user.sub });
       await prisma.appointment.updateMany({ where: { id: existing.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
       await prisma.appointment.update({ where: { id: existing.id }, data: { paymentReview: false, paymentReviewReason: null } });
+      await releaseCouponFor(prisma, existing.id, "PAYMENT_REFUNDED");
     }
   } catch (e) {
     return res.status(e.status || 400).json({ error: e.errorAr || e.message, errorEn: e.errorEn || e.message });

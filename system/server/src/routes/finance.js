@@ -2,6 +2,8 @@ import { Router } from "express";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { qatarRange } from "../lib/qatarTime.js";
 import { financeFilters, financeSummary, financeTransactions, stockValueRows } from "../lib/financeData.js";
+// fix-re: coupon discounts given on grooming (by batch)
+import { couponDiscountSummary } from "../lib/couponReport.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -18,11 +20,12 @@ router.get("/summary", async (req, res) => {
   if (!dates) return res.status(400).json(INVALID_DATES);
   const filters = financeFilters(req.query);
   const orgId = req.user.organizationId;
-  const [summary, stock] = await Promise.all([
+  const [summary, stock, couponDiscounts] = await Promise.all([
     financeSummary(orgId, dates, filters),
     stockValueRows(orgId, filters.branchId),
+    couponDiscountSummary(orgId, dates, filters),
   ]);
-  res.json({ ...summary, stockValue: stock.total, stockValueByLocation: stock.byLocation });
+  res.json({ ...summary, stockValue: stock.total, stockValueByLocation: stock.byLocation, couponDiscounts });
 });
 
 /** FR-103: sales and refunds by channel, filtered by channel, location, date and type. */
