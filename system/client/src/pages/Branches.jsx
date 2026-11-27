@@ -156,7 +156,7 @@ export default function Branches() {
         <strong className="branches-create__label">{t("branches.new")}</strong>
         <div className="branches-create__grid">
           <label className="branches-field">
-            <span>{t("branches.nameAr")}</span>
+            <span>{t("branches.name")}</span>
             <input
               required
               dir="rtl"
@@ -267,7 +267,7 @@ export default function Branches() {
               </button>
             </div>
             <label className="branches-field">
-              <span>{t("branches.nameAr")}</span>
+              <span>{t("branches.name")}</span>
               <input
                 required
                 dir="rtl"

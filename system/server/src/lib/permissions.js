@@ -233,8 +233,9 @@ export function defaultModuleMap(role) {
   }
 
   if (role === "DRIVER") {
-    // ---- DRIVER: minimal. Till for their van, van returns.
+    // ---- DRIVER: minimal. Till for their van (the till needs to look up products), van returns.
     allow(map, "pos", "view", "create");
+    allow(map, "products", "view");
     allow(map, "returns", "view", "create");
     // -- fix-rb: the driver module (van dashboard) goes here.
     return map;

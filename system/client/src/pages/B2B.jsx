@@ -440,11 +440,11 @@ function qtyText(l, q, t) {
 }
 
 function PrintHeader({ title, reference }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   return (
     <div className="b2b-print-head">
       <h2 style={{ margin: "0 0 4px" }}>{title} {reference}</h2>
-      <div className="fd-muted">{t("b2b.printedOn")} {formatDateTime(new Date(), "en")}</div>
+      <div className="fd-muted">{t("b2b.printedOn")} {formatDateTime(new Date(), locale)}</div>
     </div>
   );
 }
