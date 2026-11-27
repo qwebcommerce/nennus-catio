@@ -1,18 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client.js";
+import { api, editErrorMessage } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { branchDisplayName } from "../utils/displayLabels.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 
 export default function Vehicles() {
   const { t, locale } = useI18n();
-  const { canModule } = useAuth();
+  const { canModule, isAdmin } = useAuth();
   const canCreate = canModule("delivery", "create");
+  // fix-rb: delivery / grooming van type, editable here.
+  const canEdit = canModule("delivery", "edit");
   const canDashboard = canModule("returns", "view");
   const [rows, setRows] = useState([]);
   const [vans, setVans] = useState([]);
-  const [form, setForm] = useState({ name: "", plate: "", branchId: "", notes: "" });
+  const [form, setForm] = useState({ name: "", plate: "", branchId: "", notes: "", type: "DELIVERY" });
   const [msg, setMsg] = useState("");
   const load = async () => {
     // Staff who do not manage vehicles see the ones they may open (a van driver: their own van).
@@ -33,7 +35,7 @@ export default function Vehicles() {
         setMsg("");
         try {
           await api("/api/vehicles", { method: "POST", body: { ...form, branchId: form.branchId || null } });
-          setForm({ name: "", plate: "", branchId: "", notes: "" });
+          setForm({ name: "", plate: "", branchId: "", notes: "", type: "DELIVERY" });
           setMsg(t("setup.added"));
           await load();
         } catch (err) {
@@ -46,12 +48,37 @@ export default function Vehicles() {
           <option value="">{t("shop.noVan")}</option>
           {vans.filter((van) => van.isActive !== false).map((van) => <option key={van.id} value={van.id}>{branchDisplayName(van, locale)}</option>)}
         </select>
+        <select aria-label={t("dsp.vanType")} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} data-testid="new-vehicle-type">
+          <option value="DELIVERY">{t("dsp.vehicleType.DELIVERY")}</option>
+          <option value="GROOMING">{t("dsp.vehicleType.GROOMING")}</option>
+        </select>
         <button className="btn-touch" type="submit">{t("common.add")}</button>
       </form> : null}
       {rows.map((row) => (
         <div key={row.id} className="card vr-vehicle-row" data-testid="vehicle-row">
-          <span>{row.name} · {row.plate} · {row.branch ? branchDisplayName(row.branch, locale) : "—"}</span>
+          <span>{row.name} · {row.plate} · {row.branch ? branchDisplayName(row.branch, locale) : "—"}{row.type && !canEdit ? ` · ${t(`dsp.vehicleType.${row.type}`)}` : ""}</span>
+          {canEdit && row.type ? (
+            <select
+              aria-label={`${t("dsp.vanType")} ${row.plate}`}
+              value={row.type}
+              data-testid="vehicle-type"
+              onChange={async (e) => {
+                setMsg("");
+                try {
+                  await api(`/api/vehicles/${row.id}`, { method: "PATCH", body: { type: e.target.value, version: row.version } });
+                  setMsg(t("dsp.typeSaved"));
+                } catch (err) {
+                  setMsg(editErrorMessage(err, t));
+                }
+                await load();
+              }}
+            >
+              <option value="DELIVERY">{t("dsp.vehicleType.DELIVERY")}</option>
+              <option value="GROOMING">{t("dsp.vehicleType.GROOMING")}</option>
+            </select>
+          ) : null}
           {canDashboard ? <Link to={`/vehicles/${row.id}`} className="btn-touch vr-btn" data-testid="open-dashboard">{t("vr.openDashboard")}</Link> : null}
+          {isAdmin && row.branch ? <Link to={`/driver?vehicleId=${row.id}`} className="btn-touch vr-btn vr-btn--ghost" data-testid="open-driver-view">{t("drv.driverView")}</Link> : null}
         </div>
       ))}
     </div>

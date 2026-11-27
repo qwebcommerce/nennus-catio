@@ -45,6 +45,10 @@ import Settings from "./pages/Settings.jsx";
 import SalesHistory from "./pages/SalesHistory.jsx";
 import SalesOrders from "./pages/SalesOrders.jsx";
 import B2B from "./pages/B2B.jsx";
+// fix-rb: drivers / dispatch
+import DriverDashboard from "./pages/DriverDashboard.jsx";
+import Dispatch from "./pages/Dispatch.jsx";
+import DriverApprovals from "./pages/DriverApprovals.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
 
@@ -84,6 +88,13 @@ function Protected({ children, roles, permission, anyPermission, anyModule, modu
     }
   }
   return children;
+}
+
+/** fix-rb: a driver lands on (and stays in) the driver dashboard. */
+function HomeDashboard() {
+  const { user } = useAuth();
+  if (user?.role === "DRIVER") return <Navigate to="/driver" replace />;
+  return <Dashboard />;
 }
 
 export default function App() {
@@ -154,7 +165,11 @@ export default function App() {
           {/* fix-ra: B2B / Wholesale tab under POS (module b2b). */}
           <Route path="/pos/b2b" element={<Protected module={["b2b", "view"]}><B2B /></Protected>} />
           <Route path="/alerts" element={<Alerts />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dashboard" element={<HomeDashboard />} />
+          {/* fix-rb: drivers / dispatch */}
+          <Route path="/driver" element={<Protected module={["driver", "view"]}><DriverDashboard /></Protected>} />
+          <Route path="/dispatch" element={<Protected module={["dispatch", "view"]}><Dispatch /></Protected>} />
+          <Route path="/driver-approvals" element={<Protected module={["driverApprovals", "view"]}><DriverApprovals /></Protected>} />
           <Route
             path="/sales"
             element={

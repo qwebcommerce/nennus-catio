@@ -135,7 +135,9 @@ export function hasPermission(permissions, key) {
  * view = see it, create = delivery notes and invoices, edit = record cash receipts,
  * delete = cancel a delivery note not yet delivered / an invoice with no receipt, export.
  */
-export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary", "b2b"];
+export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary", "b2b",
+  // fix-rb: drivers / dispatch (docs/testing/drivers-dispatch.md)
+  "dispatch", "driver", "driverApprovals"];
 export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
 
 /**
@@ -148,6 +150,12 @@ export const MODULE_ACTIONS_FOR = Object.freeze({
   salesOrders: ["view", "create", "edit", "delete", "export"],
   complimentary: ["create"],
   b2b: ["view", "create", "edit", "delete", "export"],
+  // fix-rb: dispatch = assignment screen (view; create = assign; edit = reassign / unassign / edit a job).
+  dispatch: ["view", "create", "edit"],
+  // fix-rb: driver = the driver / van dashboard (view; create = accept, decline, request an edit, mark delivered).
+  driver: ["view", "create"],
+  // fix-rb: driverApprovals = approve or reject drivers' order edits (view = see the queue; edit = decide).
+  driverApprovals: ["view", "edit"],
 });
 
 /**
@@ -187,7 +195,7 @@ export function defaultModuleMap(role) {
   // ---- SUPERVISOR (and legacy MANAGER): everything; owner-only actions stay behind requireOwner.
   if (role === "SUPERVISOR" || role === "MANAGER") {
     const map = blankModuleMap(true);
-    // -- fix-rb: SUPERVISOR module lines go here.
+    // fix-rb: dispatch (assign / reassign) and driver-edit approvals are included (all on).
     return map;
   }
 
@@ -204,7 +212,8 @@ export function defaultModuleMap(role) {
     allow(map, "salesOrders", "view", "create");
     allow(map, "grooming", "view");
     allow(map, "delivery", "view");
-    // -- fix-rb: assigning orders to drivers (driver-assignment module) goes here.
+    // fix-rb: sales staff assign orders to drivers; no driver-edit approvals.
+    allow(map, "dispatch", "view", "create", "edit");
     return map;
   }
 
@@ -218,7 +227,9 @@ export function defaultModuleMap(role) {
     allow(map, "products", "view");
     allow(map, "customers", "view");
     allow(map, "pos", "view");
-    // -- fix-rb: ACCOUNTANT module lines go here.
+    // fix-rb: sees dispatch, decides drivers' order edits.
+    allow(map, "dispatch", "view");
+    allow(map, "driverApprovals", "view", "edit");
     return map;
   }
 
@@ -228,7 +239,8 @@ export function defaultModuleMap(role) {
     allow(map, "customers", "view", "create", "edit");
     allow(map, "products", "view");
     allow(map, "salesOrders", "view", "create", "edit");
-    // -- fix-rb: B2B module lines go here.
+    // B2B staff assign their delivery notes to drivers (dispatch).
+    allow(map, "dispatch", "view", "create", "edit");
     return map;
   }
 
@@ -237,7 +249,9 @@ export function defaultModuleMap(role) {
     allow(map, "pos", "view", "create");
     allow(map, "products", "view");
     allow(map, "returns", "view", "create");
-    // -- fix-rb: the driver module (van dashboard) goes here.
+    // fix-rb: the driver / van dashboard (accept, decline, request an edit, mark delivered), customers view.
+    allow(map, "driver", "view", "create");
+    allow(map, "customers", "view");
     return map;
   }
 
@@ -251,6 +265,8 @@ export function defaultModuleMap(role) {
     allow(map, "grooming", "view");
     // Van drivers are employees: they record returns into their van and pay customers back.
     allow(map, "returns", "view", "create");
+    // fix-rb: legacy sales-van employees use the driver dashboard for their van.
+    allow(map, "driver", "view", "create");
     return map;
   }
 

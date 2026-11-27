@@ -51,6 +51,9 @@ import b2bRoutes from "./routes/b2b.js";
 import pendingRoutes from "./routes/pending.js";
 import fileRoutes, { businessFileDownloads } from "./routes/files.js";
 import purchaseOrderExtraRoutes from "./routes/purchaseOrderExtras.js";
+// fix-rb: drivers / dispatch
+import { approvalsRouter as driverApprovalRoutes, dispatchRouter as dispatchRoutes } from "./routes/dispatch.js";
+import driverRoutes from "./routes/driver.js";
 import { prisma } from "./lib/prisma.js";
 import { csrfGuard } from "./middleware/auth.js";
 import {
@@ -188,6 +191,10 @@ app.use("/api/exports", exportRoutes);
 app.use("/api/online-orders", onlineOrderRoutes);
 app.use("/api/delivery-setup", deliverySetupRoutes);
 app.use("/api/cron", cronRoutes);
+// fix-rb: drivers / dispatch
+app.use("/api/dispatch", dispatchRoutes);
+app.use("/api/driver-approvals", driverApprovalRoutes);
+app.use("/api/driver", driverRoutes);
 
 /** Unknown API paths answer JSON (bilingual) instead of Express's HTML page. */
 app.use("/api", (_req, res) => {

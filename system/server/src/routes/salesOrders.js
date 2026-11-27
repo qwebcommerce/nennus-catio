@@ -9,7 +9,7 @@ import { moveStock } from "../lib/stockLedger.js";
 import { stockRowKey } from "../lib/dbErrors.js";
 import { heldQuantity } from "../lib/webOrder.js";
 import { isTillKind } from "../lib/locationKinds.js";
-import { deliverOrderLines } from "../lib/soDelivery.js";
+import { deliverSalesOrder } from "../lib/soDelivery.js";
 import { checkProof } from "../lib/businessFiles.js";
 import { qatarDayKey, qatarDayStart } from "../lib/qatarTime.js";
 import {
@@ -382,29 +382,9 @@ router.post("/:id/payments", requireModule("salesOrders", "create"), async (req,
 router.post("/:id/deliveries", requireModule("salesOrders", "create"), async (req, res) => {
   const orgId = req.user.organizationId;
   const body = req.body || {};
-  const asked = Array.isArray(body.lines) ? body.lines : [];
-  const existing = await loadOrder(prisma, orgId, req.params.id);
-  if (!["CONFIRMED", "PARTLY_DELIVERED"].includes(existing.status)) {
-    throw fail(400, "SO_NOT_DELIVERABLE", "يمكن التسليم من طلب مؤكد لم يُسلَّم بالكامل", "Deliver from a confirmed order that is not fully delivered");
-  }
-  // No lines given: everything still to deliver.
-  const wanted = new Map();
-  if (asked.length) {
-    for (const row of asked) {
-      const qty = Number(row?.quantity);
-      if (!Number.isInteger(qty) || qty < 0) throw fail(400, "SO_QUANTITY_INVALID", "كمية غير صالحة (عدد صحيح أكبر من صفر، أو غرامات للوزن)", "Enter a whole quantity above zero (grams for weight goods)");
-      if (qty > 0) wanted.set(String(row?.lineId || ""), qty);
-    }
-  } else {
-    for (const l of existing.lines) if (l.quantity > l.quantityDelivered) wanted.set(l.id, l.quantity - l.quantityDelivered);
-  }
-  if (!wanted.size) throw fail(400, "SO_DELIVERY_EMPTY", "أدخل كمية للتسليم", "Enter a quantity to deliver");
-
-  const delivery = await prisma.$transaction(
-    (tx) => deliverOrderLines(tx, { orgId, userId: req.user.sub, orderId: existing.id, wanted, note: optText(body.note, 500) }),
-    TX,
-  );
-  res.status(201).json({ delivery: { id: delivery.id }, order: soView(await loadOrder(prisma, orgId, existing.id)) });
+  // One delivery path (lib/soDelivery.js) for this route, B2B delivery notes and the driver's "Mark delivered".
+  const delivery = await deliverSalesOrder({ orgId, userId: req.user.sub, orderId: req.params.id, lines: body.lines, note: body.note });
+  res.status(201).json({ delivery: { id: delivery.id }, order: soView(await loadOrder(prisma, orgId, req.params.id)) });
 });
 
 export default router;

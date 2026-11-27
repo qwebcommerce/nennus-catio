@@ -24,6 +24,7 @@ import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { lineDirhams, riyals, toDirhams } from "../utils/money.js";
+import { TillDeliveryFields, emptyTillDelivery, tillDeliveryBody } from "../components/TillDeliveryFields.jsx";
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -89,6 +90,8 @@ export default function POS() {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  // fix-rb: till sale "for delivery" (becomes a delivery job on the assignment screen).
+  const [tillDelivery, setTillDelivery] = useState(emptyTillDelivery);
   const [quickCustomerName, setQuickCustomerName] = useState("");
   const [discountInput, setDiscountInput] = useState("");
   const [holdLabel, setHoldLabel] = useState("");
@@ -607,7 +610,17 @@ export default function POS() {
         setMsg(t("pos.deliveryCustomerRequired"));
         return;
       }
-      if (!deliveryAddress.trim()) {
+      if (!deliveryAddress.trim() && !(tillDelivery.on && tillDelivery.address.trim())) {
+        setMsg(t("pos.deliveryAddressRequired"));
+        return;
+      }
+    }
+    if (tillDelivery.on) {
+      if (!customerId) {
+        setMsg(t("pos.deliveryCustomerRequired"));
+        return;
+      }
+      if (!tillDelivery.address.trim()) {
         setMsg(t("pos.deliveryAddressRequired"));
         return;
       }
@@ -699,6 +712,7 @@ export default function POS() {
     if (paymentMethod === "ON_DELIVERY" && !splitEnabled && deliveryAddress.trim()) {
       body.deliveryAddress = deliveryAddress.trim();
     }
+    Object.assign(body, tillDeliveryBody(tillDelivery) || {});
     if (discountNum > 0 && discountReason.trim()) {
       body.discountReason = discountReason.trim();
     }
@@ -734,6 +748,7 @@ export default function POS() {
       clearCart();
       setCustomerId("");
       setDeliveryAddress("");
+      setTillDelivery(emptyTillDelivery());
       setDiscountInput("");
       setDiscountReason("");
       setOrderNote("");
@@ -1132,7 +1147,8 @@ export default function POS() {
                 </option>
               ))}
             </select>
-            {paymentMethod === "ON_DELIVERY" && !splitEnabled ? (
+            {activeBranch?.kind !== "VAN" ? <TillDeliveryFields value={tillDelivery} onChange={setTillDelivery} /> : null}
+            {paymentMethod === "ON_DELIVERY" && !splitEnabled && !tillDelivery.on ? (
               <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>
                   {t("pos.deliveryAddress")} *

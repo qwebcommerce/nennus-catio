@@ -8,6 +8,8 @@ import { fail } from "../lib/bizError.js";
 
 const router = Router();
 router.use(authMiddleware);
+// Every staff role has Locations → view by default (lib/permissions.js), which is how drivers,
+// dispatchers and approvers read the location list (fix-ra; replaces fix-rb's special case).
 router.use(requireModule("warehouses", "view"));
 router.use((req, res, next) => requireModule("warehouses", req.method === "GET" ? "view" : "edit")(req, res, next));
 

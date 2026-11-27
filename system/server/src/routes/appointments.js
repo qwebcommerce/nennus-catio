@@ -76,6 +76,8 @@ const NEXT = {
   CANCELLED: [],
 };
 const MOVABLE = ["PENDING_PAYMENT", "BOOKED", "CONFIRMED"];
+/** fix-rb: grooming-van staff close bookings through the same steps (routes/driver.js). */
+export { NEXT as APPOINTMENT_NEXT };
 
 function parseDateTime(value) {
   const d = new Date(String(value || ""));
@@ -285,6 +287,18 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
       });
       if (!c) return res.status(400).json({ error: "العميل غير صالح" });
     }
+    // fix-rb: staff can book a home visit (address + area); it is assigned to a grooming van on the dispatch screen.
+    const home = String(b.visitKind || "").toUpperCase() === "HOME";
+    const homeAddress = home && b.address ? String(b.address).trim().slice(0, 500) : null;
+    let homeAreaId = null;
+    if (home) {
+      if (!homeAddress) return res.status(400).json({ error: "أدخل عنوان التوصيل", errorEn: "Enter the delivery address" });
+      if (b.areaId) {
+        const area = await prisma.deliveryArea.findFirst({ where: { id: String(b.areaId), organizationId: req.user.organizationId, isActive: true }, select: { id: true } });
+        if (!area) return res.status(400).json({ error: "منطقة التوصيل غير صالحة", errorEn: "Choose a valid delivery area" });
+        homeAreaId = area.id;
+      }
+    }
 
     const reminder24hAt = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
     const reminder2hAt = new Date(startAt.getTime() - 2 * 60 * 60 * 1000);
@@ -308,6 +322,7 @@ router.post("/", requireModule("grooming", "create"), async (req, res) => {
           ? String(b.petType).toUpperCase()
           : "OTHER",
         notes: b.notes ? String(b.notes).trim() : null,
+        ...(home ? { visitKind: "HOME", address: homeAddress, areaId: homeAreaId } : {}),
         status: "BOOKED",
         startAt,
         endAt,

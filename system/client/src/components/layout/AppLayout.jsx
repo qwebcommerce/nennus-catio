@@ -9,6 +9,7 @@ import { useAlertsBadgeCount } from "../../hooks/useAlertsBadgeCount.js";
 import { SidebarIcon } from "../SidebarIcon.jsx";
 import { LanguageSwitcher } from "../LanguageSwitcher.jsx";
 import { FloatingCalculator } from "../FloatingCalculator.jsx";
+import { DispatchNavLinks } from "../DispatchNav.jsx";
 
 const NAV_SECTION_IDS = ["dashboard", "inventory", "customers", "admin"];
 
@@ -228,6 +229,25 @@ export function AppLayout() {
         </div>
 
         <nav className="app-sidebar-nav">
+          {/* fix-rb: driver / dispatch links; a DRIVER sees only these, the van till and the cash drawer. */}
+          <DispatchNavLinks />
+          {user?.role === "DRIVER" ? (
+            <>
+              {can("pos") ? (
+                <NavLink to="/pos" className={sidebarLinkClass} end>
+                  <SidebarIcon name="pos" />
+                  <span>{t("nav.pos")}</span>
+                </NavLink>
+              ) : null}
+              {can("cashSession") ? (
+                <NavLink to="/cash" className={sidebarLinkClass}>
+                  <SidebarIcon name="funds" />
+                  <span>{t("nav.funds")}</span>
+                </NavLink>
+              ) : null}
+            </>
+          ) : (
+          <>
           <SidebarNavSection
             sectionId="dashboard"
             title={t("nav.section.dashboard")}
@@ -450,6 +470,8 @@ export function AppLayout() {
             <SidebarIcon name="settings" />
             <span>{t("nav.settings")}</span>
           </NavLink>
+          </>
+          )}
         </nav>
 
         <div className="app-sidebar-footer">

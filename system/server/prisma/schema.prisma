@@ -175,6 +175,10 @@ model Organization {
   damagedStocks           DamagedStock[]
   b2bInvoices             B2bInvoice[]
   b2bReceipts             B2bReceipt[]
+  // fix-rb: drivers / dispatch
+  dispatchJobs            DispatchJob[]
+  dispatchEvents          DispatchEvent[]
+  driverChangeRequests    DriverChangeRequest[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -1251,6 +1255,12 @@ model User {
   b2bInvoicesCreated   B2bInvoice[]    @relation("B2bInvoiceCreatedBy")
   b2bReceiptsCollected B2bReceipt[]    @relation("B2bReceiptCollectedBy")
   b2bReceiptsRecorded  B2bReceipt[]    @relation("B2bReceiptRecordedBy")
+  // fix-rb: drivers / dispatch
+  dispatchJobsDriving    DispatchJob[]         @relation("DispatchJobDriver")
+  dispatchJobsAssigned   DispatchJob[]         @relation("DispatchJobAssignedBy")
+  dispatchEvents         DispatchEvent[]
+  driverChangesRequested DriverChangeRequest[] @relation("DriverChangeRequestedBy")
+  driverChangesDecided   DriverChangeRequest[] @relation("DriverChangeDecidedBy")
 }
 
 model Product {
@@ -1396,6 +1406,8 @@ model Appointment {
   reminders       AppointmentReminder[]
   commissionEntries CommissionEntry[]
   payments        Payment[]
+  /// fix-rb: home visit assigned to a grooming van.
+  dispatchJob     DispatchJob?
 
   @@index([organizationId, branchId, startAt])
   @@index([organizationId, groomerId, startAt])
@@ -1497,6 +1509,8 @@ model Sale {
   @@unique([invoiceNumber])
   /// Why goods on this sale were given free (required when any line is free).
   freeReason       String?
+  /// fix-rb: delivery job (website delivery or a till sale "for delivery").
+  dispatchJob      DispatchJob?
 }
 
 model HeldCart {
@@ -2043,10 +2057,13 @@ model DeliveryArea {
   name           String
   nameEn         String?
   city           String?
+  /// fix-rb: dispatch grouping (e.g. "Doha West"); falls back to city, then the area name.
+  zone           String?
   fee            Int          @default(0)
   isActive       Boolean      @default(true)
   sales          Sale[]
   appointments   Appointment[]
+  dispatchJobs   DispatchJob[]
   createdAt      DateTime     @default(now())
 }
 
@@ -2249,6 +2266,8 @@ model Vehicle {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
   plate          String
+  /// fix-rb: delivery van or grooming van.
+  type           VehicleType  @default(DELIVERY)
   branchId       String?      @unique
   branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
   isActive       Boolean      @default(true)
@@ -2257,6 +2276,7 @@ model Vehicle {
   updatedAt      DateTime     @updatedAt
   transfers      StockTransfer[]
   vanReturns     VanReturn[]
+  dispatchJobs   DispatchJob[]
 
   @@index([organizationId, isActive])
 }
@@ -2489,6 +2509,8 @@ model SalesOrder {
   payments         SalesOrderPayment[]
   deliveries       SalesOrderDelivery[]
   stockMovements   StockMovement[]
+  /// fix-rb: delivery job (driver assignment).
+  dispatchJob      DispatchJob?
 
   @@index([organizationId, status])
   @@index([customerId])
@@ -2927,4 +2949,143 @@ model VanReturnPaymentProof {
   /// Object key in the private "van-return-proofs" bucket.
   storagePath    String?
   createdAt      DateTime     @default(now())
+}
+
+// ------------------------------------------------------------------ fix-rb: drivers / dispatch
+
+enum VehicleType {
+  DELIVERY
+  GROOMING
+}
+
+/// What a delivery job delivers: a website order, a till sale for delivery, a sales order, or a
+/// home-visit grooming booking (grooming vans only).
+enum DispatchKind {
+  WEB_ORDER
+  POS_DELIVERY
+  SALES_ORDER
+  GROOMING
+}
+
+enum DispatchStatus {
+  UNASSIGNED
+  ASSIGNED
+  ACCEPTED
+  DECLINED
+  DELIVERED
+  CANCELLED
+}
+
+enum DispatchEventType {
+  ASSIGNED
+  REASSIGNED
+  UNASSIGNED
+  SEEN
+  ACCEPTED
+  DECLINED
+  DELIVERED
+  CLOSED
+  CHANGE_REQUESTED
+  CHANGE_APPROVED
+  CHANGE_REJECTED
+  EDITED
+}
+
+enum DriverChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// One delivery job per order / booking: who it is assigned to (driver and van) and where it goes.
+model DispatchJob {
+  id               String                @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int                   @default(1)
+  organizationId   String
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  kind             DispatchKind
+  status           DispatchStatus        @default(UNASSIGNED)
+  saleId           String?               @unique
+  sale             Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  salesOrderId     String?               @unique
+  salesOrder       SalesOrder?           @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  appointmentId    String?               @unique
+  appointment      Appointment?          @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  vehicleId        String?
+  vehicle          Vehicle?              @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driverUserId     String?
+  driver           User?                 @relation("DispatchJobDriver", fields: [driverUserId], references: [id], onDelete: SetNull)
+  /// Where and when (copied from the order when the job is made; dispatch / approved driver edits change it).
+  address          String?
+  areaId           String?
+  area             DeliveryArea?         @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  deliveryDate     DateTime?             @db.Date
+  timeNote         String?
+  note             String?
+  assignedAt       DateTime?
+  assignedByUserId String?
+  assignedBy       User?                 @relation("DispatchJobAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  seenAt           DateTime?
+  acceptedAt       DateTime?
+  declinedAt       DateTime?
+  declineReason    String?
+  deliveredAt      DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  events           DispatchEvent[]
+  changeRequests   DriverChangeRequest[]
+
+  @@index([organizationId, status])
+  @@index([vehicleId, status])
+}
+
+/// Assignment history: every assign, reassign, unassign, seen, accept, decline, delivery and change request.
+model DispatchEvent {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobId          String
+  job            DispatchJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type           DispatchEventType
+  userId         String?
+  user           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Driver / van the event concerns (names in meta, so later edits do not rewrite history).
+  driverUserId   String?
+  vehicleId      String?
+  note           String?
+  meta           Json?
+  createdAt      DateTime          @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+/// A driver's edit of an assigned order. Applied only when a supervisor / accountant (or admin) approves it.
+model DriverChangeRequest {
+  id                String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version           Int                @default(1)
+  organizationId    String
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobId             String
+  job               DispatchJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status            DriverChangeStatus @default(PENDING)
+  requestedByUserId String
+  requestedBy       User               @relation("DriverChangeRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  /// { lines: [{ lineId, quantity }], note, address, timeNote, deliveryDate }
+  changes           Json
+  /// The order as the driver saw it (line quantities, address, ...) — approval checks it is unchanged.
+  before            Json
+  reason            String?
+  decidedByUserId   String?
+  decidedBy         User?              @relation("DriverChangeDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  decidedAt         DateTime?
+  decisionNote      String?
+  /// What approval changed (order version, totals before / after).
+  applied           Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([organizationId, status])
+  @@index([jobId])
 }

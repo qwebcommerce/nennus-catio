@@ -4,6 +4,7 @@ import { pwEntries } from "./translationsPw.js";
 import { soEntries } from "./translationsSo.js";
 import { vrEntries } from "./translationsVr.js";
 import { raEntries } from "./translationsRa.js";
+import { rbEntries } from "./translationsRb.js";
 
 const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
@@ -1171,7 +1172,7 @@ const entries = [
 ];
 
 const ROOT = {};
-for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...raEntries]) {
+for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...rbEntries, ...raEntries]) {
   const parts = path.split(".");
   let cur = ROOT;
   for (let i = 0; i < parts.length - 1; i++) {
