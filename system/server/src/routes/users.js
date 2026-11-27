@@ -14,7 +14,9 @@ router.use(requireModule("team", "view"));
 /** FR-07 / FR-09: creating staff, assigning a role and deactivating are reserved for the owner. */
 router.use((req, res, next) => (req.method === "GET" ? next() : requireOwner(req, res, next)));
 
-const ROLES = ["ADMIN", "MANAGER", "CASHIER"];
+const ROLES = ["ADMIN", "MANAGER", "CASHIER",
+  // fix-rb: drivers / dispatch roles (fix-ra adds SALES and B2B and owns the general role list).
+  "SUPERVISOR", "ACCOUNTANT", "DRIVER"];
 
 const userSelect = {
   id: true,

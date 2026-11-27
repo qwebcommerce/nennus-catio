@@ -134,7 +134,9 @@ export function hasPermission(permissions, key) {
  * edit = receive it at the warehouse (and mark paid). Writing off or selling damaged stock is
  * for the business owner only (requireOwner). Staff whose location is a van only see that van.
  */
-export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary"];
+export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary",
+  // fix-rb: drivers / dispatch (see the block in defaultModuleMap and docs/testing/drivers-dispatch.md)
+  "dispatch", "driver", "driverApprovals"];
 export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
 
 /**
@@ -145,6 +147,12 @@ export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "re
 export const MODULE_ACTIONS_FOR = Object.freeze({
   salesOrders: ["view", "create", "edit", "delete", "export"],
   complimentary: ["create"],
+  // fix-rb: dispatch = assignment screen (view; create = assign; edit = reassign / unassign / edit a job).
+  dispatch: ["view", "create", "edit"],
+  // fix-rb: driver = the driver / van dashboard (view; create = accept, decline, request an edit, mark delivered).
+  driver: ["view", "create"],
+  // fix-rb: driverApprovals = approve or reject drivers' order edits (view = see the queue; edit = decide).
+  driverApprovals: ["view", "edit"],
 });
 
 function blankModuleMap(on) {
@@ -171,13 +179,46 @@ export function defaultModuleMap(role) {
     // Van drivers are employees: they record returns into their van and pay customers back.
     map.returns.view = true;
     map.returns.create = true;
+    // fix-rb: staff whose location is a van (sales-van employees) use the driver dashboard for that van.
+    map.driver.view = true;
+    map.driver.create = true;
   }
+  // ---- fix-rb: drivers / dispatch role defaults. BEGIN (fix-ra generalises role storage; reconcile there) ----
+  if (role === "DRIVER") {
+    // Driver / grooming-van staff: their van dashboard, the van till, van returns. Nothing else.
+    map.driver.view = true;
+    map.driver.create = true;
+    map.pos.view = true;
+    map.pos.create = true;
+    map.returns.view = true;
+    map.returns.create = true;
+    map.products.view = true;
+    map.customers.view = true;
+  }
+  if (role === "SUPERVISOR") {
+    map.dispatch.view = true;
+    map.dispatch.create = true;
+    map.dispatch.edit = true;
+    map.driverApprovals.view = true;
+    map.driverApprovals.edit = true;
+  }
+  if (role === "ACCOUNTANT") {
+    map.dispatch.view = true;
+    map.driverApprovals.view = true;
+    map.driverApprovals.edit = true;
+  }
+  // SALES default (role added by fix-ra): sales staff assign orders to drivers.
+  if (role === "SALES") { map.dispatch.view = true; map.dispatch.create = true; map.dispatch.edit = true; }
+  // ---- fix-rb: drivers / dispatch role defaults. END ----
   return map;
 }
 
 export function resolveModulePermissions(organization, role) {
   const base = defaultModuleMap(role);
   if (role === "ADMIN") return base;
+  // fix-rb: roles without their own stored matrix yet (DRIVER, SUPERVISOR, ACCOUNTANT) use the defaults
+  // above; fix-ra adds per-role storage for them.
+  if (["DRIVER", "SUPERVISOR", "ACCOUNTANT"].includes(role)) return base;
   const raw = role === "MANAGER" ? organization?.managerModules : organization?.cashierModules;
   if (!raw) return base;
   try {
