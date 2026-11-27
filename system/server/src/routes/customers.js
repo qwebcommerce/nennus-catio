@@ -101,6 +101,18 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
     return res.status(403).json({ error: "لا يمكن للكاشير تعيين رصيد افتتاحي", errorAr: "لا يمكن للكاشير تعيين رصيد افتتاحي", errorEn: "A cashier cannot set an opening balance", code: "FORBIDDEN" });
   }
 
+  // Approving credit (or giving a credit limit) needs the same right as changing it later:
+  // Customers → edit. Roles that may only add customers (e.g. drivers) can't grant credit.
+  const wantsCredit = Boolean(req.body?.creditApproved) || Number(openingLimit) > 0;
+  if (wantsCredit && !(await hasModule(req, "customers", "edit"))) {
+    return res.status(403).json({
+      error: "لا يمكنك اعتماد العميل للبيع الآجل",
+      errorAr: "لا يمكنك اعتماد العميل للبيع الآجل",
+      errorEn: "You can't approve a customer for credit",
+      code: "FORBIDDEN",
+    });
+  }
+
   const row = await prisma.$transaction(async (tx) => {
     const customer = await tx.customer.create({
       data: {

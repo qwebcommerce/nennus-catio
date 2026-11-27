@@ -664,6 +664,7 @@ const EXACT = [
   ["لا يمكن نقل الحجز إلى هذه الحالة", "The booking cannot move to that status"],
   ["نوع المركبة غير صالح (توصيل أو تجميل)", "Vehicle type must be delivery or grooming"],
   ["لهذه المركبة طلبات مُسندة مفتوحة. أعد إسنادها قبل تغيير النوع.", "This van has open assigned jobs. Reassign them before changing its type."],
+  ["لا يمكنك اعتماد العميل للبيع الآجل", "You can't approve a customer for credit"],
 ];
 
 const PATTERNS = [
