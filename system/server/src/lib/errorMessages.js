@@ -94,6 +94,28 @@ const EXACT = [
   ["لا يمكن للموقع الإلكتروني البيع من سيارة", "The website cannot sell from a van"],
   ["الاسمان العربي والإنجليزي مطلوبان", "Arabic and English names are required"],
 
+  // ── B2B / Wholesale (fix-ra) ──────────────────────────────────────────────
+  ["اختر عميل شركة (فعّل «عميل شركة» في بطاقة العميل)", "Choose a business customer (tick “Business customer” on the customer card)"],
+  ["لا يمكن إلغاء سند تسليم بعد تسليم البضاعة", "A delivery note cannot be cancelled once goods were delivered"],
+  ["اختر سند تسليم واحداً على الأقل", "Choose at least one delivery note"],
+  ["عدد سندات التسليم كبير جداً", "Too many delivery notes"],
+  ["لا يمكن إصدار فاتورة بتاريخ لاحق", "An invoice cannot be dated in the future"],
+  ["سند التسليم غير موجود", "Delivery note not found"],
+  ["الفاتورة لعميل واحد — اختر سندات تسليم لنفس العميل", "An invoice is for one customer. Choose delivery notes of the same customer."],
+  ["يمكن فوترة سندات التسليم المُسلَّمة فقط", "Only delivered delivery notes can be invoiced"],
+  ["سند التسليم مُفوتر مسبقاً", "This delivery note is already invoiced"],
+  ["الفاتورة ملغاة", "This invoice is cancelled"],
+  ["لا يمكن إلغاء فاتورة عليها سندات قبض", "An invoice with cash receipts cannot be cancelled"],
+  ["طريقة الدفع: نقداً أو تحويل بنكي", "Payment method must be cash or bank transfer"],
+  ["الفاتورة غير موجودة", "Invoice not found"],
+  ["الفاتورة مدفوعة بالكامل أو ملغاة", "This invoice is fully paid or cancelled"],
+  ["المبلغ أكبر من المتبقي على الفاتورة", "The amount is more than the invoice balance"],
+  ["تغيّرت الفاتورة. حاول مرة أخرى.", "The invoice changed. Try again."],
+  ["نوع التصدير غير معروف", "Unknown export kind"],
+  ["سند القبض غير موجود", "Cash receipt not found"],
+  ["هذا سند تسليم لمبيعات الشركات — سجّل سند قبض على فاتورته", "This is a B2B delivery note. Record a cash receipt on its invoice."],
+  ["عدّل سندات تسليم الشركات من تبويب مبيعات الشركات / الجملة", "Change B2B delivery notes from the B2B / Wholesale tab"],
+
   // ── Branches / locations ──────────────────────────────────────────────────
   ["اسم الفرع مطلوب", "Branch name is required"],
   ["الفرع غير موجود", "Branch not found"],

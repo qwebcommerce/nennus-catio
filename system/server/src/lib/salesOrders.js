@@ -44,6 +44,8 @@ export const SO_INCLUDE = {
     orderBy: { deliveredAt: "asc" },
     include: { lines: true, user: { select: { id: true, name: true, nameEn: true } } },
   },
+  // B2B delivery notes: the invoice they are on (lib/b2b.js).
+  invoice: { select: { id: true, reference: true, status: true, invoiceDate: true, dueDate: true } },
 };
 
 /** Today in Qatar as a @db.Date value. */

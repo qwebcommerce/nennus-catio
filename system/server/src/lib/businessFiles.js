@@ -132,7 +132,7 @@ export async function checkProof(db, { orgId, userId, method, proofFileId }) {
     select: {
       id: true,
       uploadedByUserId: true,
-      _count: { select: { ledgerProofs: true, billProofs: true, supplierPaymentProofs: true, salesOrderPaymentProofs: true, prepaymentProofs: true } },
+      _count: { select: { ledgerProofs: true, billProofs: true, supplierPaymentProofs: true, salesOrderPaymentProofs: true, prepaymentProofs: true, b2bReceiptProofs: true } },
     },
   });
   if (!file) throw fail(400, "PROOF_NOT_FOUND", "ملف الإثبات غير موجود — ارفعه مرة أخرى", "The proof file was not found. Upload it again.");
@@ -150,17 +150,20 @@ export async function checkProof(db, { orgId, userId, method, proofFileId }) {
  */
 export async function fileAccess(file) {
   if (file.purchaseOrderId) return { rules: [["purchasing", "view"]] };
-  const [ledger, bill, supplierPay, soPay, prepay] = await Promise.all([
+  const [ledger, bill, supplierPay, soPay, prepay, b2bReceipt] = await Promise.all([
     prisma.customerAccountLedger.count({ where: { proofFileId: file.id } }),
     prisma.supplierBill.count({ where: { proofFileId: file.id } }),
     prisma.supplierPayment.count({ where: { proofFileId: file.id } }),
     prisma.salesOrderPayment.count({ where: { proofFileId: file.id } }),
     prisma.supplierPrepayment.count({ where: { proofFileId: file.id } }),
+    prisma.b2bReceipt.count({ where: { proofFileId: file.id } }),
   ]);
   const rules = [];
   if (bill || supplierPay || prepay) rules.push(["purchasing", "view"]);
   if (soPay) rules.push(["salesOrders", "view"]);
   if (ledger) rules.push(["finance", "view"]);
+  // B2B cash receipt proofs: the B2B tab, or Finance (accounts).
+  if (b2bReceipt) rules.push(["b2b", "view"], ["finance", "view"]);
   return { rules, unattached: rules.length === 0 };
 }
 

@@ -62,6 +62,7 @@ export async function pendingPayments(orgId, query = {}) {
       include: {
         customer: { select: { id: true, name: true, companyName: true } },
         installments: true,
+        invoice: { select: { reference: true } },
         payments: { where: { paidAt: { lt: end } }, select: { amount: true } },
       },
     });
@@ -74,7 +75,9 @@ export async function pendingPayments(orgId, query = {}) {
           kind: "SALES_ORDER",
           id: `${o.id}:${inst.seq}`,
           salesOrderId: o.id,
-          reference: `${o.reference} #${inst.seq}`,
+          // B2B delivery notes show their note and invoice numbers (lib/b2b.js).
+          reference: o.orderType === "B2B" ? `${o.dnReference}${o.invoice ? ` · ${o.invoice.reference}` : ""}` : `${o.reference} #${inst.seq}`,
+          b2b: o.orderType === "B2B",
           customerId: o.customerId,
           counterparty: o.customer?.companyName || o.customer?.name || "",
           dueDate: dayOf(inst.dueDate),

@@ -9,6 +9,7 @@ import { moveStock } from "../lib/stockLedger.js";
 import { stockRowKey } from "../lib/dbErrors.js";
 import { heldQuantity } from "../lib/webOrder.js";
 import { isTillKind } from "../lib/locationKinds.js";
+import { deliverOrderLines } from "../lib/soDelivery.js";
 import { checkProof } from "../lib/businessFiles.js";
 import { qatarDayKey, qatarDayStart } from "../lib/qatarTime.js";
 import {
@@ -52,6 +53,13 @@ function freeReasonCheck(lines, freeReason) {
   if (lines.some((l) => l.isFree) && !freeReason) {
     throw fail(400, "FREE_REASON_REQUIRED", "اكتب سبب إعطاء البضاعة مجاناً", "Enter the reason the goods are given free");
   }
+}
+
+/** B2B delivery notes are paid by cash receipts on their invoice and cancelled from the B2B tab. */
+function notB2b(order, what) {
+  if (order.orderType !== "B2B") return;
+  if (what === "payment") throw fail(400, "SO_B2B_USE_RECEIPT", "هذا سند تسليم لمبيعات الشركات — سجّل سند قبض على فاتورته", "This is a B2B delivery note. Record a cash receipt on its invoice.");
+  throw fail(400, "SO_B2B_USE_TAB", "عدّل سندات تسليم الشركات من تبويب مبيعات الشركات / الجملة", "Change B2B delivery notes from the B2B / Wholesale tab");
 }
 
 function lineRows(lines) {
@@ -194,6 +202,7 @@ router.patch("/:id", requireModule("salesOrders", "create"), async (req, res) =>
   assertVersion(existing, version);
   if (["CANCELLED", "COMPLETED"].includes(existing.status)) throw fail(400, "SO_CLOSED", "الطلب مغلق", "This order is closed");
   const body = req.body || {};
+  if (Array.isArray(body.plan)) notB2b(existing, "plan");
   const data = {};
   const fields = orderFields({ ...existing, deliveryDate: existing.deliveryDate ? existing.deliveryDate.toISOString().slice(0, 10) : null, ...body });
   for (const key of ["deliveryDate", "note", "paymentTerms", "paymentTermsDays"]) if (key in body) data[key] = fields[key];
@@ -258,6 +267,7 @@ router.post("/:id/cancel", requireModule("salesOrders", "delete"), async (req, r
   if (!reason) throw fail(400, "REASON_REQUIRED", "اكتب سبب الإلغاء", "Enter the reason for cancelling");
   const existing = await loadOrder(prisma, orgId, req.params.id);
   assertVersion(existing, version);
+  notB2b(existing, "cancel");
   if (!["DRAFT", "CONFIRMED"].includes(existing.status) || existing.lines.some((l) => l.quantityDelivered > 0)) {
     throw fail(400, "SO_CANNOT_CANCEL", "لا يمكن إلغاء طلب تم تسليم جزء منه", "An order with delivered goods cannot be cancelled");
   }
@@ -306,6 +316,7 @@ router.post("/:id/payments", requireModule("salesOrders", "create"), async (req,
   const paidAt = paidAtFrom(body.paidAt);
   const reference = optText(body.reference, 120);
   const existing = await loadOrder(prisma, orgId, req.params.id);
+  notB2b(existing, "payment");
   if (!OPEN_STATUSES.includes(existing.status)) {
     throw fail(400, "SO_NOT_OPEN", "سجّل الدفعات على طلب مؤكد فقط", "Record payments on a confirmed, open order");
   }
@@ -389,96 +400,10 @@ router.post("/:id/deliveries", requireModule("salesOrders", "create"), async (re
   }
   if (!wanted.size) throw fail(400, "SO_DELIVERY_EMPTY", "أدخل كمية للتسليم", "Enter a quantity to deliver");
 
-  const delivery = await prisma.$transaction(async (tx) => {
-    await lockOrder(tx, orgId, existing.id);
-    const order = await tx.salesOrder.findUnique({
-      where: { id: existing.id },
-      include: { lines: { include: { product: { select: { name: true, nameEn: true, sellBy: true, cost: true } }, variant: { select: { label: true } } } } },
-    });
-    if (!["CONFIRMED", "PARTLY_DELIVERED"].includes(order.status)) {
-      throw fail(400, "SO_NOT_DELIVERABLE", "يمكن التسليم من طلب مؤكد لم يُسلَّم بالكامل", "Deliver from a confirmed order that is not fully delivered");
-    }
-    const picks = [];
-    for (const [lineId, qty] of wanted) {
-      const line = order.lines.find((l) => l.id === lineId);
-      if (!line) throw fail(400, "SO_LINE_NOT_FOUND", "السطر غير موجود في الطلب", "A line is not on this order");
-      if (qty > line.quantity - line.quantityDelivered) {
-        throw fail(400, "SO_DELIVERY_TOO_MUCH", "لا يمكن تسليم أكثر من الكمية المتبقية", "A delivery cannot be more than the quantity still to deliver");
-      }
-      picks.push({ line, qty, branchId: order.branchId, productId: line.productId, variantId: line.variantId });
-    }
-    // Stock rows in one fixed order (as the till does) so concurrent writers cannot deadlock.
-    picks.sort((a, b) => stockRowKey(a).localeCompare(stockRowKey(b)));
-    const short = [];
-    for (const p of picks) {
-      const row = p.variantId
-        ? await tx.variantStock.findUnique({ where: { variantId_branchId: { variantId: p.variantId, branchId: p.branchId } } })
-        : await tx.inventory.findUnique({ where: { productId_branchId: { productId: p.productId, branchId: p.branchId } } });
-      const held = await heldQuantity(tx, p);
-      const available = (row?.quantity || 0) - held;
-      if (available < p.qty) short.push({ lineId: p.line.id, product: p.line.product.nameEn || p.line.product.name, needed: p.qty, available: Math.max(0, available) });
-    }
-    if (short.length) {
-      throw fail(409, "SO_STOCK_SHORT", "المخزون في موقع الطلب لا يكفي لهذا التسليم", "Not enough stock at the order's location for this delivery", { short });
-    }
-    let revenue = 0;
-    let cost = 0;
-    let complimentaryCost = 0;
-    const deliveryLines = [];
-    for (const p of picks) {
-      const moved = await moveStock(tx, {
-        orgId,
-        userId: req.user.sub,
-        productId: p.productId,
-        variantId: p.variantId,
-        branchId: p.branchId,
-        delta: -p.qty,
-        reason: "SALE",
-        note: `Sales order ${order.reference}`,
-        salesOrderId: order.id,
-      });
-      const unitCost = moved.unitCost != null ? d(moved.unitCost) : !p.variantId && p.line.product.cost != null ? d(p.line.product.cost) : 0;
-      const costAmount = lineAmount(unitCost, p.qty, p.line.product.sellBy);
-      const lineRevenue = deliveryRevenue(p.line, p.line.quantityDelivered, p.qty);
-      revenue += lineRevenue;
-      if (p.line.isFree) complimentaryCost += costAmount;
-      else cost += costAmount;
-      const updated = await tx.salesOrderLine.updateMany({
-        where: { id: p.line.id, quantityDelivered: p.line.quantityDelivered },
-        data: { quantityDelivered: p.line.quantityDelivered + p.qty },
-      });
-      if (updated.count !== 1) throw fail(409, "TRY_AGAIN", "تغيّر الطلب أثناء التسليم. حاول مرة أخرى.", "The order changed while delivering. Try again.");
-      p.line.quantityDelivered += p.qty;
-      deliveryLines.push({ lineId: p.line.id, quantity: p.qty, revenue: lineRevenue, unitCost, costAmount, isFree: p.line.isFree });
-    }
-    const created = await tx.salesOrderDelivery.create({
-      data: {
-        orderId: order.id,
-        branchId: order.branchId,
-        userId: req.user.sub,
-        note: optText(body.note, 500),
-        revenue,
-        cost,
-        complimentaryCost,
-        lines: { create: deliveryLines },
-      },
-    });
-    const status = settledStatus(order, order.lines);
-    await tx.salesOrder.update({
-      where: { id: order.id },
-      data: { deliveredRevenue: d(order.deliveredRevenue) + revenue, status, ...(status === "COMPLETED" ? { completedAt: new Date() } : {}) },
-    });
-    await writeAudit({
-      userId: req.user.sub,
-      action: "SALES_ORDER_DELIVERY",
-      entityType: "SalesOrder",
-      entityId: order.id,
-      branchId: order.branchId,
-      summary: `${order.reference}: delivered ${deliveryLines.length} line(s), revenue ${fmt(revenue)}, cost ${fmt(cost)}, complimentary ${fmt(complimentaryCost)}`,
-      meta: { deliveryId: created.id, lines: deliveryLines.map((l) => ({ lineId: l.lineId, quantity: l.quantity })) },
-    }, tx);
-    return created;
-  }, TX);
+  const delivery = await prisma.$transaction(
+    (tx) => deliverOrderLines(tx, { orgId, userId: req.user.sub, orderId: existing.id, wanted, note: optText(body.note, 500) }),
+    TX,
+  );
   res.status(201).json({ delivery: { id: delivery.id }, order: soView(await loadOrder(prisma, orgId, existing.id)) });
 });
 

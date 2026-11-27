@@ -44,6 +44,7 @@ import Alerts from "./pages/Alerts.jsx";
 import Settings from "./pages/Settings.jsx";
 import SalesHistory from "./pages/SalesHistory.jsx";
 import SalesOrders from "./pages/SalesOrders.jsx";
+import B2B from "./pages/B2B.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
 
@@ -150,6 +151,8 @@ export default function App() {
         >
           <Route path="/change-password" element={<ChangePassword />} />
           <Route path="/pos" element={<Protected permission="pos"><POS /></Protected>} />
+          {/* fix-ra: B2B / Wholesale tab under POS (module b2b). */}
+          <Route path="/pos/b2b" element={<Protected module={["b2b", "view"]}><B2B /></Protected>} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route

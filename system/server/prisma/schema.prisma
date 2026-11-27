@@ -173,6 +173,8 @@ model Organization {
   vanReturnPhotos         VanReturnPhoto[]
   vanReturnProofs         VanReturnPaymentProof[]
   damagedStocks           DamagedStock[]
+  b2bInvoices             B2bInvoice[]
+  b2bReceipts             B2bReceipt[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -696,6 +698,8 @@ model Customer {
   companyName    String?
   salesOrders    SalesOrder[]
   vanReturns     VanReturn[]
+  b2bInvoices    B2bInvoice[]
+  b2bReceipts    B2bReceipt[]
 }
 
 /// حركات ذمم الزبائن
@@ -920,6 +924,7 @@ model Branch {
   salesOrders    SalesOrder[]
   salesOrderPayments SalesOrderPayment[]
   salesOrderDeliveries SalesOrderDelivery[]
+  b2bReceipts    B2bReceipt[]
 }
 
 model Supplier {
@@ -1243,6 +1248,9 @@ model User {
   salesOrderDeliveries SalesOrderDelivery[]
   supplierPrepayments  SupplierPrepayment[]
   businessFilesUploaded BusinessFile[]
+  b2bInvoicesCreated   B2bInvoice[]    @relation("B2bInvoiceCreatedBy")
+  b2bReceiptsCollected B2bReceipt[]    @relation("B2bReceiptCollectedBy")
+  b2bReceiptsRecorded  B2bReceipt[]    @relation("B2bReceiptRecordedBy")
 }
 
 model Product {
@@ -1526,6 +1534,7 @@ model CashSession {
   sales              Sale[]
   refunds            Refund[]
   vanReturns         VanReturn[]
+  b2bReceipts        B2bReceipt[]
 }
 
 model AuditLog {
@@ -2347,6 +2356,85 @@ enum SupplierBillKind {
   FREIGHT
 }
 
+enum SalesOrderType {
+  STANDARD
+  B2B
+}
+
+enum B2bInvoiceStatus {
+  ISSUED
+  PART_PAID
+  PAID
+  CANCELLED
+}
+
+/// B2B / Wholesale invoice (INV-000001): one or more delivered delivery notes (B2B sales orders)
+/// of one customer. Its receipts are spread over those orders as SalesOrderPayment rows.
+model B2bInvoice {
+  id               String           @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int              @default(1)
+  organizationId   String
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reference        String           @unique @default(dbgenerated("nc_ref('INV-'::text, 'nc_b2b_invoice_ref_seq'::regclass)"))
+  customerId       String
+  customer         Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  userId           String
+  user             User             @relation("B2bInvoiceCreatedBy", fields: [userId], references: [id], onDelete: Restrict)
+  invoiceDate      DateTime         @db.Date
+  dueDate          DateTime         @db.Date
+  paymentTermsDays Int?
+  /// Sum of the delivery notes' totals (dirhams).
+  total            Int              @default(0)
+  amountPaid       Int              @default(0)
+  status           B2bInvoiceStatus @default(ISSUED)
+  note             String?
+  cancelReason     String?
+  cancelledAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  orders           SalesOrder[]
+  receipts         B2bReceipt[]
+
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+/// B2B cash receipt (RC-000001) against an invoice: cash or bank transfer (proof required), who
+/// collected it, and the cash session it went into when the collector's location had one open.
+model B2bReceipt {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reference      String              @unique @default(dbgenerated("nc_ref('RC-'::text, 'nc_b2b_receipt_ref_seq'::regclass)"))
+  invoiceId      String
+  invoice        B2bInvoice          @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customerId     String
+  customer       Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  amount         Int
+  method         PaymentMethod
+  bankReference  String?
+  note           String?
+  paidAt         DateTime            @default(now())
+  proofFileId    String?             @unique
+  proofFile      BusinessFile?       @relation("B2bReceiptProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  collectedById  String
+  collectedBy    User                @relation("B2bReceiptCollectedBy", fields: [collectedById], references: [id], onDelete: Restrict)
+  /// Location the money came in at: the collector's location, else the delivery note's.
+  branchId       String
+  branch         Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  cashSessionId  String?
+  cashSession    CashSession?        @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User                @relation("B2bReceiptRecordedBy", fields: [userId], references: [id], onDelete: Restrict)
+  createdAt      DateTime            @default(now())
+  payments       SalesOrderPayment[]
+
+  @@index([organizationId, paidAt])
+  @@index([invoiceId])
+  @@index([customerId])
+}
+
 enum SalesOrderStatus {
   DRAFT
   CONFIRMED
@@ -2385,6 +2473,12 @@ model SalesOrder {
   /// Revenue recognised so far (delivered value).
   deliveredRevenue Int                     @default(0)
   freeReason       String?
+  /// STANDARD sales order, or B2B: a delivery note (dnReference DN-000001) of the B2B / Wholesale
+  /// tab, invoiced on a B2bInvoice and paid by B2bReceipt (see lib/b2b.js).
+  orderType        SalesOrderType          @default(STANDARD)
+  dnReference      String?                 @unique
+  invoiceId        String?
+  invoice          B2bInvoice?             @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
   confirmedAt      DateTime?
   completedAt      DateTime?
   cancelledAt      DateTime?
@@ -2398,6 +2492,7 @@ model SalesOrder {
 
   @@index([organizationId, status])
   @@index([customerId])
+  @@index([invoiceId])
 }
 
 model SalesOrderLine {
@@ -2454,6 +2549,9 @@ model SalesOrderPayment {
   proofFile   BusinessFile? @relation("SalesOrderPaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
   /// [{ installmentId, seq, amount }] how this payment was spread over the installments (oldest first).
   allocation  Json?
+  /// The B2B cash receipt this payment is part of (one receipt can pay several delivery notes).
+  receiptId   String?
+  receipt     B2bReceipt?   @relation(fields: [receiptId], references: [id], onDelete: Restrict)
   userId      String
   user        User          @relation(fields: [userId], references: [id], onDelete: Restrict)
   createdAt   DateTime      @default(now())
@@ -2558,6 +2656,7 @@ model BusinessFile {
   supplierPaymentProofs   SupplierPayment[]       @relation("SupplierPaymentProof")
   salesOrderPaymentProofs SalesOrderPayment[]     @relation("SalesOrderPaymentProof")
   prepaymentProofs        SupplierPrepayment[]    @relation("PrepaymentProof")
+  b2bReceiptProofs        B2bReceipt[]            @relation("B2bReceiptProof")
 
   @@index([organizationId, purpose])
   @@index([purchaseOrderId])

@@ -67,6 +67,9 @@ export const MONEY_FIELDS = {
   VanReturn: ["amountOwed"],
   VanReturnLine: ["unitCost", "costAmount"],
   DamagedStock: ["unitCost", "costAmount", "saleAmount"],
+  // B2B / Wholesale (migration 20261128100300_b2b_wholesale).
+  B2bInvoice: ["total", "amountPaid"],
+  B2bReceipt: ["amount"],
 };
 
 const MONEY = new Map(Object.entries(MONEY_FIELDS).map(([model, fields]) => [model, new Set(fields)]));

@@ -26,6 +26,7 @@ const PROOF_UPLOADERS = [
   ["purchasing", "create"],
   ["salesOrders", "create"],
   ["finance", "create"],
+  ["b2b", "edit"],
 ];
 
 async function anyModule(req, rules) {

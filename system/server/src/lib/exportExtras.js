@@ -69,7 +69,8 @@ export async function buildExtraList(list, req, { lang, qatarStamp, pick }) {
       rows: rows.map((o) => {
         const v = soView(o);
         return {
-          reference: o.reference,
+          // B2B delivery notes (fix-ra) show their note and invoice numbers too.
+          reference: o.orderType === "B2B" ? `${o.dnReference} / ${o.reference}${o.invoice ? ` / ${o.invoice.reference}` : ""}` : o.reference,
           customer: o.customer?.companyName || o.customer?.name || "",
           status: o.status,
           total: money(o.total),

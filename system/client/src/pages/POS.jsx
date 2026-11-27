@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isTillKind } from "../lib/locationKinds.js";
+import PosSubNav from "../components/PosSubNav.jsx";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { PosCartPanel } from "../components/PosCartPanel.jsx";
@@ -763,6 +764,7 @@ export default function POS() {
 
   return (
     <div className="pos-page-root">
+      <PosSubNav />
       <div className="pos-top-bar">
         <h1 className="pos-top-bar__title">{t("pos.title")}</h1>
         <div className="pos-search" ref={searchWrapRef}>

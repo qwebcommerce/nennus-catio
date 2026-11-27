@@ -47,6 +47,7 @@ import reportsRoutes from "./routes/reports.js";
 import appointmentsRoutes from "./routes/appointments.js";
 import cronRoutes from "./routes/cron.js";
 import salesOrderRoutes from "./routes/salesOrders.js";
+import b2bRoutes from "./routes/b2b.js";
 import pendingRoutes from "./routes/pending.js";
 import fileRoutes, { businessFileDownloads } from "./routes/files.js";
 import purchaseOrderExtraRoutes from "./routes/purchaseOrderExtras.js";
@@ -170,6 +171,8 @@ app.use("/api/pet-types", petTypeRoutes);
 app.use("/api/purchase-orders", purchaseOrderExtraRoutes);
 app.use("/api/purchase-orders", purchaseOrderRoutes);
 app.use("/api/sales-orders", salesOrderRoutes);
+// fix-ra: B2B / Wholesale tab (delivery note → invoice → cash receipt).
+app.use("/api/b2b", b2bRoutes);
 app.use("/api/pending", pendingRoutes);
 app.use("/api/files", fileRoutes);
 app.use("/api/business-files", businessFileDownloads);

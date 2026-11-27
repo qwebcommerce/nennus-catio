@@ -271,6 +271,12 @@ export function AppLayout() {
               <span>{t("nav.pos")}</span>
             </NavLink>
           ) : null}
+          {canModule("b2b", "view") ? (
+            <NavLink to="/pos/b2b" className={sidebarLinkClass}>
+              <SidebarIcon name="purchases" />
+              <span>{t("b2b.title")}</span>
+            </NavLink>
+          ) : null}
 
           <SidebarNavSection
             sectionId="inventory"
