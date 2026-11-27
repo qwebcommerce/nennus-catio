@@ -40,6 +40,8 @@ import { planB2bDemo } from "./demo/b2b.mjs";
 import { planDispatchDemo } from "./demo/dispatch.mjs";
 import { decidePayment, planPaymentConfirmDemo } from "./demo/payments.mjs";
 import * as A from "./demo/analytics.mjs";
+// fix-re: generated grooming coupons
+import { planCouponDemo } from "./demo/coupons.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -1297,6 +1299,9 @@ function buildPlan(ctx, now) {
       at(fit.day, hhmm(startMin + 40), `grooming desk ${key} no-show`, async () => web[key] && staffCall("owner", "PATCH", `/api/appointments/${web[key].id}`, { status: "NO_SHOW", version: web[key].version }), { optional: true });
     }
   }
+
+  // ---- fix-re: generated grooming coupons (scripts/demo/coupons.mjs)
+  planCouponDemo({ at, api, owner, S, L, qDay, qAt, now, pay, staffCall });
 
   // ---- pet relocation requests
   const relocation = (key, day, time, cust, petNames, destination, steps) => {
