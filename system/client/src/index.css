@@ -4364,3 +4364,7 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   .an-filters label { flex: 1 1 140px; }
   .an-filters input, .an-filters select { width: 100%; }
 }
+@media (max-width: 720px) {
+  /* Phones: one scroll (the page) instead of a box scrolling inside the page. */
+  .an-scroll { max-height: none; overflow-y: visible; }
+}

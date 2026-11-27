@@ -360,7 +360,7 @@ function PeakTab({ qs: baseQs, setMsg }) {
       <p className="fd-muted">{t("an.k.hint")}</p>
       {!data ? <p className="fd-muted">{loading ? t("an.loading") : ""}</p> : (
         <>
-          {peak ? <p className="an-peak"><strong>{t("an.k.peak", { hour: `${hourLabel(peak.hour)}–${String(peak.hour).padStart(2, "0")}:59`, orders: String(peak.orders) })}</strong></p> : <p className="fd-muted">{t("an.noData")}</p>}
+          {peak ? <p className="an-peak"><strong>{t("an.k.peak", { hour: `\u2066${hourLabel(peak.hour)}–${String(peak.hour).padStart(2, "0")}:59\u2069`, orders: String(peak.orders) })}</strong></p> : <p className="fd-muted">{t("an.noData")}</p>}
           <div className="an-chart" data-testid="peak-chart">
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={data.hours.map((h) => ({ ...h, label: String(h.hour).padStart(2, "0") }))}>
