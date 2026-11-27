@@ -16,6 +16,11 @@ const SOURCES = new Set(["CASH", "BANK"]);
 const BAD_AMOUNT = { error: "المبلغ غير صالح", errorAr: "المبلغ غير صالح (بحد أقصى منزلتين عشريتين)", errorEn: "Enter a valid amount (at most 2 decimals)" };
 const BAD_SOURCE = { error: "اختر الدفع من النقد أو من البنك", errorAr: "اختر الدفع من النقد أو من البنك", errorEn: "Choose whether it was paid from cash or from the bank" };
 
+/** Optional short text (payee, receipt number): trimmed, empty → null. */
+function optText(v, max) {
+  return v != null && String(v).trim() ? String(v).trim().slice(0, max) : null;
+}
+
 function parseDate(s) {
   const d = new Date(String(s));
   return Number.isNaN(d.getTime()) ? null : d;
@@ -47,7 +52,7 @@ router.get("/", async (req, res) => {
 
 router.post("/", requireModule("finance", "create"), async (req, res) => {
   const orgId = req.user.organizationId;
-  const { category, amount, description, expenseDate, paidFrom } = req.body || {};
+  const { category, amount, description, expenseDate, paidFrom, payee, reference } = req.body || {};
   const cat = String(category || "").toUpperCase();
   if (!CATEGORIES.has(cat)) {
     return res.status(400).json({ error: "فئة مصروف غير صالحة", errorAr: "فئة مصروف غير صالحة", errorEn: "Invalid expense category" });
@@ -73,6 +78,8 @@ router.post("/", requireModule("finance", "create"), async (req, res) => {
             ? String(description).trim().slice(0, 500)
             : null,
         expenseDate: ed,
+        payee: optText(payee, 120),
+        reference: optText(reference, 60),
         createdByUserId: req.user.sub,
       },
       include: { createdBy: { select: { id: true, name: true } } },
@@ -95,7 +102,7 @@ router.post("/", requireModule("finance", "create"), async (req, res) => {
 
 router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
   const orgId = req.user.organizationId;
-  const { category, amount, description, expenseDate, paidFrom } = req.body || {};
+  const { category, amount, description, expenseDate, paidFrom, payee, reference } = req.body || {};
   const version = requireVersion(req);
   const existing = await prisma.expense.findFirst({
     where: { id: req.params.id, organizationId: orgId },
@@ -125,6 +132,8 @@ router.patch("/:id", requireModule("finance", "edit"), async (req, res) => {
         ? String(description).trim().slice(0, 500)
         : null;
   }
+  if (payee !== undefined) data.payee = optText(payee, 120);
+  if (reference !== undefined) data.reference = optText(reference, 60);
   if (expenseDate != null) {
     const ed = parseDate(expenseDate);
     if (!ed) return res.status(400).json({ error: "تاريخ غير صالح" });
