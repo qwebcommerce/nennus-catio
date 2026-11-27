@@ -210,14 +210,31 @@ router.get("/options", async (req, res) => {
     staffAndVehicles(orgId),
     prisma.branch.findMany({ where: { organizationId: orgId, isActive: true }, select: { id: true, name: true, nameEn: true, kind: true }, orderBy: { createdAt: "asc" } }),
   ]);
+  const main = await prisma.branch.findFirst({ where: { organizationId: orgId, isMain: true, isActive: true }, select: { id: true, kind: true } });
   res.json({
     staff,
     vehicles: own ? vehicles.filter((v) => v.branchId === own) : vehicles,
-    vans: branches.filter((b) => b.kind === "VAN" && (!own || b.id === own)),
+    // fix-rd: each van with its driver (the default "collected by" when sales record a return).
+    vans: branches.filter((b) => b.kind === "VAN" && (!own || b.id === own)).map((b) => ({ ...b, driverId: vanDriverOf(staff, b.id)?.id || null })),
     locations: branches.filter((b) => b.kind !== "VAN"),
+    // fix-rd: where returns are received by default: the first warehouse, else the main location.
+    defaultLocationId: defaultReceivingId(branches, main),
     ownVanId: own,
   });
 });
+
+/** fix-rd: the van's driver: an active DRIVER at that van location, else any active staff there. */
+function vanDriverOf(staff, vanBranchId) {
+  const at = staff.filter((u) => u.branchId === vanBranchId);
+  return at.find((u) => u.role === "DRIVER") || at[0] || null;
+}
+
+function defaultReceivingId(branches, main) {
+  const wh = branches.find((b) => b.kind === "WAREHOUSE");
+  if (wh) return wh.id;
+  if (main && main.kind !== "VAN") return main.id;
+  return branches.find((b) => b.kind !== "VAN")?.id || null;
+}
 
 /** Customer search for the return form (name or phone). */
 router.get("/customers", async (req, res) => {
@@ -545,7 +562,13 @@ router.post("/", requireModule("returns", "create"), async (req, res) => {
   const customerPhone = String(body.customerPhone || customer?.phone || "").trim().slice(0, 40) || null;
   if (!customer && !customerName && !customerPhone) throw vrError("اختر العميل أو اكتب اسمه أو هاتفه", "Choose the customer or type a name or phone");
 
-  const collector = await requireActiveStaff(prisma, orgId, body.collectedByUserId || req.user.sub);
+  // fix-rd: sales record the return; "collected by" defaults to the van's driver (else the recorder).
+  let defaultCollector = req.user.sub;
+  if (!body.collectedByUserId) {
+    const vanStaff = await prisma.user.findMany({ where: { organizationId: orgId, active: true, branchId: van.id }, select: { id: true, role: true, branchId: true }, orderBy: { name: "asc" } });
+    defaultCollector = vanDriverOf(vanStaff, van.id)?.id || req.user.sub;
+  }
+  const collector = await requireActiveStaff(prisma, orgId, body.collectedByUserId || defaultCollector);
   const collectedAt = collectedAtFrom(body.collectedAt);
   const amountOwed = body.amountOwed == null || String(body.amountOwed).trim() === "" ? 0 : requireDirhams(body.amountOwed, { allowZero: true }, "amount owed");
   const note = body.note != null && String(body.note).trim() ? String(body.note).trim().slice(0, 500) : null;
@@ -658,7 +681,8 @@ router.post("/", requireModule("returns", "create"), async (req, res) => {
 // ------------------------------------------------------------------ pay
 
 /** Mark the money owed as paid back. Body: { version, method: CASH|BANK, reference?, proof?: { dataBase64, fileName } } — proof required for BANK. */
-router.post("/:id/pay", requireModule("returns", ["create", "edit"]), async (req, res) => {
+// fix-rd: paying the customer back is for sales / the accountant (returns → refund), never the driver.
+router.post("/:id/pay", requireModule("returns", "refund"), async (req, res) => {
   const version = requireVersion(req);
   const row = await prisma.vanReturn.findFirst({ where: await scopedWhere(req, { id: String(req.params.id) }) });
   if (!row) throw NOT_FOUND();
@@ -695,7 +719,10 @@ router.post("/:id/pay", requireModule("returns", ["create", "edit"]), async (req
 // ------------------------------------------------------------------ receive
 
 /**
- * Convert into a warehouse return. Body: { version, branchId? (default: first warehouse), broughtBackByUserId? }
+ * Convert into a warehouse return ("Move to warehouse" on the driver dashboard).
+ * Body: { version, branchId? (default: first warehouse, else the main location), broughtBackByUserId? }
+ * fix-rd: staff whose location is a van (drivers) only receive their own van's returns (403 for
+ * another van), and they are recorded as both brought back by and received by.
  * GOOD lines → RETURN movement into that location at its unit cost (else product cost).
  * DAMAGED lines → DamagedStock (HELD), never sellable.
  */
@@ -703,19 +730,22 @@ router.post("/:id/receive", requireModule("returns", "edit"), async (req, res) =
   const version = requireVersion(req);
   const orgId = req.user.organizationId;
   const row = await prisma.vanReturn.findFirst({
-    where: await scopedWhere(req, { id: String(req.params.id) }),
+    where: { organizationId: orgId, id: String(req.params.id) },
     include: { lines: { include: { product: { select: { id: true, name: true, nameEn: true, sellBy: true, cost: true } } } } },
   });
   if (!row) throw NOT_FOUND();
+  await assertVanAllowed(req, row.vanBranchId);
+  const vanBound = Boolean(await ownVan(req));
   if (row.status !== "IN_VAN") throw vrError("تم استلام هذا المرتجع من قبل", "This return was already received", 409, "ALREADY_RECEIVED");
   let branch;
   if (req.body?.branchId) {
     branch = await prisma.branch.findFirst({ where: { id: String(req.body.branchId), organizationId: orgId }, select: { id: true, kind: true, isActive: true } });
   } else {
     branch = await prisma.branch.findFirst({ where: { organizationId: orgId, kind: "WAREHOUSE", isActive: true }, orderBy: { createdAt: "asc" }, select: { id: true, kind: true, isActive: true } });
+    if (!branch) branch = await prisma.branch.findFirst({ where: { organizationId: orgId, isMain: true, isActive: true }, select: { id: true, kind: true, isActive: true } });
   }
   if (!branch || branch.isActive === false || branch.kind === "VAN") throw vrError("اختر المستودع أو الموقع المستلم", "Choose the warehouse or location receiving it");
-  const broughtBack = await requireActiveStaff(prisma, orgId, req.body?.broughtBackByUserId || row.collectedByUserId);
+  const broughtBack = await requireActiveStaff(prisma, orgId, vanBound ? req.user.sub : req.body?.broughtBackByUserId || row.collectedByUserId);
 
   try {
     const saved = await prisma.$transaction(async (tx) => {

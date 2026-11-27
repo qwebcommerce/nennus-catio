@@ -44,6 +44,14 @@ function parseBalance(raw) {
 
 const api = (row) => toApi("Customer", row);
 
+/** Address with an optional area (fix-rd: the driver's "new customer" form has both). */
+function addressWithArea(address, area) {
+  const a = address != null && String(address).trim() ? String(address).trim() : "";
+  const z = area != null && String(area).trim() ? String(area).trim() : "";
+  const text = a && z ? `${a}, ${z}` : a || z;
+  return text ? text.slice(0, 500) : null;
+}
+
 router.get("/", async (req, res) => {
   const q = String(req.query.q || "").trim();
   const where = {
@@ -101,7 +109,7 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
         phone: phone != null && String(phone).trim() ? String(phone).trim() : null,
         email: emailNorm,
         notes: notes != null && String(notes).trim() ? String(notes).trim() : null,
-        address: address != null && String(address).trim() ? String(address).trim().slice(0, 500) : null,
+        address: addressWithArea(address, req.body?.area),
         accountBalance: opening,
         creditApproved: Boolean(req.body?.creditApproved),
         creditLimit: openingLimit,
@@ -124,6 +132,16 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
         },
       });
     }
+    // fix-rd: who added the customer (drivers add customers from the driver dashboard).
+    await writeAudit({
+      userId: req.user.sub,
+      action: "CUSTOMER_CREATE",
+      entityType: "Customer",
+      entityId: customer.id,
+      branchId: req.user.branchId || null,
+      summary: `Customer ${customer.name}${customer.phone ? ` (${customer.phone})` : ""} added by ${req.user.role}`,
+      meta: { role: req.user.role, phone: customer.phone, address: customer.address, via: req.body?.via ? String(req.body.via).slice(0, 40) : null },
+    }, tx);
     return customer;
   });
 

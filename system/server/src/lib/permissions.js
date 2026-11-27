@@ -127,9 +127,15 @@ export function hasPermission(permissions, key) {
 
 /**
  * `returns`: van returns (goods a van driver collects back from a customer) and the vehicle
- * dashboard. view = see returns and dashboards, create = record a return / mark it paid,
- * edit = receive it at the warehouse (and mark paid). Writing off or selling damaged stock is
+ * dashboard. view = see returns and dashboards, create = record a return,
+ * edit = receive it at the warehouse, refund = pay the customer back. Writing off or selling damaged stock is
  * for the business owner only (requireOwner). Staff whose location is a van only see that van.
+ *
+ * fix-rd: create = record (sales staff), edit = move to the warehouse (drivers: own van only),
+ * refund = pay the customer back (sales, accountant; never the driver).
+ *
+ * `paymentConfirm`: the accountant's queue of collected money (B2B cash receipts, sales-order
+ * payments, account collections, drivers' cash on delivery). view = see it, edit = confirm / reject.
  *
  * `b2b`: the B2B / Wholesale tab (delivery note → invoice → cash receipt, built on sales orders).
  * view = see it, create = delivery notes and invoices, edit = record cash receipts,
@@ -137,7 +143,9 @@ export function hasPermission(permissions, key) {
  */
 export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary", "b2b",
   // fix-rb: drivers / dispatch (docs/testing/drivers-dispatch.md)
-  "dispatch", "driver", "driverApprovals"];
+  "dispatch", "driver", "driverApprovals",
+  // fix-rd: accountant confirmation of collected money (docs/testing/payment-confirmation.md)
+  "paymentConfirm"];
 export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
 
 /**
@@ -156,6 +164,11 @@ export const MODULE_ACTIONS_FOR = Object.freeze({
   driver: ["view", "create"],
   // fix-rb: driverApprovals = approve or reject drivers' order edits (view = see the queue; edit = decide).
   driverApprovals: ["view", "edit"],
+  // fix-rd: returns — view; create = record a return into a van (sales); edit = move a van's
+  // returns to the warehouse (receive; van staff only their own van); refund = pay the customer back.
+  returns: ["view", "create", "edit", "refund"],
+  // fix-rd: paymentConfirm — view = the confirmation queue; edit = confirm / reject collected money.
+  paymentConfirm: ["view", "edit"],
 });
 
 /**
@@ -214,6 +227,8 @@ export function defaultModuleMap(role) {
     allow(map, "delivery", "view");
     // fix-rb: sales staff assign orders to drivers; no driver-edit approvals.
     allow(map, "dispatch", "view", "create", "edit");
+    // fix-rd: sales staff record van returns into any van and pay customers back.
+    allow(map, "returns", "view", "create", "refund");
     return map;
   }
 
@@ -230,6 +245,9 @@ export function defaultModuleMap(role) {
     // fix-rb: sees dispatch, decides drivers' order edits.
     allow(map, "dispatch", "view");
     allow(map, "driverApprovals", "view", "edit");
+    // fix-rd: confirms collected money; pays customers back for van returns.
+    allow(map, "paymentConfirm", "view", "edit");
+    allow(map, "returns", "view", "refund");
     return map;
   }
 
@@ -248,10 +266,13 @@ export function defaultModuleMap(role) {
     // ---- DRIVER: minimal. Till for their van (the till needs to look up products), van returns.
     allow(map, "pos", "view", "create");
     allow(map, "products", "view");
-    allow(map, "returns", "view", "create");
+    // fix-rd: sales record returns into the van; the driver sees them and moves them to the
+    // warehouse (edit = receive, own van only). No create (recording) and no refund (paying back).
+    allow(map, "returns", "view", "edit");
     // fix-rb: the driver / van dashboard (accept, decline, request an edit, mark delivered), customers view.
     allow(map, "driver", "view", "create");
-    allow(map, "customers", "view");
+    // fix-rd: drivers add new customers.
+    allow(map, "customers", "view", "create");
     return map;
   }
 
@@ -264,7 +285,7 @@ export function defaultModuleMap(role) {
     allow(map, "delivery", "view");
     allow(map, "grooming", "view");
     // Van drivers are employees: they record returns into their van and pay customers back.
-    allow(map, "returns", "view", "create");
+    allow(map, "returns", "view", "create", "refund");
     // fix-rb: legacy sales-van employees use the driver dashboard for their van.
     allow(map, "driver", "view", "create");
     return map;
