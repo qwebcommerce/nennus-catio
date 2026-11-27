@@ -255,7 +255,7 @@ export async function peakHoursAnalytics(orgId, { from, to }, { channel = "", br
   }
   if (withSo) {
     parts.push(Prisma.sql`
-      SELECT o."createdAt" + interval '3 hours', o.total
+      SELECT o."createdAt" + interval '3 hours' AS t, o.total AS amount
       FROM "SalesOrder" o
       WHERE o."organizationId" = ${orgId} AND o."createdAt" >= ${ts(from)} AND o."createdAt" < ${ts(to)} AND o.status NOT IN ('DRAFT','CANCELLED')
         ${branchId ? Prisma.sql`AND o."branchId" = ${branchId}` : Prisma.empty}`);
