@@ -42,6 +42,8 @@ import { decidePayment, planPaymentConfirmDemo } from "./demo/payments.mjs";
 import * as A from "./demo/analytics.mjs";
 // fix-re: generated grooming coupons
 import { planCouponDemo } from "./demo/coupons.mjs";
+// fix-rg: paid / delivered situations for the printable documents
+import { planDocumentsDemo } from "./demo/documents.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -1363,6 +1365,8 @@ function buildPlan(ctx, now) {
   planDispatchDemo({ at, api, owner, S, L, ctx, basket, addStock, qDay });
   // ---- fix-rd: payments awaiting confirmation, a rejected one (scripts/demo/payments.mjs)
   planPaymentConfirmDemo({ at, api, T, owner, S, L, ctx, basket, addStock, qDay, upload: api.upload });
+  // ---- fix-rg: a PO paid in advance (nothing received) and a SO paid awaiting confirmation (scripts/demo/documents.mjs)
+  planDocumentsDemo({ at, api, owner, S, L, qDay, riyals, upload: api.upload });
 
   return plan;
 }

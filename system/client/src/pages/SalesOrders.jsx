@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, editErrorMessage } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -11,6 +11,9 @@ import { lineDirhams, money2, percentDirhams } from "../utils/soMoney.js";
 import { FileLink, PageTabs, ProofUpload, downloadExport, money, proofNeeded } from "../components/BizShared.jsx";
 import { PendingPayments, PendingStock } from "../components/PendingPanels.jsx";
 import { ConfirmBadge } from "../components/PaymentConfirmShared.jsx";
+// fix-rg: payment + delivery status pair, receipts and delivery notes
+import { DocHeader, StatusFilters, StatusPair, statusQuery, usePrintOnly } from "../components/docs/DocShared.jsx";
+import { SoDeliveryNote, SoPaymentReceipt } from "../components/docs/SalesDocs.jsx";
 
 const PAY_METHODS = ["CASH", "CARD", "BANK_TRANSFER", "FAWRAN", "PAYMENT_LINK"];
 const STATUSES = ["DRAFT", "CONFIRMED", "PARTLY_DELIVERED", "DELIVERED", "COMPLETED", "CANCELLED"];
@@ -39,16 +42,17 @@ export default function SalesOrders() {
   const [q, setQ] = useState("");
   const [msg, setMsg] = useState("");
   const [editing, setEditing] = useState(null); // null | "new" | order
+  const [sf, setSf] = useState({});
   const openId = params.get("open") || "";
 
   const load = async () => {
-    const qs = new URLSearchParams();
+    const qs = new URLSearchParams(statusQuery(sf));
     if (status) qs.set("status", status);
     if (overdueOnly) qs.set("overdue", "1");
     if (q.trim()) qs.set("q", q.trim());
     setOrders(await api(`/api/sales-orders?${qs}`));
   };
-  useEffect(() => { load().catch((e) => setMsg(e.message)); }, [status, overdueOnly]);
+  useEffect(() => { load().catch((e) => setMsg(e.message)); }, [status, overdueOnly, sf.payment, sf.delivery, sf.situation]);
 
   const open = (id) => {
     setEditing(null);
@@ -102,6 +106,7 @@ export default function SalesOrders() {
                 {STATUSES.map((s) => <option key={s} value={s}>{statusLabel("salesOrder", s, locale)}</option>)}
               </select>
             </label>
+            <StatusFilters value={sf} onChange={setSf} />
             <label className="fd-check">
               <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} />
               <span>{t("so.overdueOnly")}</span>
@@ -127,12 +132,13 @@ export default function SalesOrders() {
                   </span>
                 </div>
                 <div>{o.customer?.companyName || o.customer?.name}{o.customer?.companyName ? ` · ${o.customer.name}` : ""}</div>
+                <div><StatusPair pair={o} amounts /></div>
                 <div className="fd-muted">
                   {t("common.total")} {money(o.total)} · {t("so.balance")} {money(o.balance)} · {t("so.deliveryDate")} {dayText(o.deliveryDate, locale)}
                 </div>
               </button>
             ))}
-            {!orders.length ? <div className="card">{t("so.none")}</div> : null}
+            {!orders.length ? <div className="card">{sf.payment || sf.delivery || sf.situation ? t("st.noMatch") : t("so.none")}</div> : null}
           </div>
         </>
       ) : null}
@@ -414,13 +420,20 @@ function OrderDetail({ id, onBack, onEdit }) {
   const [pay, setPay] = useState({ amount: "", method: "CASH", reference: "", paidAt: qatarYmd(), note: "", proofFileId: "" });
   const [proofKey, setProofKey] = useState(0);
   const [deliver, setDeliver] = useState({});
-  const [printView, setPrintView] = useState(false);
+  // fix-rg: one document at a time: "invoice" | { receipt: paymentId } | { delivery: deliveryId }
+  const [docView, setDocView] = useState(null);
+  const printView = docView === "invoice";
+  const setPrintView = (fn) => setDocView((v) => ((typeof fn === "function" ? fn(v === "invoice") : fn) ? "invoice" : null));
+  const openDoc = (d) => { setDocView(d); window.scrollTo?.(0, 0); };
   const canAct = canModule("salesOrders", "create");
+  const invoiceRef = usePrintOnly();
 
   const load = async () => {
     const o = await api(`/api/sales-orders/${id}`);
     setOrder(o);
-    setPay((p) => ({ ...p, amount: p.amount || (Number(o.balance) > 0 ? String(o.installments.find((i) => Number(i.owed) > 0)?.owed || o.balance) : "") }));
+    // fix-rg: default to what can still be collected (payments awaiting confirmation already count).
+    const open = Number(o.openToCollect ?? o.balance);
+    setPay((p) => ({ ...p, amount: p.amount || (open > 0 ? String(Math.min(Number(o.installments.find((i) => Number(i.owed) > 0)?.owed || open), open).toFixed(2)) : "") }));
   };
   useEffect(() => { load().catch((e) => setMsg(e.message)); }, [id]);
 
@@ -483,22 +496,24 @@ function OrderDetail({ id, onBack, onEdit }) {
   };
 
   const doc = (
-    <div className="print-invoice biz-print-doc">
-      <h2 style={{ margin: "0 0 8px" }}>{t("so.invoiceTitle")} {order.reference}</h2>
+    <div ref={invoiceRef} className="print-invoice biz-print-doc rg-doc rg-doc-live" data-doc="so-invoice">
+      <DocHeader title={t("so.invoiceTitle")} reference={order.reference} date={order.confirmedAt || order.createdAt} />
       <div>{order.customer?.companyName || order.customer?.name}{order.customer?.companyName ? ` — ${order.customer.name}` : ""}</div>
       <div>{t("so.sellingLocation")}: {branchDisplayName(order.branch || {}, locale)} · {t("so.deliveryDate")}: {dayText(order.deliveryDate, locale)}</div>
       {order.paymentTerms ? <div>{t("so.paymentTerms")}: {order.paymentTerms}</div> : null}
       <table>
         <thead>
-          <tr><th>{t("po.product")}</th><th>{t("po.quantity")}</th><th>{t("so.unitPrice")}</th><th>{t("so.lineTotal")}</th></tr>
+          <tr><th>{t("po.product")}</th><th className="num">{t("po.quantity")}</th><th className="num">{t("so.unitPrice")}</th><th className="num">{t("so.lineTotal")}</th><th className="num">{t("doc.so.delivered")}</th><th className="num">{t("doc.so.toDeliver")}</th></tr>
         </thead>
         <tbody>
           {order.lines.map((l) => (
             <tr key={l.id}>
               <td>{lineName(l)}</td>
-              <td>{qty(l, l.quantity)}</td>
-              <td>{l.isFree ? "—" : money(l.unitPrice)}</td>
-              <td>{l.isFree ? t("so.free") : money(l.subtotal)}</td>
+              <td className="num">{qty(l, l.quantity)}</td>
+              <td className="num">{l.isFree ? "—" : money(l.unitPrice)}</td>
+              <td className="num">{l.isFree ? t("so.free") : money(l.subtotal)}</td>
+              <td className="num">{qty(l, l.quantityDelivered)}</td>
+              <td className="num">{qty(l, l.quantityPending)}</td>
             </tr>
           ))}
         </tbody>
@@ -506,7 +521,9 @@ function OrderDetail({ id, onBack, onEdit }) {
       <div style={{ marginTop: 8 }}>
         {Number(order.discountAmount) ? <div>{t("so.orderDiscount")}: −{money(order.discountAmount)}</div> : null}
         <div><strong>{t("common.total")}: {money(order.total)} {t("common.currency")}</strong></div>
-        <div>{t("so.paid")}: {money(order.amountPaid)} · {t("so.balance")}: {money(order.balance)}</div>
+        <div data-testid="inv-paid">{t("so.paid")}: {money(order.amountPaid)} · {t("so.balance")}: {money(order.balance)}</div>
+        {Number(order.amountPending) > 0 ? <div data-testid="inv-awaiting">{t("doc.so.awaiting")}: {money(order.amountPending)} — {t("doc.so.awaitingNote")}</div> : null}
+        <div className="rg-doc-pair"><StatusPair pair={order} amounts /></div>
       </div>
       <table style={{ marginTop: 8 }}>
         <thead><tr><th>#</th><th>{t("so.dueDate")}</th><th>{t("fd.amount")}</th><th>{t("so.paid")}</th></tr></thead>
@@ -530,11 +547,19 @@ function OrderDetail({ id, onBack, onEdit }) {
         {printView ? <button type="button" className="btn-touch" onClick={() => window.print()}>{t("so.print")}</button> : null}
       </div>
       {printView ? doc : null}
+      {docView?.receipt ? <SoPaymentReceipt key={docView.receipt} orderId={order.id} paymentId={docView.receipt} onClose={() => setDocView(null)} /> : null}
+      {docView?.delivery ? <SoDeliveryNote key={docView.delivery} orderId={order.id} deliveryId={docView.delivery} onClose={() => setDocView(null)} /> : null}
+      {order.orderType === "B2B" ? (
+        <div className="card rg-b2b-note">
+          {t("doc.so.inB2b")} <Link to="/pos/b2b?tab=notes">{t("doc.so.openB2b")}</Link>
+        </div>
+      ) : null}
       <h1>
         {order.reference} <span className="biz-badge">{statusLabel("salesOrder", order.status, locale)}</span>
         <span className={`biz-badge${order.paidStatus === "PAID" ? " biz-badge--ok" : ""}`}>{statusLabel("paidStatus", order.paidStatus, locale)}</span>
         {order.overdue ? <span className="biz-badge biz-badge--bad">{t("so.overdue")}</span> : null}
       </h1>
+      <div data-testid="so-pair"><StatusPair pair={order} amounts /></div>
       <section className="card fd-card">
         <div><strong>{order.customer?.companyName || order.customer?.name}</strong>{order.customer?.companyName ? ` · ${order.customer.name}` : ""}{order.customer?.phone ? ` · ${order.customer.phone}` : ""}</div>
         <div>{t("so.sellingLocation")}: {branchDisplayName(order.branch || {}, locale)}</div>
@@ -544,6 +569,7 @@ function OrderDetail({ id, onBack, onEdit }) {
         <div className="biz-kpis">
           <div className="biz-kpi"><span>{t("common.total")}</span><strong>{money(order.total)}</strong></div>
           <div className="biz-kpi"><span>{t("so.paid")}</span><strong>{money(order.amountPaid)}</strong></div>
+          {Number(order.amountPending) > 0 ? <div className="biz-kpi"><span>{t("doc.so.awaiting")}</span><strong data-testid="so-awaiting">{money(order.amountPending)}</strong></div> : null}
           <div className="biz-kpi"><span>{t("so.balance")}</span><strong>{money(order.balance)}</strong></div>
           <div className="biz-kpi"><span>{t("so.revenueRecognised")}</span><strong>{money(order.deliveredRevenue)}</strong></div>
         </div>
@@ -554,7 +580,7 @@ function OrderDetail({ id, onBack, onEdit }) {
               <button type="button" className="btn-touch biz-primary" disabled={busy} onClick={() => run(() => api(`/api/sales-orders/${order.id}/confirm`, { method: "POST", body: { version: order.version } }), t("so.confirmed"))}>{t("so.confirm")}</button>
             </>
           ) : null}
-          {["DRAFT", "CONFIRMED"].includes(order.status) && canModule("salesOrders", "delete") && !order.lines.some((l) => l.quantityDelivered > 0) && Number(order.amountPaid) === 0 ? (
+          {["DRAFT", "CONFIRMED"].includes(order.status) && canModule("salesOrders", "delete") && !order.lines.some((l) => l.quantityDelivered > 0) && Number(order.amountPaid) === 0 && !(Number(order.amountPending) > 0) ? (
             <button
               type="button"
               className="btn-touch"
@@ -633,13 +659,13 @@ function OrderDetail({ id, onBack, onEdit }) {
         </div>
       </section>
 
-      {open && canAct && Number(order.balance) > 0 ? (
+      {open && canAct && Number(order.openToCollect ?? order.balance) > 0 ? (
         <form className="card fd-card" onSubmit={submitPay} aria-label={t("so.recordPayment")}>
           <h2>{t("so.recordPayment")}</h2>
           <div className="biz-grid">
             <label>
               <span>{t("fd.amount")}</span>
-              <input type="number" required min="0.01" step="0.01" max={order.balance} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} />
+              <input type="number" required min="0.01" step="0.01" max={order.openToCollect ?? order.balance} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} />
             </label>
             <label>
               <span>{t("so.method")}</span>
@@ -675,6 +701,7 @@ function OrderDetail({ id, onBack, onEdit }) {
               {p.reference ? <span>· {p.reference}</span> : null}
               {p.proofFile ? <FileLink file={p.proofFile} label={t("so.viewProof")} /> : null}
               <ConfirmBadge status={p.confirmStatus} reason={p.rejectReason} />
+              {order.orderType !== "B2B" ? <button type="button" className="fd-linkish" onClick={() => openDoc({ receipt: p.id })}>{t("doc.so.receiptBtn")}</button> : null}
             </div>
           ))}
         </section>
@@ -713,6 +740,7 @@ function OrderDetail({ id, onBack, onEdit }) {
               <span>{formatDateTime(d.deliveredAt, locale)}</span>
               <span>{d.lines.map((dl) => { const l = order.lines.find((x) => x.id === dl.lineId); return l ? `${lineName(l)} × ${qty(l, dl.quantity)}` : ""; }).join(", ")}</span>
               <span className="fd-muted">{t("so.revenue")} {money(d.revenue)}</span>
+              {order.orderType !== "B2B" ? <button type="button" className="fd-linkish" onClick={() => openDoc({ delivery: d.id })}>{t("doc.so.deliveryBtn")}</button> : null}
             </div>
           ))}
         </section>

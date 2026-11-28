@@ -15,7 +15,7 @@ function money(n) {
  * Supplier bills (FR-104, FR-105): amount, paid and owed; open bills by supplier and by age;
  * pay part or all of a bill from cash or the bank. The server refuses overpayment.
  */
-export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
+export function SupplierBills({ suppliers = [], refreshKey = 0, onVoucher }) {
   const { t, locale } = useI18n();
   const [bills, setBills] = useState([]);
   const [aging, setAging] = useState(null);
@@ -203,6 +203,7 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
                             {formatDate(p.paidAt, locale)} · {money(p.amount)} · {t(`fd.source.${p.method}`)}
                             {p.reference ? ` · ${p.reference}` : ""}
                             {p.proofFile ? <> · <FileLink file={p.proofFile} label={t("so.viewProof")} /></> : null}
+                            {onVoucher ? <> · <button type="button" className="fd-linkish" onClick={() => onVoucher("payment", p.id)}>{t("doc.v.print")}</button></> : null}
                           </div>
                         ))}
                       </details>

@@ -10,6 +10,9 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { PageTabs } from "../components/BizShared.jsx";
 import { PendingPayments, PendingStock, SupplierBalances } from "../components/PendingPanels.jsx";
 import { PoExtras } from "../components/PoExtras.jsx";
+// fix-rg: printable PO / status sheet / vouchers and the payment + receipt status pair
+import { PoDocument, SupplierVoucher } from "../components/docs/PurchaseDocs.jsx";
+import { StatusFilters, StatusPair, statusQuery } from "../components/docs/DocShared.jsx";
 
 const TERMS = [0, 7, 14, 30, 60];
 
@@ -34,10 +37,15 @@ export default function PurchaseOrders() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") || "orders";
   const { canModule } = useAuth();
+  // fix-rg: one open document at a time ({ type: "po" | "status", id } or { type: "voucher", kind, id }).
+  const [doc, setDoc] = useState(null);
+  const [sf, setSf] = useState({});
+  const openDoc = (d) => { setDoc(d); window.scrollTo?.(0, 0); };
+  const openVoucher = (kind, id) => openDoc({ type: "voucher", kind, id });
 
   const load = async () => {
     const [orderRows, supplierRows, productRows] = await Promise.all([
-      api("/api/purchase-orders"),
+      api(`/api/purchase-orders?${statusQuery(sf)}`),
       api("/api/suppliers"),
       api(`/api/products?includeInactive=1&branchId=${branchId || ""}`),
     ]);
@@ -45,7 +53,7 @@ export default function PurchaseOrders() {
     setSuppliers(supplierRows);
     setProducts(Array.isArray(productRows) ? productRows : productRows.items || []);
   };
-  useEffect(() => { load().catch((e) => setMsg(e.message)); }, [branchId]);
+  useEffect(() => { load().catch((e) => setMsg(e.message)); }, [branchId, sf.payment, sf.delivery, sf.situation]);
 
   const productOf = (id) => products.find((row) => row.id === id);
   const lineName = (line) => {
@@ -124,6 +132,11 @@ export default function PurchaseOrders() {
       {tab === "stock" ? <PendingStock /> : null}
       {tab === "pending" ? <PendingPayments side="byus" /> : null}
       {tab === "balances" ? <SupplierBalances /> : null}
+      {tab === "orders" && doc ? (
+        doc.type === "voucher"
+          ? <SupplierVoucher key={`${doc.kind}:${doc.id}`} kind={doc.kind} id={doc.id} onClose={() => setDoc(null)} />
+          : <PoDocument key={`${doc.type}:${doc.id}`} orderId={doc.id} mode={doc.type} onClose={() => setDoc(null)} />
+      ) : null}
       {tab === "orders" ? (<>
       <form className="card" onSubmit={create} style={{ display: "grid", gap: 10 }}>
         <label style={fld}>
@@ -185,11 +198,16 @@ export default function PurchaseOrders() {
           <button className="btn-touch" type="submit" disabled={busy} style={{ background: "var(--accent)", color: "#fff" }}>{t("po.create")}</button>
         </div>
       </form>
+      <div className="rg-filters">
+        <StatusFilters po value={sf} onChange={setSf} />
+      </div>
+      {!orders.length && (sf.payment || sf.delivery || sf.situation) ? <div className="card">{t("st.noMatch")}</div> : null}
       {orders.map((order) => {
         const open = ["SENT", "PARTIALLY_RECEIVED"].includes(order.status);
         return (
           <article key={order.id} className="card" style={{ display: "grid", gap: 6 }}>
-            <strong>{order.supplier?.name} · {statusLabel("purchaseOrder", order.status, locale)}</strong>
+            <strong>{order.supplier?.name} · {statusLabel("purchaseOrder", order.status, locale)} <span className="fd-muted">PO {order.id.slice(-6).toUpperCase()}</span></strong>
+            <div><StatusPair pair={order.statusPair} po amounts /></div>
             <div>{order.branch ? branchDisplayName(order.branch, locale) : ""}</div>
             {order.lines.map((line) => (
               <div key={line.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -218,15 +236,17 @@ export default function PurchaseOrders() {
                 <button type="button" disabled={busy} onClick={() => run(() => api(`/api/purchase-orders/${order.id}/send`, { method: "POST", body: { version: order.version } }), t("po.sent"))}>{t("po.send")}</button>
               ) : null}
               {open ? <button type="button" disabled={busy} onClick={() => receiveOrder(order)}>{t("po.receiveSelected")}</button> : null}
+              <button type="button" onClick={() => openDoc({ type: "po", id: order.id })}>{t("doc.po.print")}</button>
+              {order.status !== "DRAFT" ? <button type="button" onClick={() => openDoc({ type: "status", id: order.id })}>{t("doc.po.statusPrint")}</button> : null}
               {["DRAFT", "SENT"].includes(order.status) ? (
                 <button type="button" disabled={busy} onClick={() => window.confirm(t("po.confirmCancel")) && run(() => api(`/api/purchase-orders/${order.id}/cancel`, { method: "POST", body: { version: order.version } }), t("po.cancelled"))}>{t("po.cancel")}</button>
               ) : null}
             </div>
-            <PoExtras order={order} suppliers={suppliers} onChanged={load} setMsg={setMsg} />
+            <PoExtras order={order} suppliers={suppliers} onChanged={load} setMsg={setMsg} onVoucher={openVoucher} />
           </article>
         );
       })}
-      <SupplierBills suppliers={suppliers} refreshKey={orders} />
+      <SupplierBills suppliers={suppliers} refreshKey={orders} onVoucher={openVoucher} />
       </>) : null}
     </div>
   );

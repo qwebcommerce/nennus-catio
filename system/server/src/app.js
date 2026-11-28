@@ -53,6 +53,8 @@ import cronRoutes from "./routes/cron.js";
 import salesOrderRoutes from "./routes/salesOrders.js";
 import b2bRoutes from "./routes/b2b.js";
 import pendingRoutes from "./routes/pending.js";
+// fix-rg: printable documents (purchase orders, vouchers, sales-order receipts / delivery notes)
+import documentRoutes from "./routes/documents.js";
 import fileRoutes, { businessFileDownloads } from "./routes/files.js";
 import purchaseOrderExtraRoutes from "./routes/purchaseOrderExtras.js";
 // fix-rb: drivers / dispatch
@@ -185,6 +187,8 @@ app.use("/api/sales-orders", salesOrderRoutes);
 // fix-ra: B2B / Wholesale tab (delivery note → invoice → cash receipt).
 app.use("/api/b2b", b2bRoutes);
 app.use("/api/pending", pendingRoutes);
+// fix-rg: printable documents
+app.use("/api/documents", documentRoutes);
 app.use("/api/files", fileRoutes);
 app.use("/api/business-files", businessFileDownloads);
 app.use("/api/shop/grooming", groomingShopRoutes);
