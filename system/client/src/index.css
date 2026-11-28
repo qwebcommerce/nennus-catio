@@ -4565,6 +4565,7 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   .menu-preview-banner {
     display: none !important;
   }
+}
 /* ---- fix-rg: printable documents (purchase order, status sheet, vouchers, SO receipt / delivery note) ---- */
 .biz-badge--warn { background: #fff1d6; color: #8a5300; }
 .rg-pair { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
