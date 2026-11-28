@@ -9,6 +9,10 @@ import { rcEntries } from "./translationsRc.js";
 import { rdEntries } from "./translationsRd.js";
 // fix-re: generated grooming coupons
 import { reEntries } from "./translationsRe.js";
+// fix-rf: menu workspaces, menu preview, who sees what
+import { rfEntries } from "./translationsRf.js";
+// fix-rg: printable documents, payment / delivery status pair
+import { rgEntries } from "./translationsRg.js";
 
 const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
@@ -1176,7 +1180,7 @@ const entries = [
 ];
 
 const ROOT = {};
-for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...rbEntries, ...rcEntries, ...raEntries, ...rdEntries, ...reEntries]) {
+for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...rbEntries, ...rcEntries, ...raEntries, ...rdEntries, ...reEntries, ...rfEntries, ...rgEntries]) {
   const parts = path.split(".");
   let cur = ROOT;
   for (let i = 0; i < parts.length - 1; i++) {

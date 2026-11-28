@@ -18,6 +18,8 @@ import { toApi } from "./moneyFields.js";
 import { fail, addDays, dayOf, optDate, optText } from "./bizError.js";
 import { qatarDayKey } from "./qatarTime.js";
 import { FILE_SELECT } from "./businessFiles.js";
+// fix-rg: payment and delivery shown as two statuses (docs/testing/printable-documents.md).
+import { pairApi, soStatusPair } from "./orderStatus.js";
 
 export const SO_MAX_INSTALLMENTS = 4;
 /** Methods an installment can be paid with. */
@@ -246,6 +248,8 @@ export function soView(order, today = qatarDayKey()) {
     nextDue: installments.find((i) => Number(i.owed) > 0)?.dueDate || null,
     pendingDelivery: lines.some((l) => l.quantityPending > 0) && open,
     hasFreeLines: (order.lines || []).some((l) => l.isFree),
+    // fix-rg: paymentState / deliveryState / awaiting / paidAhead / deliveredUnpaid / situation.
+    ...pairApi(soStatusPair(order)),
   };
 }
 

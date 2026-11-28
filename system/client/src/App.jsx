@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Link, Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./context/AuthContext.jsx";
 import { useI18n } from "./context/LanguageContext.jsx";
 import { AppLayout } from "./components/layout/AppLayout.jsx";
@@ -54,6 +54,9 @@ import DriverApprovals from "./pages/DriverApprovals.jsx";
 // fix-rd: payment confirmation queue, sales' van returns desk
 import PaymentConfirmations from "./pages/PaymentConfirmations.jsx";
 import VanReturnsDesk from "./pages/VanReturnsDesk.jsx";
+// fix-rf: menu as one definition (landing per role), "Who sees what" guide
+import { homePath, itemInMenu, menuItem, userContext } from "./lib/menuDefinition.js";
+import MenuGuide from "./pages/MenuGuide.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
 // Business analytics (fix-rc).
@@ -65,6 +68,7 @@ const Appointments = React.lazy(loadAppointments);
 function Protected({ children, roles, permission, anyPermission, anyModule, module }) {
   const { user, loading, can, canModule } = useAuth();
   const { t } = useI18n();
+  const location = useLocation();
   if (loading) {
     return (
       <div style={{ padding: 24, textAlign: "center" }}>
@@ -72,7 +76,8 @@ function Protected({ children, roles, permission, anyPermission, anyModule, modu
       </div>
     );
   }
-  if (!user) return <Navigate to="/login" replace />;
+  // fix-rf: keep the deep link; the login page returns there after signing in.
+  if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
   if (user.role !== "ADMIN") {
     // A screen this role may not use says so (a silent jump to the dashboard looked like a fault).
     const denied =
@@ -97,10 +102,15 @@ function Protected({ children, roles, permission, anyPermission, anyModule, modu
   return children;
 }
 
-/** fix-rb: a driver lands on (and stays in) the driver dashboard. */
+/**
+ * fix-rb / fix-rf: a role whose menu leaves the Dashboard out (DRIVER) is sent to its home page
+ * (ROLE_HOMES in lib/menuDefinition.js); everyone else sees the Dashboard here.
+ */
 function HomeDashboard() {
   const { user } = useAuth();
-  if (user?.role === "DRIVER") return <Navigate to="/driver" replace />;
+  const ctx = userContext(user);
+  const home = homePath(ctx);
+  if (!itemInMenu(menuItem("dashboard"), ctx) && home !== "/dashboard") return <Navigate to={home} replace />;
   return <Dashboard />;
 }
 
@@ -278,6 +288,8 @@ export default function App() {
               </Protected>
             }
           />
+          {/* fix-rf: who sees what (roles × screens), generated from the menu and the role maps */}
+          <Route path="/permissions/guide" element={<Protected roles={["ADMIN"]}><MenuGuide /></Protected>} />
           <Route
             path="/branches"
             element={
@@ -438,7 +450,7 @@ export default function App() {
         </Route>
         <Route
           path="*"
-          element={<Navigate to={user ? "/dashboard" : "/"} replace />}
+          element={<Navigate to={user ? homePath(userContext(user)) : "/"} replace />}
         />
       </Routes>
     </React.Suspense>

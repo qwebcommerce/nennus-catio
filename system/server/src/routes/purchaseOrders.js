@@ -11,6 +11,7 @@ import { FILE_SELECT, checkProof } from "../lib/businessFiles.js";
 import { fail, optDate, optText } from "../lib/bizError.js";
 import { poMoney, sellByMap } from "../lib/purchaseExtras.js";
 import { qatarDayKey } from "../lib/qatarTime.js";
+import { pairApi, poStatusPair, statusFilter } from "../lib/orderStatus.js";
 
 const api = (order) => toApi("PurchaseOrder", order);
 
@@ -20,7 +21,8 @@ async function withMoney(orders) {
   const sellBy = await sellByMap(prisma, list.flatMap((o) => o.lines || []));
   const out = list.map((o) => {
     const m = poMoney(o, sellBy);
-    return { ...api(o), money: Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === "number" ? fmt(v) : v])) };
+    // fix-rg: payment and receipt shown as two statuses (lib/orderStatus.js).
+    return { ...api(o), money: Object.fromEntries(Object.entries(m).map(([k, v]) => [k, typeof v === "number" ? fmt(v) : v])), statusPair: pairApi(poStatusPair(o, m)) };
   });
   return Array.isArray(orders) ? out : out[0];
 }
@@ -39,13 +41,16 @@ const include = {
 };
 
 router.get("/", async (req, res) => {
+  // fix-rg: ?payment= &delivery= &situation= (lib/orderStatus.js), applied to the money summary.
+  const pair = statusFilter(req.query);
   const rows = await prisma.purchaseOrder.findMany({
     where: { organizationId: req.user.organizationId },
     orderBy: { createdAt: "desc" },
-    take: 100,
+    take: pair.active ? 1000 : 100,
     include,
   });
-  res.json(await withMoney(rows));
+  const list = await withMoney(rows);
+  res.json(pair.active ? list.filter((o) => pair.test({ ...o.statusPair, awaiting: 0 })).slice(0, 100) : list);
 });
 
 router.post("/", requireModule("purchasing", "create"), async (req, res) => {

@@ -552,6 +552,12 @@ const EXACT = [
   ["مجموع الدفعات يجب أن يساوي إجمالي الطلب (100%)", "The installments must add up to the order total (100%)"],
   ["مجموع الدفعات يجب أن يساوي إجمالي الطلب", "The installments must add up to the order total"],
   ["طلب البيع غير موجود", "Sales order not found"],
+  // fix-rg: printable documents (routes/documents.js)
+  ["سند الصرف غير موجود", "Payment voucher not found"],
+  ["نوع السند غير معروف", "Unknown voucher kind"],
+  ["هذا سند تسليم لمبيعات الشركات — اطبع مستنداته من تبويب مبيعات الشركات / الجملة", "This is a B2B delivery note. Print its documents from the B2B / Wholesale tab."],
+  ["الدفعة غير موجودة في هذا الطلب", "Payment not found on this order"],
+  ["التسليم غير موجود في هذا الطلب", "Delivery not found on this order"],
   ["مدة السداد غير صالحة (0 إلى 365 يوماً)", "Payment terms must be 0 to 365 days"],
   ["لا توجد قيمة على أسطر الأمر لتوزيع الشحن عليها", "The order lines have no value to spread the freight over"],
   ["اختر عميلاً للطلب", "Choose the customer for the order"],
@@ -696,6 +702,8 @@ const EXACT = [
   ["مجموعة القسائم غير موجودة", "Coupon batch not found"],
   ["حدد التفعيل أو الإيقاف", "Say whether to enable or disable"],
   ["القسيمة غير موجودة", "Coupon code not found"],
+  // ── fix-rf: role menus (routes/roleMenus.js) ──
+  ["هذه الصفحة للمشرف الأعلى فقط", "Only the top admin can see this"],
 ];
 
 const PATTERNS = [

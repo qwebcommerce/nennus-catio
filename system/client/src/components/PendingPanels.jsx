@@ -188,7 +188,12 @@ export function PendingStock() {
                 <td>{r.counterparty}</td>
                 <td>{r.salesOrderId ? <Link to={`/sales-orders?open=${r.salesOrderId}`}>{r.reference}</Link> : r.reference}</td>
                 <td>{locale === "en" ? r.locationEn : r.location}</td>
-                <td>{statusLabel("paidStatus", r.paidStatus, locale)}</td>
+                <td>
+                  {statusLabel("paidStatus", r.paidStatus, locale)}
+                  {/* fix-rg: awaiting confirmation is shown, not counted; paid ahead of delivery is flagged */}
+                  {Number(r.awaiting) > 0 ? <span className="biz-badge biz-badge--warn" data-testid="ps-await"> {t("st.awaitingAmount", { n: r.awaiting })}</span> : null}
+                  {r.situation === "PAID_NOT_DELIVERED" ? <span className="biz-badge biz-badge--bad" data-testid="ps-sit"> {t(r.direction === "IN" ? "st.sitPo.PAID_NOT_DELIVERED" : "st.sit.PAID_NOT_DELIVERED")}</span> : null}
+                </td>
               </tr>
             ))}
             {!rows.length ? <tr><td colSpan={7}>{t("so.nothingPending")}</td></tr> : null}

@@ -9,69 +9,18 @@ import { useAlertsBadgeCount } from "../../hooks/useAlertsBadgeCount.js";
 import { SidebarIcon } from "../SidebarIcon.jsx";
 import { LanguageSwitcher } from "../LanguageSwitcher.jsx";
 import { FloatingCalculator } from "../FloatingCalculator.jsx";
-import { DispatchNavLinks } from "../DispatchNav.jsx";
-import { PaymentConfirmNavLinks } from "../PaymentConfirmShared.jsx";
-
-const NAV_SECTION_IDS = ["dashboard", "inventory", "customers", "admin"];
-
-/** Which sidebar section owns the current route (for auto-expand). */
-function navSectionForPath(pathname) {
-  const p = pathname || "";
-  if (
-    p.startsWith("/dashboard") ||
-    p.startsWith("/alerts") ||
-    p.startsWith("/reports") ||
-    p.startsWith("/analytics") ||
-    (p.startsWith("/sales") && !p.startsWith("/sales-orders"))
-  ) {
-    return "dashboard";
-  }
-  if (
-    p.startsWith("/products") ||
-    p.startsWith("/categories") ||
-    p.startsWith("/sales-orders") ||
-    p.startsWith("/cash") ||
-    p.startsWith("/purchases") ||
-    p.startsWith("/transfer") ||
-    p.startsWith("/count") ||
-    p.startsWith("/damaged-stock") ||
-    p.startsWith("/returns")
-  ) {
-    return "inventory";
-  }
-  if (
-    p.startsWith("/customers") ||
-    p.startsWith("/customer-accounts") ||
-    p.startsWith("/appointments")
-  ) {
-    return "customers";
-  }
-  if (
-    p.startsWith("/users") ||
-    p.startsWith("/branches") ||
-    p.startsWith("/permissions") ||
-    p.startsWith("/audit")
-  ) {
-    return "admin";
-  }
-  return "";
-}
-
-function initialOpenSections(pathname) {
-  const open = {};
-  NAV_SECTION_IDS.forEach((id) => {
-    open[id] = false;
-  });
-  const sec = navSectionForPath(pathname);
-  if (sec) open[sec] = true;
-  else open.dashboard = true;
-  return open;
-}
+import { useDispatchNavBadges } from "../DispatchNav.jsx";
+import { usePendingConfirmations } from "../PaymentConfirmShared.jsx";
+// fix-rf: the menu is one data definition (lib/menuDefinition.js), shared with the role landing
+// pages, the admin's menu preview and the "Who sees what" guide.
+import { MENU_LEGACY_ROLES, MENU_ROLES, sectionForPath } from "../../lib/menuDefinition.js";
+import { setMenuPreview } from "../../lib/menuPreview.js";
+import { useStaffMenu } from "../../hooks/useStaffMenu.js";
 
 const sidebarLinkClass = ({ isActive }) =>
   `app-sidebar-link${isActive ? " is-active" : ""}`;
 
-function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, children }) {
+function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, badge = 0, children }) {
   const visible = React.Children.toArray(children).some(
     (c) => c != null && typeof c !== "boolean",
   );
@@ -79,7 +28,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
   const panelId = `sidebar-nav-${sectionId}`;
   const hint = expanded ? t("nav.collapseSection", { title }) : t("nav.expandSection", { title });
   return (
-    <div className={`app-sidebar-nav-section${expanded ? " is-open" : ""}`}>
+    <div className={`app-sidebar-nav-section${expanded ? " is-open" : ""}`} data-testid={`nav-section-${sectionId}`} data-section={sectionId}>
       <button
         type="button"
         className="app-sidebar-nav-heading app-sidebar-nav-heading--toggle"
@@ -88,6 +37,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
         aria-controls={panelId}
         onClick={onToggle}
         title={hint}
+        data-testid={`nav-section-btn-${sectionId}`}
       >
         <span className="app-sidebar-heading-main">
           {icon ? (
@@ -96,6 +46,12 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
             </span>
           ) : null}
           <span className="app-sidebar-heading-label">{title}</span>
+          {/* fix-rf: a closed section still shows that something inside waits (sum of its badges). */}
+          {!expanded && badge > 0 ? (
+            <span className="app-sidebar-badge app-sidebar-badge--section" data-testid={`nav-section-badge-${sectionId}`}>
+              {badge > 99 ? "99+" : badge}
+            </span>
+          ) : null}
         </span>
         <span className="app-sidebar-nav-chevron" aria-hidden>
           <SidebarIcon name="chevron" size={14} />
@@ -115,8 +71,66 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
   );
 }
 
+/** One menu link from the definition (keeps the old data-testids: nav-driver, nav-confirmations, ...). */
+function MenuLink({ item, t, badge }) {
+  const testId = item.testId || `nav-${item.id}`;
+  return (
+    <NavLink to={item.to} end={Boolean(item.end)} className={sidebarLinkClass} data-testid={testId} data-nav-id={item.id}>
+      <SidebarIcon name={item.icon} />
+      {item.badge ? (
+        <span className="app-sidebar-link-row">
+          <span>{t(item.label)}</span>
+          {badge > 0 ? (
+            <span className="app-sidebar-badge" data-testid={`${testId}-badge`} title={t(item.label)}>
+              {badge > 99 ? "99+" : badge}
+            </span>
+          ) : null}
+        </span>
+      ) : (
+        <span>{t(item.label)}</span>
+      )}
+    </NavLink>
+  );
+}
+
+/** fix-rf: the top admin's "Preview menu as" picker (navigation only). */
+function MenuPreviewPicker({ user, previewRole, t }) {
+  return (
+    <div className="app-sidebar-branch app-sidebar-preview">
+      <span className="app-sidebar-branch-kicker">{t("menu.preview.label")}</span>
+      <div className="app-sidebar-branch-control">
+        <span className="app-sidebar-branch-ico" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </span>
+        <select
+          value={previewRole}
+          onChange={(e) => setMenuPreview(user.id, e.target.value)}
+          aria-label={t("menu.preview.label")}
+          title={t("menu.preview.tooltip")}
+          data-testid="menu-preview-select"
+        >
+          <option value="">{t("menu.preview.off")}</option>
+          {MENU_ROLES.filter((r) => r !== "ADMIN").map((r) => (
+            <option key={r} value={r}>
+              {t(`role.${r}`)}{MENU_LEGACY_ROLES.includes(r) ? ` — ${t("menu.guide.legacy")}` : ""}
+            </option>
+          ))}
+        </select>
+        <span className="app-sidebar-branch-chevron" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function AppLayout() {
-  const { user, logout, isAdmin, isManager, isOrgOwner, can, canModule } = useAuth();
+  const { user, logout, isAdmin } = useAuth();
   const {
     branches,
     activeBranchId,
@@ -126,23 +140,37 @@ export function AppLayout() {
   const { t, locale } = useI18n();
   const nav = useNavigate();
   const location = useLocation();
+  const { menu, realCtx, previewRole, previewReady, previewError } = useStaffMenu();
+
+  // Badges poll with the user's real rights (hidden while previewing another role's menu).
   const { count: alertsBadge } = useAlertsBadgeCount();
+  const dispatchBadges = useDispatchNavBadges({
+    driverUnseen: realCtx.canModule("driver", "view") && realCtx.isVanUser && user?.role !== "ADMIN",
+    approvals: realCtx.canModule("driverApprovals", "view"),
+  });
+  const confirmData = usePendingConfirmations(realCtx.canModule("paymentConfirm", "view"));
+  const badges = previewRole
+    ? {}
+    : {
+        alerts: alertsBadge,
+        driverUnseen: dispatchBadges.driverUnseen,
+        approvals: dispatchBadges.approvals,
+        confirmations: confirmData?.pending || 0,
+      };
 
   const isPosRoute = location.pathname === "/pos";
 
-  const [openSections, setOpenSections] = useState(() =>
-    initialOpenSections(typeof window !== "undefined" ? window.location.pathname : ""),
-  );
-
+  // The section holding the current route opens by itself; the others keep what the user chose.
+  const [openSections, setOpenSections] = useState({});
+  const currentSection = sectionForPath(location.pathname, menu);
+  const defaultSection = currentSection || menu[0]?.id || null;
+  const isOpen = (id) => openSections[id] ?? id === defaultSection;
   useEffect(() => {
-    const sec = navSectionForPath(location.pathname);
-    if (sec) {
-      setOpenSections((prev) => ({ ...prev, [sec]: true }));
-    }
-  }, [location.pathname]);
+    if (currentSection) setOpenSections((prev) => (prev[currentSection] ? prev : { ...prev, [currentSection]: true }));
+  }, [location.pathname, currentSection]);
 
   const toggleNavSection = (id) => {
-    setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
+    setOpenSections((prev) => ({ ...prev, [id]: !(prev[id] ?? id === defaultSection) }));
   };
 
   /** Phones: the sidebar is a drawer behind a menu button so the page (e.g. the van till) comes first. */
@@ -228,261 +256,34 @@ export function AppLayout() {
               </div>
             </div>
           ) : null}
+          {isAdmin ? <MenuPreviewPicker user={user} previewRole={previewRole} t={t} /> : null}
         </div>
 
-        <nav className="app-sidebar-nav">
-          {/* fix-rb: driver / dispatch links; a DRIVER sees only these, the van till and the cash drawer. */}
-          <DispatchNavLinks />
-          {/* fix-rd: payment confirmations (with count), sales' van returns desk */}
-          <PaymentConfirmNavLinks />
-          {user?.role === "DRIVER" ? (
-            <>
-              {can("pos") ? (
-                <NavLink to="/pos" className={sidebarLinkClass} end>
-                  <SidebarIcon name="pos" />
-                  <span>{t("nav.pos")}</span>
-                </NavLink>
-              ) : null}
-              {can("cashSession") ? (
-                <NavLink to="/cash" className={sidebarLinkClass}>
-                  <SidebarIcon name="funds" />
-                  <span>{t("nav.funds")}</span>
-                </NavLink>
-              ) : null}
-            </>
-          ) : (
-          <>
-          <SidebarNavSection
-            sectionId="dashboard"
-            title={t("nav.section.dashboard")}
-            icon="dashboard"
-            expanded={Boolean(openSections.dashboard)}
-            onToggle={() => toggleNavSection("dashboard")}
-            t={t}
-          >
-            {/* fix-ra merge: this link opens the Dashboard, so it is named Dashboard; the one
-                "Analytics" entry is fix-rc's /analytics below. */}
-            <NavLink to="/dashboard" className={sidebarLinkClass}>
-              <SidebarIcon name="dashboard" />
-              <span>{t("nav.section.dashboard")}</span>
-            </NavLink>
-            {can("reports") ? (
-              <NavLink to="/reports" className={sidebarLinkClass}>
-                <SidebarIcon name="reports" />
-                <span>{t("nav.reports")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("finance", "view") ? (
-              <NavLink to="/analytics" className={sidebarLinkClass}>
-                <SidebarIcon name="analytics" />
-                <span>{t("nav.analytics")}</span>
-              </NavLink>
-            ) : null}
-            {(can("pos") || can("reports")) ? (
-              <NavLink to="/sales" className={sidebarLinkClass}>
-                <SidebarIcon name="sales" />
-                <span>{t("nav.sales")}</span>
-              </NavLink>
-            ) : null}
-            <NavLink to="/alerts" className={sidebarLinkClass}>
-              <SidebarIcon name="bell" />
-              <span className="app-sidebar-link-row">
-                <span>{t("nav.notifications")}</span>
-                {alertsBadge > 0 ? (
-                  <span className="app-sidebar-badge" title={t("nav.notifications")}>
-                    {alertsBadge > 99 ? "99+" : alertsBadge}
-                  </span>
-                ) : null}
-              </span>
-            </NavLink>
-          </SidebarNavSection>
-
-          {can("pos") ? (
-            <NavLink to="/pos" className={sidebarLinkClass} end>
-              <SidebarIcon name="pos" />
-              <span>{t("nav.pos")}</span>
-            </NavLink>
-          ) : null}
-          {canModule("b2b", "view") ? (
-            <NavLink to="/pos/b2b" className={sidebarLinkClass}>
-              <SidebarIcon name="purchases" />
-              <span>{t("b2b.title")}</span>
-            </NavLink>
-          ) : null}
-
-          <SidebarNavSection
-            sectionId="inventory"
-            title={t("nav.section.inventory")}
-            icon="inventory"
-            expanded={Boolean(openSections.inventory)}
-            onToggle={() => toggleNavSection("inventory")}
-            t={t}
-          >
-            {can("productsView") ? (
-              <NavLink to="/products" className={sidebarLinkClass}>
-                <SidebarIcon name="products" />
-                <span>{t("nav.products")}</span>
-              </NavLink>
-            ) : null}
-            {can("catalogEdit") ? (
-              <NavLink to="/categories" className={sidebarLinkClass}>
-                <SidebarIcon name="categories" />
-                <span>{t("nav.categories")}</span>
-              </NavLink>
-            ) : null}
-            {can("purchases") ? (
-              <NavLink to="/purchases" className={sidebarLinkClass}>
-                <SidebarIcon name="purchases" />
-                <span>{t("nav.purchases")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("salesOrders", "view") ? (
-              <NavLink to="/sales-orders" className={sidebarLinkClass}>
-                <SidebarIcon name="purchases" />
-                <span>{t("so.title")}</span>
-              </NavLink>
-            ) : null}
-            {can("purchases") ? (
-              <NavLink to="/purchase-orders" className={sidebarLinkClass}>
-                <SidebarIcon name="purchases" />
-                <span>{t("po.title")}</span>
-              </NavLink>
-            ) : null}
-            {can("productsView") ? (
-              <NavLink to="/online-orders" className={sidebarLinkClass}>
-                <SidebarIcon name="products" />
-                <span>{t("shop.staffOrders")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("promotions", "view") ? (
-              <NavLink to="/promotions" className={sidebarLinkClass}>
-                <SidebarIcon name="coupons" />
-                <span>{t("shop.promotions")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("finance", "view") ? (
-              <NavLink to="/finance" className={sidebarLinkClass}>
-                <SidebarIcon name="purchases" />
-                <span>{t("shop.finance")}</span>
-              </NavLink>
-            ) : null}
-            {(canModule("delivery", "create") || canModule("returns", "view")) ? (
-              <NavLink to="/vehicles" className={sidebarLinkClass}>
-                <SidebarIcon name="inventory" />
-                <span>{t("shop.vehicles")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("grooming", "view") ? (
-              <NavLink to="/admin/grooming" className={sidebarLinkClass}>
-                <SidebarIcon name="categories" />
-                <span>{t("shop.grooming")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("relocation", "view") ? (
-              <NavLink to="/admin/relocation" className={sidebarLinkClass}>
-                <SidebarIcon name="categories" />
-                <span>{t("shop.relocation")}</span>
-              </NavLink>
-            ) : null}
-            {can("catalogEdit") ? (
-              <NavLink to="/pet-types" className={sidebarLinkClass}>
-                <SidebarIcon name="categories" />
-                <span>{t("shop.catalogueSetup")}</span>
-              </NavLink>
-            ) : null}
-            {can("transfer") ? (
-              <NavLink to="/transfer" className={sidebarLinkClass}>
-                <SidebarIcon name="transfer" />
-                <span>{t("nav.transfer")}</span>
-              </NavLink>
-            ) : null}
-            {can("stockCount") ? (
-              <NavLink to="/count" className={sidebarLinkClass}>
-                <SidebarIcon name="count" />
-                <span>{t("nav.count")}</span>
-              </NavLink>
-            ) : null}
-            {can("refunds") ? (
-              <NavLink to="/returns" className={sidebarLinkClass}>
-                <SidebarIcon name="returns" />
-                <span>{t("nav.returns")}</span>
-              </NavLink>
-            ) : null}
-            {can("cashSession") ? (
-              <NavLink to="/cash" className={sidebarLinkClass}>
-                <SidebarIcon name="funds" />
-                <span>{t("nav.funds")}</span>
-              </NavLink>
-            ) : null}
-          </SidebarNavSection>
-
-          <SidebarNavSection
-            sectionId="customers"
-            title={t("nav.section.customers")}
-            icon="customers"
-            expanded={Boolean(openSections.customers)}
-            onToggle={() => toggleNavSection("customers")}
-            t={t}
-          >
-            {can("customers") ? (
-              <NavLink to="/customers" className={sidebarLinkClass}>
-                <SidebarIcon name="customers" />
-                <span>{t("nav.customers")}</span>
-              </NavLink>
-            ) : null}
-            {can("receivables") ? (
-              <NavLink to="/customer-accounts" className={sidebarLinkClass}>
-                <SidebarIcon name="accounts" />
-                <span>{t("nav.accounts")}</span>
-              </NavLink>
-            ) : null}
-            {canModule("grooming", "view") ? (
-              <NavLink to="/appointments" className={sidebarLinkClass}>
-                <SidebarIcon name="appointments" />
-                <span>{t("nav.appointments")}</span>
-              </NavLink>
-            ) : null}
-          </SidebarNavSection>
-
-          <SidebarNavSection
-            sectionId="admin"
-            title={t("nav.section.administration")}
-            icon="admin"
-            expanded={Boolean(openSections.admin)}
-            onToggle={() => toggleNavSection("admin")}
-            t={t}
-          >
-            {isAdmin ? (
-              <NavLink to="/users" className={sidebarLinkClass}>
-                <SidebarIcon name="users" />
-                <span>{t("nav.users")}</span>
-              </NavLink>
-            ) : null}
-            {isOrgOwner ? (
-              <NavLink to="/permissions" className={sidebarLinkClass}>
-                <SidebarIcon name="audit" />
-                <span>{t("nav.permissions")}</span>
-              </NavLink>
-            ) : null}
-            {isAdmin ? (
-              <NavLink to="/branches" className={sidebarLinkClass}>
-                <SidebarIcon name="branches" />
-                <span>{t("nav.branches")}</span>
-              </NavLink>
-            ) : null}
-            {can("audit") ? (
-              <NavLink to="/audit" className={sidebarLinkClass}>
-                <SidebarIcon name="audit" />
-                <span>{t("nav.auditLogs")}</span>
-              </NavLink>
-            ) : null}
-          </SidebarNavSection>
-
-          <NavLink to="/settings" className={sidebarLinkClass}>
-            <SidebarIcon name="settings" />
-            <span>{t("nav.settings")}</span>
-          </NavLink>
-          </>
+        <nav className="app-sidebar-nav" data-testid="app-menu" data-preview-role={previewRole || undefined}>
+          {menu.map((section) =>
+            section.id === null ? (
+              // A role with its own short menu (DRIVER): plain links, no sections.
+              <React.Fragment key="flat">
+                {section.items.map((it) => (
+                  <MenuLink key={it.id} item={it} t={t} badge={badges[it.badge] || 0} />
+                ))}
+              </React.Fragment>
+            ) : (
+              <SidebarNavSection
+                key={section.id}
+                sectionId={section.id}
+                title={t(`menu.section.${section.id}`)}
+                icon={section.icon}
+                expanded={isOpen(section.id)}
+                onToggle={() => toggleNavSection(section.id)}
+                badge={section.items.reduce((n, it) => n + (it.badge ? badges[it.badge] || 0 : 0), 0)}
+                t={t}
+              >
+                {section.items.map((it) => (
+                  <MenuLink key={it.id} item={it} t={t} badge={badges[it.badge] || 0} />
+                ))}
+              </SidebarNavSection>
+            ),
           )}
         </nav>
 
@@ -517,6 +318,19 @@ export function AppLayout() {
 
       <div className="app-main-wrap">
         <OfflineBanner />
+        {previewRole ? (
+          <div className="menu-preview-banner" role="status" data-testid="menu-preview-banner" title={t("menu.preview.tooltip")}>
+            <span>
+              <strong>{t("menu.preview.banner", { role: t(`role.${previewRole}`) })}</strong>
+              <span className="menu-preview-banner__hint">
+                {previewError ? previewError : previewReady ? t("menu.preview.hint") : t("common.loading")}
+              </span>
+            </span>
+            <button type="button" className="btn-touch menu-preview-banner__exit" onClick={() => setMenuPreview(null, null)} data-testid="menu-preview-exit">
+              {t("menu.preview.exit")}
+            </button>
+          </div>
+        ) : null}
         <main className={`app-main-content${isPosRoute ? " app-main-content--pos-wide" : ""}`}>
           <Outlet />
         </main>
