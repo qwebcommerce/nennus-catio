@@ -3,13 +3,16 @@ import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
+// fix-rf: link to "Who sees what" and the menu preview
+import { Link } from "react-router-dom";
+import { setMenuPreview } from "../lib/menuPreview.js";
 
 /** One tab per editable role (the top admin always has everything). Order and labels: */
 const ROLE_ORDER = ["SUPERVISOR", "SALES", "ACCOUNTANT", "B2B", "DRIVER", "MANAGER", "CASHIER"];
 const LEGACY = ["MANAGER", "CASHIER"];
 
 export default function Permissions() {
-  const { refreshUser } = useAuth();
+  const { refreshUser, user } = useAuth();
   const { t } = useI18n();
   /** Module/action keys are codes: show their translated names (fall back to the code). */
   const label = (kind, key) => {
@@ -99,6 +102,17 @@ export default function Permissions() {
         <p style={{ margin: "8px 0 0", color: "var(--muted)", fontSize: 14 }}>
           {t("permissions.intro")}
         </p>
+        {/* fix-rf */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+          <Link to="/permissions/guide" className="btn-touch" data-testid="perm-guide-link" style={{ background: "var(--surface2)", color: "var(--text)", textDecoration: "none" }}>
+            {t("menu.item.guide")}
+          </Link>
+          {tab && user?.id ? (
+            <button type="button" className="btn-touch" data-testid="perm-preview" onClick={() => setMenuPreview(user.id, tab)} style={{ background: "var(--surface2)", color: "var(--text)" }}>
+              {t("menu.preview.thisRole")} ({t(`role.${tab}`)})
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} role="tablist" aria-label={t("permissions.rolesLabel")}>

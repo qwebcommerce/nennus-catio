@@ -53,6 +53,8 @@ import cronRoutes from "./routes/cron.js";
 import salesOrderRoutes from "./routes/salesOrders.js";
 import b2bRoutes from "./routes/b2b.js";
 import pendingRoutes from "./routes/pending.js";
+// fix-rg: printable documents (purchase orders, vouchers, sales-order receipts / delivery notes)
+import documentRoutes from "./routes/documents.js";
 import fileRoutes, { businessFileDownloads } from "./routes/files.js";
 import purchaseOrderExtraRoutes from "./routes/purchaseOrderExtras.js";
 // fix-rb: drivers / dispatch
@@ -60,6 +62,8 @@ import { approvalsRouter as driverApprovalRoutes, dispatchRouter as dispatchRout
 import driverRoutes from "./routes/driver.js";
 // fix-rd: accountant confirmation of collected money
 import paymentConfirmRoutes from "./routes/paymentConfirm.js";
+// fix-rf: per-role menus for the admin's menu preview and the "Who sees what" guide
+import roleMenuRoutes from "./routes/roleMenus.js";
 import { prisma } from "./lib/prisma.js";
 import { csrfGuard } from "./middleware/auth.js";
 import {
@@ -183,6 +187,8 @@ app.use("/api/sales-orders", salesOrderRoutes);
 // fix-ra: B2B / Wholesale tab (delivery note → invoice → cash receipt).
 app.use("/api/b2b", b2bRoutes);
 app.use("/api/pending", pendingRoutes);
+// fix-rg: printable documents
+app.use("/api/documents", documentRoutes);
 app.use("/api/files", fileRoutes);
 app.use("/api/business-files", businessFileDownloads);
 app.use("/api/shop/grooming", groomingShopRoutes);
@@ -205,6 +211,8 @@ app.use("/api/dispatch", dispatchRoutes);
 app.use("/api/driver-approvals", driverApprovalRoutes);
 app.use("/api/driver", driverRoutes);
 app.use("/api/payment-confirmations", paymentConfirmRoutes);
+// fix-rf
+app.use("/api/role-menus", roleMenuRoutes);
 
 /** Unknown API paths answer JSON (bilingual) instead of Express's HTML page. */
 app.use("/api", (_req, res) => {

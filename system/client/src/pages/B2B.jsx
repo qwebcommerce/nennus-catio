@@ -9,6 +9,7 @@ import { lineDirhams, money2 } from "../utils/soMoney.js";
 import { FileLink, PageTabs, ProofUpload, money, proofNeeded } from "../components/BizShared.jsx";
 import PosSubNav from "../components/PosSubNav.jsx";
 import { ConfirmBadge } from "../components/PaymentConfirmShared.jsx";
+import { DocHeader } from "../components/docs/DocShared.jsx";
 
 /**
  * B2B / Wholesale (POS area): delivery note → invoice → cash receipt, on the sales-orders engine
@@ -440,14 +441,9 @@ function qtyText(l, q, t) {
   return l.product?.sellBy === "WEIGHT" ? `${(q / 1000).toFixed(3)} ${t("so.kg")}` : String(q);
 }
 
+/** fix-rg: the shared document header (business details and logo, title, reference, printed on). */
 function PrintHeader({ title, reference }) {
-  const { t, locale } = useI18n();
-  return (
-    <div className="b2b-print-head">
-      <h2 style={{ margin: "0 0 4px" }}>{title} {reference}</h2>
-      <div className="fd-muted">{t("b2b.printedOn")} {formatDateTime(new Date(), locale)}</div>
-    </div>
-  );
+  return <DocHeader title={title} reference={reference} />;
 }
 
 function NoteDetail({ id, onBack, onOpenInvoice }) {
@@ -467,7 +463,7 @@ function NoteDetail({ id, onBack, onOpenInvoice }) {
     try { await fn(); setOk(done); await load(); } catch (e) { setMsg(editErrorMessage(e, t)); } finally { setBusy(false); }
   };
   const doc = (
-    <div className="print-invoice biz-print-doc b2b-print" data-doc="delivery-note">
+    <div className="print-invoice biz-print-doc b2b-print rg-doc" data-doc="delivery-note">
       <PrintHeader title={t("b2b.deliveryNote")} reference={note.dnReference} />
       <div><strong>{custName(note.customer)}</strong>{note.customer?.phone ? ` · ${note.customer.phone}` : ""}</div>
       {note.customer?.address ? <div>{note.customer.address}</div> : null}
@@ -651,7 +647,7 @@ function InvoiceDetail({ id, meta, onBack, onOpenNote, onOpenReceipt }) {
     }
   };
   const doc = (
-    <div className="print-invoice biz-print-doc b2b-print" data-doc="invoice">
+    <div className="print-invoice biz-print-doc b2b-print rg-doc" data-doc="invoice">
       <PrintHeader title={t("b2b.invoice")} reference={inv.reference} />
       <div><strong>{custName(inv.customer)}</strong>{inv.customer?.phone ? ` · ${inv.customer.phone}` : ""}</div>
       {inv.customer?.address ? <div>{inv.customer.address}</div> : null}
@@ -829,7 +825,7 @@ function ReceiptDetail({ id, onBack, onOpenInvoice }) {
   if (!r) return msg ? <div role="alert" className="fd-alert">{msg}</div> : <div className="card">{t("common.loading")}</div>;
   const balance = (Number(r.invoice?.total || 0) - Number(r.invoice?.amountPaid || 0)).toFixed(2);
   const doc = (
-    <div className="print-invoice biz-print-doc b2b-print" data-doc="receipt">
+    <div className="print-invoice biz-print-doc b2b-print rg-doc" data-doc="receipt">
       <PrintHeader title={t("b2b.receipt")} reference={r.reference} />
       <div>{t("b2b.receivedFrom")}: <strong>{custName(r.customer)}</strong></div>
       <div>{t("b2b.invoice")}: {r.invoice?.reference} · {t("b2b.invoiceDate")}: {dayText(r.invoice?.invoiceDate, locale)}</div>

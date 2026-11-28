@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
-import { SidebarIcon } from "./SidebarIcon.jsx";
 
 /**
  * fix-rd: payment confirmation pieces shared by several screens — the status badge, the sidebar
- * links (confirmation queue with its count, sales' van returns desk) and the Dashboard card.
+ * pending count (fix-rf: the sidebar links are in lib/menuDefinition.js) and the Dashboard card.
  */
 
 /** "Awaiting confirmation" / "Confirmed" / "Rejected" next to a recorded payment. */
@@ -21,8 +20,6 @@ export function ConfirmBadge({ status, reason }) {
     </span>
   );
 }
-
-const linkClass = ({ isActive }) => `app-sidebar-link${isActive ? " is-active" : ""}`;
 
 /** Pending count for the badge / card (polls every minute). */
 export function usePendingConfirmations(enabled) {
@@ -39,35 +36,6 @@ export function usePendingConfirmations(enabled) {
     };
   }, [enabled]);
   return data;
-}
-
-/** Sidebar: "Payment confirmations" (with the waiting count) and the sales staff's "Van returns". */
-export function PaymentConfirmNavLinks() {
-  const { t } = useI18n();
-  const { user, canModule } = useAuth();
-  const canQueue = canModule("paymentConfirm", "view");
-  const data = usePendingConfirmations(canQueue);
-  const n = data?.pending || 0;
-  const vanDesk = canModule("returns", "create") && user?.role !== "DRIVER";
-  return (
-    <>
-      {canQueue ? (
-        <NavLink to="/payment-confirmations" className={linkClass} data-testid="nav-confirmations">
-          <SidebarIcon name="audit" />
-          <span className="app-sidebar-link-row">
-            <span>{t("pc.nav")}</span>
-            {n ? <span className="app-sidebar-badge" data-testid="nav-confirmations-badge">{n > 99 ? "99+" : n}</span> : null}
-          </span>
-        </NavLink>
-      ) : null}
-      {vanDesk ? (
-        <NavLink to="/van-returns" className={linkClass} data-testid="nav-van-returns">
-          <SidebarIcon name="transfer" />
-          <span>{t("vrs.nav")}</span>
-        </NavLink>
-      ) : null}
-    </>
-  );
 }
 
 /** Dashboard card: money waiting for the accountant. */
