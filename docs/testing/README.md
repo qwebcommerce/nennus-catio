@@ -174,3 +174,21 @@ records (for example refund a demo website order) the app talks to the real serv
 which they refuse. Remove the demo before the first real order.
 
 Locally: `node scripts/demo-data.mjs load|remove|status` in `system/server` (uses `server/.env`).
+
+## Client change rounds — November 2026
+
+Each feature has its own write-up in this folder:
+
+| Feature | Document |
+|---|---|
+| Transfer history, van returns, damaged stock | `van-returns.md` |
+| Sales orders, installments, bank transfer, free goods, PO documents, freight | `sales-orders-payments.md` |
+| Roles, unlimited locations, B2B / Wholesale | `b2b-roles-branches.md` |
+| Drivers, dispatch, driver edit approvals, grooming vans | `drivers-dispatch.md` |
+| Analytics, reports and expenses history | `analytics-reports.md` |
+| Accountant confirmation of collected money | `payment-confirmation.md` |
+| Grooming coupons | `coupons.md` |
+| Menu by role, preview as role, "Who sees what" | `menu-roles.md` |
+| Printable PO / SO documents, payment and delivery status | `printable-documents.md` |
+
+To explain access to the client, open **Setup & admin → Who sees what** in the staff app and print it.
