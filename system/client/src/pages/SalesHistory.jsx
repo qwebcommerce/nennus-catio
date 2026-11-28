@@ -148,6 +148,7 @@ export default function SalesHistory() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h1 style={{ margin: 0 }}>{t("sales.title")}</h1>
+      {can("reports") ? <Link to="/reports?tab=history" style={{ fontSize: 14 }}>{t("hist.salesHistoryLink")} →</Link> : null}
       <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>{t("sales.intro")}</p>
 
       <form

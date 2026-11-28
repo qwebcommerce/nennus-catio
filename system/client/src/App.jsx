@@ -33,23 +33,37 @@ import PetTypes from "./pages/PetTypes.jsx";
 import GroomingDesk from "./pages/GroomingDesk.jsx";
 import RelocationDesk from "./pages/RelocationDesk.jsx";
 import Promotions from "./pages/Promotions.jsx";
+// fix-re: generated grooming coupons
+import Coupons from "./pages/Coupons.jsx";
 import Finance from "./pages/Finance.jsx";
 import Vehicles from "./pages/Vehicles.jsx";
-import Transfer from "./pages/Transfer.jsx";
+import Transfer, { TransferDetail, TransferHistory } from "./pages/Transfer.jsx";
+import VehicleDashboard, { DamagedStockPage } from "./pages/VehicleDashboard.jsx";
 import Count from "./pages/Count.jsx";
 import Cash from "./pages/Cash.jsx";
 import Audit from "./pages/Audit.jsx";
 import Alerts from "./pages/Alerts.jsx";
 import Settings from "./pages/Settings.jsx";
 import SalesHistory from "./pages/SalesHistory.jsx";
+import SalesOrders from "./pages/SalesOrders.jsx";
+import B2B from "./pages/B2B.jsx";
+// fix-rb: drivers / dispatch
+import DriverDashboard from "./pages/DriverDashboard.jsx";
+import Dispatch from "./pages/Dispatch.jsx";
+import DriverApprovals from "./pages/DriverApprovals.jsx";
+// fix-rd: payment confirmation queue, sales' van returns desk
+import PaymentConfirmations from "./pages/PaymentConfirmations.jsx";
+import VanReturnsDesk from "./pages/VanReturnsDesk.jsx";
 const loadReports = () => import("./pages/Reports.jsx");
 const loadAppointments = () => import("./pages/Appointments.jsx");
+// Business analytics (fix-rc).
+const Analytics = React.lazy(() => import("./pages/Analytics.jsx"));
 
 const Reports = React.lazy(loadReports);
 const Appointments = React.lazy(loadAppointments);
 
-function Protected({ children, roles, permission, anyPermission }) {
-  const { user, loading, can } = useAuth();
+function Protected({ children, roles, permission, anyPermission, anyModule, module }) {
+  const { user, loading, can, canModule } = useAuth();
   const { t } = useI18n();
   if (loading) {
     return (
@@ -64,7 +78,10 @@ function Protected({ children, roles, permission, anyPermission }) {
     const denied =
       (roles && !roles.includes(user.role)) ||
       (permission && !can(permission)) ||
-      (Array.isArray(anyPermission) && anyPermission.length > 0 && !anyPermission.some((key) => can(key)));
+      (Array.isArray(module) && !canModule(module[0], module[1])) ||
+      (Array.isArray(anyPermission) && anyPermission.length > 0 && !anyPermission.some((key) => can(key))) ||
+      // anyModule: [["returns", "view"], ...] — any one module right is enough.
+      (Array.isArray(anyModule) && anyModule.length > 0 && !anyModule.some(([mod, action]) => canModule(mod, action)));
     if (denied) {
       return (
         <div className="card" role="alert" style={{ maxWidth: 520, margin: "24px auto", display: "grid", gap: 12 }}>
@@ -78,6 +95,13 @@ function Protected({ children, roles, permission, anyPermission }) {
     }
   }
   return children;
+}
+
+/** fix-rb: a driver lands on (and stays in) the driver dashboard. */
+function HomeDashboard() {
+  const { user } = useAuth();
+  if (user?.role === "DRIVER") return <Navigate to="/driver" replace />;
+  return <Dashboard />;
 }
 
 export default function App() {
@@ -145,13 +169,30 @@ export default function App() {
         >
           <Route path="/change-password" element={<ChangePassword />} />
           <Route path="/pos" element={<Protected permission="pos"><POS /></Protected>} />
+          {/* fix-ra: B2B / Wholesale tab under POS (module b2b). */}
+          <Route path="/pos/b2b" element={<Protected module={["b2b", "view"]}><B2B /></Protected>} />
           <Route path="/alerts" element={<Alerts />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dashboard" element={<HomeDashboard />} />
+          {/* fix-rb: drivers / dispatch */}
+          <Route path="/driver" element={<Protected module={["driver", "view"]}><DriverDashboard /></Protected>} />
+          <Route path="/dispatch" element={<Protected module={["dispatch", "view"]}><Dispatch /></Protected>} />
+          <Route path="/driver-approvals" element={<Protected module={["driverApprovals", "view"]}><DriverApprovals /></Protected>} />
+          {/* fix-rd: payment confirmation, van returns desk */}
+          <Route path="/payment-confirmations" element={<Protected module={["paymentConfirm", "view"]}><PaymentConfirmations /></Protected>} />
+          <Route path="/van-returns" element={<Protected module={["returns", "view"]}><VanReturnsDesk /></Protected>} />
           <Route
             path="/sales"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} anyPermission={["pos", "reports"]}>
+              <Protected anyPermission={["pos", "reports"]}>
                 <SalesHistory />
+              </Protected>
+            }
+          />
+          <Route
+            path="/sales-orders"
+            element={
+              <Protected module={["salesOrders", "view"]}>
+                <SalesOrders />
               </Protected>
             }
           />
@@ -160,15 +201,23 @@ export default function App() {
           <Route
             path="/reports"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="reports">
+              <Protected permission="reports">
                 <Reports />
+              </Protected>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <Protected module={["finance", "view"]}>
+                <Analytics />
               </Protected>
             }
           />
           <Route
             path="/appointments"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["grooming", "view"]}>
                 <Appointments />
               </Protected>
             }
@@ -240,7 +289,7 @@ export default function App() {
           <Route
             path="/returns"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="refunds">
+              <Protected permission="refunds">
                 <Returns />
               </Protected>
             }
@@ -248,7 +297,7 @@ export default function App() {
           <Route
             path="/purchase-orders"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="purchases">
+              <Protected permission="purchases">
                 <PurchaseOrders />
               </Protected>
             }
@@ -256,7 +305,7 @@ export default function App() {
           <Route
             path="/online-orders"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]}>
+              <Protected module={["orders", "view"]}>
                 <OnlineOrders />
               </Protected>
             }
@@ -264,15 +313,19 @@ export default function App() {
           <Route
             path="/promotions"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["promotions", "view"]}>
                 <Promotions />
               </Protected>
             }
           />
+          {/* fix-re: generated grooming coupons (batches, codes, printable sheet) */}
+          {["/promotions/coupons", "/promotions/coupons/:id", "/promotions/coupons/:id/:view"].map((path) => (
+            <Route key={path} path={path} element={<Protected module={["promotions", "view"]}><Coupons /></Protected>} />
+          ))}
           <Route
             path="/finance"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["finance", "view"]}>
                 <Finance />
               </Protected>
             }
@@ -280,8 +333,24 @@ export default function App() {
           <Route
             path="/vehicles"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected anyModule={[["delivery", "create"], ["returns", "view"]]}>
                 <Vehicles />
+              </Protected>
+            }
+          />
+          <Route
+            path="/vehicles/:id"
+            element={
+              <Protected anyModule={[["returns", "view"]]}>
+                <VehicleDashboard />
+              </Protected>
+            }
+          />
+          <Route
+            path="/damaged-stock"
+            element={
+              <Protected anyModule={[["returns", "view"]]}>
+                <DamagedStockPage />
               </Protected>
             }
           />
@@ -289,7 +358,7 @@ export default function App() {
           <Route
             path="/admin/grooming"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["grooming", "view"]}>
                 <GroomingDesk />
               </Protected>
             }
@@ -297,7 +366,7 @@ export default function App() {
           <Route
             path="/admin/relocation"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["relocation", "view"]}>
                 <RelocationDesk />
               </Protected>
             }
@@ -305,7 +374,7 @@ export default function App() {
           <Route
             path="/pet-types"
             element={
-              <Protected roles={["ADMIN", "MANAGER"]}>
+              <Protected module={["products", "edit"]}>
                 <PetTypes />
               </Protected>
             }
@@ -313,7 +382,7 @@ export default function App() {
           <Route
             path="/purchases"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="purchases">
+              <Protected permission="purchases">
                 <Purchases />
               </Protected>
             }
@@ -321,15 +390,31 @@ export default function App() {
           <Route
             path="/transfer"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="transfer">
+              <Protected permission="transfer">
                 <Transfer />
+              </Protected>
+            }
+          />
+          <Route
+            path="/transfer/history"
+            element={
+              <Protected anyModule={[["warehouses", "view"]]}>
+                <TransferHistory />
+              </Protected>
+            }
+          />
+          <Route
+            path="/transfer/history/:id"
+            element={
+              <Protected anyModule={[["warehouses", "view"]]}>
+                <TransferDetail />
               </Protected>
             }
           />
           <Route
             path="/count"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="stockCount">
+              <Protected permission="stockCount">
                 <Count />
               </Protected>
             }
@@ -345,7 +430,7 @@ export default function App() {
           <Route
             path="/audit"
             element={
-              <Protected roles={["ADMIN", "MANAGER", "CASHIER"]} permission="audit">
+              <Protected permission="audit">
                 <Audit />
               </Protected>
             }

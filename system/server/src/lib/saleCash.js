@@ -1,3 +1,4 @@
+import { inDrawerWhere } from "./paymentConfirmWhere.js";
 import { d, shareOf } from "./money.js";
 
 /** All amounts here are whole dirhams (NFR-03). */
@@ -80,7 +81,8 @@ export function cardPortionFromSale(sale) {
 
 /**
  * Cash-up figures for a till session (FR-102, FR-109), in whole dirhams:
- * expected cash = opening float + cash sales + cash account collections − cash refunds paid from this session,
+ * expected cash = opening float + cash sales + cash account collections − cash refunds paid from this session
+ * − van returns paid back in cash from this session,
  * whichever session the refunded sale was in. Card total = card taken − card refunds in this session.
  *
  * @param {import("@prisma/client").PrismaClient | import("@prisma/client").Prisma.TransactionClient} db
@@ -149,6 +151,9 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
         entryType: "PAYMENT",
         paymentMethod: "CASH",
         createdAt: { gte: session.openedAt, lte: closedAt },
+        // fix-rd: drawer cash counts while it awaits confirmation; a rejection made before the
+        // cash-up closed takes it out, one made later leaves the closed cash-up unchanged.
+        ...inDrawerWhere(closedAt),
       },
       select: { amount: true },
     });
@@ -161,15 +166,36 @@ export async function computeSessionCashUp(db, session, closedAt = new Date()) {
     cashCollections = 0;
   }
 
+  // Sales-order installments paid in cash at this location while the session was open.
+  // Bank transfers (and every non-cash method) never count as drawer cash.
+  let salesOrderCash = 0;
+  const soCash = await db.salesOrderPayment.aggregate({
+    where: { branchId: session.branchId, method: "CASH", createdAt: { gte: session.openedAt, lte: closedAt }, ...inDrawerWhere(closedAt) },
+    _sum: { amount: true },
+  });
+  salesOrderCash = d(soCash._sum.amount);
+  // Shown on the cash-up for reference only (not in the drawer).
+  const bankTransferSales = sessionSales.filter((s) => s.paymentMethod === "BANK_TRANSFER").reduce((acc, s) => acc + d(s.amountPaid), 0);
+  // Van returns paid back in cash from this session (routes/vanReturns.js links them).
+  let vanReturnsCash = 0;
+  const vanReturns = await db.vanReturn.findMany({
+    where: { cashSessionId: session.id, paidMethod: "CASH" },
+    select: { amountOwed: true },
+  });
+  for (const r of vanReturns) vanReturnsCash += d(r.amountOwed);
+
   return {
     openingFloat: opening,
     cashSales,
     cashCollections,
+    salesOrderCash,
     cashRefunds,
-    expectedCash: opening + cashSales + cashCollections - cashRefunds,
+    vanReturnsCash,
+    expectedCash: opening + cashSales + cashCollections + salesOrderCash - cashRefunds - vanReturnsCash,
     cardSales,
     cardRefunds,
     cardTotal: cardSales - cardRefunds,
+    bankTransferSales,
   };
 }
 

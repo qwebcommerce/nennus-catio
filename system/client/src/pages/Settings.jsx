@@ -7,6 +7,7 @@ import { useToast } from "../context/ToastContext.jsx";
 import PrintSettings from "./PrintSettings.jsx";
 import { LanguageSwitcher } from "../components/LanguageSwitcher.jsx";
 import { useBranchContext } from "../context/BranchContext.jsx";
+import LocationsSettings from "../components/LocationsSettings.jsx";
 
 const NOTIF_PREF_KEY = "pos-notifications-enabled";
 
@@ -269,6 +270,9 @@ export default function Settings() {
           </button>
         </section>
       ) : null}
+
+      {/* fix-ra: location names (Arabic / English) and the main location — owner only. */}
+      {isOrgOwner ? <LocationsSettings /> : null}
 
       <section className="settings-print" aria-label={t("nav.printSettings")}>
         <PrintSettings />

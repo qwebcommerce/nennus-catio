@@ -153,33 +153,55 @@ router.get("/sales-by-product", async (req, res) => {
   res.json(chart.slice(0, 20));
 });
 
+/**
+ * Per-location figures for the month (or ?from=&to=): every location of the business, whatever
+ * its kind (shop, van, warehouse, factory, other) — a new location shows up without code changes.
+ * value = till sales (incl. van and website sales at that location), salesOrders = sales-order /
+ * B2B revenue delivered from it, total = both. Top admin, or Finance → view.
+ */
 router.get("/sales-by-branch", async (req, res) => {
-  if (req.user.role !== "ADMIN") {
-    return res.status(403).json({ error: "للمدراء فقط" });
+  if (req.user.role !== "ADMIN" && !(await hasModule(req, "finance", "view"))) {
+    return res.status(403).json({ error: "للمدراء فقط", errorAr: "للمدراء فقط", errorEn: "Managers only", code: "FORBIDDEN" });
   }
+  const orgId = req.user.organizationId;
   const { from, to } = monthRangeFromQuery(req);
-
-  const sales = await prisma.sale.groupBy({
-    by: ["branchId"],
-    where: {
-      ...COUNTED_SALE,
-      createdAt: { gte: from, lt: to },
-      branch: { organizationId: req.user.organizationId },
-    },
-    _sum: { total: true },
-  });
-  const branches = await prisma.branch.findMany({
-    where: {
-      id: { in: sales.map((s) => s.branchId) },
-      organizationId: req.user.organizationId,
-    },
-  });
-  const nameById = Object.fromEntries(branches.map((b) => [b.id, b.name]));
+  const [sales, deliveries, branches] = await Promise.all([
+    prisma.sale.groupBy({
+      by: ["branchId"],
+      where: { ...COUNTED_SALE, createdAt: { gte: from, lt: to }, branch: { organizationId: orgId } },
+      _sum: { total: true },
+    }),
+    prisma.salesOrderDelivery.groupBy({
+      by: ["branchId"],
+      where: { deliveredAt: { gte: from, lt: to }, order: { organizationId: orgId } },
+      _sum: { revenue: true },
+    }),
+    prisma.branch.findMany({
+      where: { organizationId: orgId },
+      orderBy: [{ isMain: "desc" }, { name: "asc" }],
+      select: { id: true, name: true, nameEn: true, kind: true, isMain: true, isActive: true },
+    }),
+  ]);
+  const tillBy = new Map(sales.map((s) => [s.branchId, d(s._sum.total)]));
+  const soBy = new Map(deliveries.map((s) => [s.branchId, d(s._sum.revenue)]));
   res.json(
-    sales.map((s) => ({
-      name: nameById[s.branchId] || s.branchId,
-      value: money(d(s._sum.total)),
-    }))
+    branches
+      // Inactive locations only while they still have figures in the period.
+      .filter((b) => b.isActive !== false || tillBy.has(b.id) || soBy.has(b.id))
+      .map((b) => {
+        const till = tillBy.get(b.id) || 0;
+        const so = soBy.get(b.id) || 0;
+        return {
+          id: b.id,
+          name: b.name,
+          nameEn: b.nameEn || b.name,
+          kind: b.kind,
+          isMain: b.isMain,
+          value: money(till),
+          salesOrders: money(so),
+          total: money(till + so),
+        };
+      })
   );
 });
 

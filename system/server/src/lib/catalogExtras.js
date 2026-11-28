@@ -1,6 +1,7 @@
 import { Prisma } from "./prisma-client-bundle.js";
 import { staleEditError } from "./recordVersion.js";
 import { requireDirhams } from "./money.js";
+import { parsePiecesPerCarton } from "./stockUnits.js";
 
 export function sellByValue(raw) {
   return String(raw || "").toUpperCase() === "WEIGHT" ? "WEIGHT" : "PIECE";
@@ -32,6 +33,8 @@ export async function productExtrasData(tx, { orgId, body }) {
     data.houseDeliveryFee = raw == null || String(raw).trim() === "" ? 0 : requireDirhams(raw, {}, "house delivery fee");
   }
   if (body.sellBy !== undefined) data.sellBy = sellByValue(body.sellBy);
+  // Pieces per carton: empty clears it; otherwise a whole number of 2 or more.
+  if (body.piecesPerCarton !== undefined) data.piecesPerCarton = parsePiecesPerCarton(body.piecesPerCarton);
   if (body.preferredSupplierId !== undefined) {
     const supplierId = body.preferredSupplierId ? String(body.preferredSupplierId) : null;
     if (supplierId) {
@@ -94,6 +97,7 @@ export async function syncProductLinks(tx, { orgId, productId, body }) {
             ? new Prisma.Decimal(Number(raw.packWeight).toFixed(3))
             : null,
         preferredSupplierId: supplierId,
+        ...(raw?.piecesPerCarton !== undefined ? { piecesPerCarton: parsePiecesPerCarton(raw.piecesPerCarton) } : {}),
       };
       if (raw?.id) {
         // A variant sent with the version it was loaded at is only saved over that version (NFR-13).

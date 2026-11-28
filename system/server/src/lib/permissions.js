@@ -1,6 +1,6 @@
 /**
- * Role permission keys for MANAGER and CASHIER (Employee).
- * ADMIN (super admin) always has every permission.
+ * Role permissions. ADMIN (top admin) always has every permission; every other role has an
+ * editable module map (Organization.roleModules, see resolveModulePermissions below).
  */
 
 export const PERMISSION_KEYS = [
@@ -117,10 +117,7 @@ export function resolveRolePermissions(organization, role) {
 }
 
 export function orgPermissionMatrices(organization) {
-  return {
-    MANAGER: resolveRolePermissions(organization, "MANAGER"),
-    CASHIER: resolveRolePermissions(organization, "CASHIER"),
-  };
+  return Object.fromEntries(EDITABLE_ROLES.map((role) => [role, resolveRolePermissions(organization, role)]));
 }
 
 export function hasPermission(permissions, key) {
@@ -128,8 +125,67 @@ export function hasPermission(permissions, key) {
   return Boolean(permissions?.[key]);
 }
 
-export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team"];
+/**
+ * `returns`: van returns (goods a van driver collects back from a customer) and the vehicle
+ * dashboard. view = see returns and dashboards, create = record a return,
+ * edit = receive it at the warehouse, refund = pay the customer back. Writing off or selling damaged stock is
+ * for the business owner only (requireOwner). Staff whose location is a van only see that van.
+ *
+ * fix-rd: create = record (sales staff), edit = move to the warehouse (drivers: own van only),
+ * refund = pay the customer back (sales, accountant; never the driver).
+ *
+ * `paymentConfirm`: the accountant's queue of collected money (B2B cash receipts, sales-order
+ * payments, account collections, drivers' cash on delivery). view = see it, edit = confirm / reject.
+ *
+ * `b2b`: the B2B / Wholesale tab (delivery note → invoice → cash receipt, built on sales orders).
+ * view = see it, create = delivery notes and invoices, edit = record cash receipts,
+ * delete = cancel a delivery note not yet delivered / an invoice with no receipt, export.
+ */
+export const MODULES = ["products", "warehouses", "purchasing", "pos", "orders", "grooming", "relocation", "customers", "promotions", "delivery", "finance", "settings", "team", "returns", "salesOrders", "complimentary", "b2b",
+  // fix-rb: drivers / dispatch (docs/testing/drivers-dispatch.md)
+  "dispatch", "driver", "driverApprovals",
+  // fix-rd: accountant confirmation of collected money (docs/testing/payment-confirmation.md)
+  "paymentConfirm"];
 export const MODULE_ACTIONS = ["view", "create", "edit", "delete", "export", "refund"];
+
+/**
+ * Modules that use only some actions (the Permissions screen shows just these):
+ * - salesOrders: view, create (orders, payments, deliveries), edit (change a line price), delete (cancel), export.
+ * - complimentary: create = give goods free (till lines / whole invoice, sales-order lines). Managers by default.
+ * - b2b: see above (edit = cash receipts).
+ */
+export const MODULE_ACTIONS_FOR = Object.freeze({
+  salesOrders: ["view", "create", "edit", "delete", "export"],
+  complimentary: ["create"],
+  b2b: ["view", "create", "edit", "delete", "export"],
+  // fix-rb: dispatch = assignment screen (view; create = assign; edit = reassign / unassign / edit a job).
+  dispatch: ["view", "create", "edit"],
+  // fix-rb: driver = the driver / van dashboard (view; create = accept, decline, request an edit, mark delivered).
+  driver: ["view", "create"],
+  // fix-rb: driverApprovals = approve or reject drivers' order edits (view = see the queue; edit = decide).
+  driverApprovals: ["view", "edit"],
+  // fix-rd: returns — view; create = record a return into a van (sales); edit = move a van's
+  // returns to the warehouse (receive; van staff only their own van); refund = pay the customer back.
+  returns: ["view", "create", "edit", "refund"],
+  // fix-rd: paymentConfirm — view = the confirmation queue; edit = confirm / reject collected money.
+  paymentConfirm: ["view", "edit"],
+});
+
+/**
+ * Staff roles. ADMIN is the top admin (full access, never stored in the map).
+ * MANAGER and CASHIER are legacy: existing users were moved to SUPERVISOR / SALES / DRIVER by the
+ * migration 20261128100100_roles_data; the values stay valid for old rows and old clients.
+ */
+export const ROLES = ["ADMIN", "SUPERVISOR", "SALES", "ACCOUNTANT", "B2B", "DRIVER", "MANAGER", "CASHIER"];
+/** Roles with their own editable module map (every role but ADMIN). */
+export const EDITABLE_ROLES = ["SUPERVISOR", "SALES", "ACCOUNTANT", "B2B", "DRIVER", "MANAGER", "CASHIER"];
+/** Roles that may work without an assigned location (business-wide); the others need one. */
+export const ROLES_WITHOUT_BRANCH = ["ADMIN", "SUPERVISOR", "ACCOUNTANT", "B2B"];
+export const LEGACY_ROLES = ["MANAGER", "CASHIER"];
+
+export function isStaffRole(role) {
+  return ROLES.includes(String(role || ""));
+}
 
 function blankModuleMap(on) {
   return Object.fromEntries(
@@ -137,39 +193,141 @@ function blankModuleMap(on) {
   );
 }
 
+function allow(map, mod, ...actions) {
+  for (const a of actions) map[mod][a] = true;
+}
+
+/**
+ * Default module map per role. Each role is its own block so later features can add their
+ * module lines without touching the other roles. Detailed rights will be set after the client's
+ * second test round; the admin edits them on the Permissions screen.
+ */
 export function defaultModuleMap(role) {
-  if (role === "ADMIN" || role === "MANAGER") return blankModuleMap(true);
-  const map = blankModuleMap(false);
-  if (role === "CASHIER") {
-    map.products.view = true;
-    map.warehouses.view = true;
-    map.pos.view = true;
-    map.pos.create = true;
-    map.pos.refund = true;
-    map.orders.view = true;
-    map.orders.create = true;
-    map.customers.view = true;
-    map.customers.create = true;
-    map.delivery.view = true;
-    map.grooming.view = true;
+  if (role === "ADMIN") return blankModuleMap(true);
+
+  // ---- SUPERVISOR (and legacy MANAGER): everything; owner-only actions stay behind requireOwner.
+  if (role === "SUPERVISOR" || role === "MANAGER") {
+    const map = blankModuleMap(true);
+    // fix-rb: dispatch (assign / reassign) and driver-edit approvals are included (all on).
+    return map;
   }
+
+  const map = blankModuleMap(false);
+  // Every staff role reads the location list (/api/branches needs Warehouses → view).
+  allow(map, "warehouses", "view");
+
+  if (role === "SALES") {
+    // ---- SALES
+    allow(map, "pos", "view", "create", "refund");
+    allow(map, "orders", "view", "create");
+    allow(map, "customers", "view", "create");
+    allow(map, "products", "view");
+    allow(map, "salesOrders", "view", "create");
+    allow(map, "grooming", "view");
+    allow(map, "delivery", "view");
+    // fix-rb: sales staff assign orders to drivers; no driver-edit approvals.
+    allow(map, "dispatch", "view", "create", "edit");
+    // fix-rd: sales staff record van returns into any van and pay customers back.
+    allow(map, "returns", "view", "create", "refund");
+    return map;
+  }
+
+  if (role === "ACCOUNTANT") {
+    // ---- ACCOUNTANT: finance, purchasing, pending payments, supplier balances, sales-order
+    // payments, exports and reports; stock view only.
+    allow(map, "finance", "view", "create", "edit", "export");
+    allow(map, "purchasing", "view", "create", "edit", "export");
+    allow(map, "salesOrders", "view", "create", "export");
+    allow(map, "b2b", "view", "edit", "export");
+    allow(map, "products", "view");
+    allow(map, "customers", "view");
+    allow(map, "pos", "view");
+    // fix-rb: sees dispatch, decides drivers' order edits.
+    allow(map, "dispatch", "view");
+    allow(map, "driverApprovals", "view", "edit");
+    // fix-rd: confirms collected money; pays customers back for van returns.
+    allow(map, "paymentConfirm", "view", "edit");
+    allow(map, "returns", "view", "refund");
+    return map;
+  }
+
+  if (role === "B2B") {
+    // ---- B2B staff: the B2B / Wholesale tab, customers, products view, sales orders.
+    allow(map, "b2b", "view", "create", "edit", "delete", "export");
+    allow(map, "customers", "view", "create", "edit");
+    allow(map, "products", "view");
+    allow(map, "salesOrders", "view", "create", "edit");
+    // B2B staff assign their delivery notes to drivers (dispatch).
+    allow(map, "dispatch", "view", "create", "edit");
+    return map;
+  }
+
+  if (role === "DRIVER") {
+    // ---- DRIVER: minimal. Till for their van (the till needs to look up products), van returns.
+    allow(map, "pos", "view", "create");
+    allow(map, "products", "view");
+    // fix-rd: sales record returns into the van; the driver sees them and moves them to the
+    // warehouse (edit = receive, own van only). No create (recording) and no refund (paying back).
+    allow(map, "returns", "view", "edit");
+    // fix-rb: the driver / van dashboard (accept, decline, request an edit, mark delivered), customers view.
+    allow(map, "driver", "view", "create");
+    // fix-rd: drivers add new customers.
+    allow(map, "customers", "view", "create");
+    return map;
+  }
+
+  if (role === "CASHIER") {
+    // ---- legacy CASHIER (kept for old rows)
+    allow(map, "products", "view");
+    allow(map, "pos", "view", "create", "refund");
+    allow(map, "orders", "view", "create");
+    allow(map, "customers", "view", "create");
+    allow(map, "delivery", "view");
+    allow(map, "grooming", "view");
+    // Van drivers are employees: they record returns into their van and pay customers back.
+    allow(map, "returns", "view", "create", "refund");
+    // fix-rb: legacy sales-van employees use the driver dashboard for their van.
+    allow(map, "driver", "view", "create");
+    return map;
+  }
+
+  // ASSOCIATE or anything unknown: nothing beyond the location list.
   return map;
 }
 
+function parseJsonObject(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The stored map for one role: roleModules[role], else the legacy column (MANAGER / CASHIER). */
+export function storedRoleMap(organization, role) {
+  const all = parseJsonObject(organization?.roleModules);
+  if (all && all[role] && typeof all[role] === "object") return all[role];
+  if (role === "MANAGER") return parseJsonObject(organization?.managerModules);
+  if (role === "CASHIER") return parseJsonObject(organization?.cashierModules);
+  return null;
+}
+
+/** Stored rights on top of the role defaults; modules added later keep their defaults. */
 export function resolveModulePermissions(organization, role) {
   const base = defaultModuleMap(role);
   if (role === "ADMIN") return base;
-  const raw = role === "MANAGER" ? organization?.managerModules : organization?.cashierModules;
-  if (!raw) return base;
-  try {
-    const parsed = JSON.parse(raw);
-    for (const mod of MODULES) {
-      for (const action of MODULE_ACTIONS) {
-        if (typeof parsed?.[mod]?.[action] === "boolean") base[mod][action] = parsed[mod][action];
-      }
+  const parsed = storedRoleMap(organization, role);
+  if (!parsed) return base;
+  for (const mod of MODULES) {
+    for (const action of MODULE_ACTIONS) {
+      if (typeof parsed?.[mod]?.[action] === "boolean") base[mod][action] = parsed[mod][action];
     }
-  } catch {
-    /* keep defaults */
   }
   return base;
 }
+
+/** Organisation columns the permission resolver reads. */
+export const ORG_PERMISSION_SELECT = Object.freeze({ managerModules: true, cashierModules: true, roleModules: true });

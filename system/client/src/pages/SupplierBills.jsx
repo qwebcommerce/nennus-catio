@@ -3,6 +3,7 @@ import { api } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { formatDate } from "../utils/qatarDate.js";
+import { FileLink, ProofUpload, proofNeeded } from "../components/BizShared.jsx";
 
 const BUCKETS = ["0-30", "31-60", "61-90", "90+"];
 
@@ -46,10 +47,15 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
     const amount = String(entry.amount ?? bill.owed).trim();
     const method = entry.method || "CASH";
     setMsg("");
+    // Owner decision: a bank transfer needs a proof file (picture or PDF); cash does not.
+    if (proofNeeded(method) && !entry.proofFileId) {
+      setMsg(t("so.proofRequired"));
+      return;
+    }
     try {
       await api(`/api/purchase-orders/bills/${bill.id}/payments`, {
         method: "POST",
-        body: { amount, method, note: entry.note || undefined },
+        body: { amount, method, note: entry.note || undefined, reference: entry.reference || undefined, proofFileId: entry.proofFileId || undefined },
       });
       setPay((prev) => ({ ...prev, [bill.id]: {} }));
       setMsg(t("fd.bills.paid"));
@@ -64,6 +70,7 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
   return (
     <section style={{ display: "grid", gap: 12 }}>
       <h2>{t("po.bills")}</h2>
+      {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
 
       {aging ? (
         <div className="card" style={{ overflowX: "auto" }}>
@@ -136,6 +143,7 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
               <th className="num">{t("fd.bills.paidCol")}</th>
               <th className="num">{t("fd.bills.owed")}</th>
               <th className="num">{t("fd.bills.ageDays")}</th>
+              <th>{t("so.dueDate")}</th>
               <th>{t("fd.status")}</th>
               <th>{t("fd.bills.payment")}</th>
             </tr>
@@ -146,11 +154,19 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
               return (
                 <tr key={bill.id}>
                   <td>{formatDate(bill.createdAt, locale)}</td>
-                  <td>{bill.supplier?.name}</td>
+                  <td>
+                    {bill.supplier?.name}
+                    {bill.kind === "FREIGHT" ? <span className="biz-badge"> {statusLabel("billKind", "FREIGHT", locale)}</span> : null}
+                    {bill.reference ? <div className="fd-muted">{bill.reference}</div> : null}
+                  </td>
                   <td className="num">{money(bill.amount)}</td>
                   <td className="num">{money(bill.amountPaid)}</td>
                   <td className="num"><strong>{money(bill.owed)}</strong></td>
                   <td className="num">{bill.ageDays}</td>
+                  <td>
+                    {bill.dueDate ? formatDate(`${String(bill.dueDate).slice(0, 10)}T12:00:00Z`, locale) : "—"}
+                    {bill.overdue ? <span className="biz-badge biz-badge--bad"> {t("so.overdue")}</span> : null}
+                  </td>
                   <td>{statusLabel("bill", bill.status, locale)}</td>
                   <td>
                     {bill.status !== "PAID" ? (
@@ -170,6 +186,12 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
                           <option value="CASH">{t("fd.source.CASH")}</option>
                           <option value="BANK">{t("fd.source.BANK")}</option>
                         </select>
+                        {(entry.method || "CASH") === "BANK" ? (
+                          <>
+                            <input type="text" placeholder={t("so.reference")} aria-label={t("so.reference")} value={entry.reference || ""} onChange={(e) => setEntry(bill.id, "reference", e.target.value)} />
+                            <ProofUpload value={entry.proofFileId || ""} onChange={(v) => setEntry(bill.id, "proofFileId", v)} required />
+                          </>
+                        ) : null}
                         <button type="submit" className="btn-touch">{t("po.payBill")}</button>
                       </form>
                     ) : null}
@@ -179,6 +201,8 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
                         {bill.payments.map((p) => (
                           <div key={p.id} className="fd-muted">
                             {formatDate(p.paidAt, locale)} · {money(p.amount)} · {t(`fd.source.${p.method}`)}
+                            {p.reference ? ` · ${p.reference}` : ""}
+                            {p.proofFile ? <> · <FileLink file={p.proofFile} label={t("so.viewProof")} /></> : null}
                           </div>
                         ))}
                       </details>
@@ -187,11 +211,10 @@ export function SupplierBills({ suppliers = [], refreshKey = 0 }) {
                 </tr>
               );
             })}
-            {!bills.length ? <tr><td colSpan={8}>{t("fd.noRows")}</td></tr> : null}
+            {!bills.length ? <tr><td colSpan={9}>{t("fd.noRows")}</td></tr> : null}
           </tbody>
         </table>
       </div>
-      {msg ? <div role="status">{msg}</div> : null}
     </section>
   );
 }

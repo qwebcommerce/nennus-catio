@@ -4,6 +4,7 @@ import { commitSaleHolds, releaseSaleHolds } from "./webOrder.js";
 import { mailCustomer, mailStaff } from "./mailer.js";
 import { claimSlot } from "./groomingSlots.js";
 import { publicBase } from "./publicUrl.js";
+import { commitCoupon, releaseCouponFor } from "./coupons.js";
 
 /** Custom1 we send to SkipCash for each kind of parent (see the create calls). */
 export function gatewayCustom(parentKind, id) {
@@ -65,6 +66,14 @@ export async function applyGatewayResult(body, { req = null, confirmAt = null } 
               throw needsReview("LATE_PAYMENT");
             }
           }
+          // fix-re: the held coupon use is committed with the payment; the payment row keeps the coupon.
+          if (booking.couponCodeId || booking.couponDiscount) {
+            await commitCoupon(tx, booking.id);
+            await tx.payment.updateMany({
+              where: { appointmentId: booking.id, kind: "PAYMENT", gatewayPaymentId: paymentRef || undefined },
+              data: { couponCode: booking.couponCode, couponDiscount: booking.couponDiscount || 0 },
+            });
+          }
         },
       });
       const buyer = booking.customerId ? await prisma.customer.findUnique({ where: { id: booking.customerId } }) : null;
@@ -79,6 +88,8 @@ export async function applyGatewayResult(body, { req = null, confirmAt = null } 
     }
     if ([3, 4, 5].includes(statusId)) {
       const moved = await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
+      // fix-re: the coupon use held for this unpaid booking goes back (exactly once).
+      if (moved.count) await releaseCouponFor(prisma, booking.id, "PAYMENT_FAILED");
       return { ...ids, outcome: moved.count ? "cancelled" : "unchanged" };
     }
     return { ...ids, outcome: "pending" };

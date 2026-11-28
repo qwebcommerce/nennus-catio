@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { prisma } from "../lib/prisma.js";
-import { LEGACY_TO_MODULE, resolveModulePermissions } from "../lib/permissions.js";
+import { LEGACY_TO_MODULE, ORG_PERMISSION_SELECT, resolveModulePermissions } from "../lib/permissions.js";
 import { isOrganizationOwner } from "../lib/orgOwner.js";
 import {
   dbUnavailableMessage,
@@ -130,7 +130,7 @@ export async function authMiddleware(req, res, next) {
         sessionVersion: true,
         branchId: true,
         organizationId: true,
-        organization: { select: { managerModules: true, cashierModules: true } },
+        organization: { select: ORG_PERMISSION_SELECT },
       },
     });
     if (!user || !user.active || Number(payload.sv ?? 0) !== user.sessionVersion) {
@@ -179,7 +179,7 @@ async function modulesFor(req) {
   if (!org) {
     org = await prisma.organization.findUnique({
       where: { id: req.user.organizationId },
-      select: { managerModules: true, cashierModules: true },
+      select: ORG_PERMISSION_SELECT,
     });
   }
   req._modules = resolveModulePermissions(org, req.user.role);

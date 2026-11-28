@@ -158,11 +158,9 @@ router.delete("/:id", requireModule("pos", "create"), async (req, res) => {
   if (req.user.role !== "ADMIN" && req.user.branchId && req.user.branchId !== row.branchId) {
     return res.status(403).json({ error: "غير مصرح" });
   }
-  const canDelete =
-    row.userId === req.user.sub ||
-    req.user.role === "ADMIN" ||
-    req.user.role === "MANAGER" ||
-    req.user.role === "CASHIER";
+  // Anyone at the till (pos → create, checked above) may clear a held cart; a floor associate
+  // only their own.
+  const canDelete = row.userId === req.user.sub || req.user.role !== "ASSOCIATE";
   if (!canDelete) {
     return res.status(403).json({ error: "يمكنك حذف تعليقاتك فقط" });
   }

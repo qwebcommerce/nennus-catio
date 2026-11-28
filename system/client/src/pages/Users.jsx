@@ -4,6 +4,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 import { branchDisplayName } from "../utils/displayLabels.js";
+import { ROLE_OPTIONS, roleNeedsBranch, roleOptionsFor } from "../lib/roles.js";
 
 export default function Users() {
   const { t, locale } = useI18n();
@@ -11,14 +12,14 @@ export default function Users() {
   const { showToast } = useToast();
   const [users, setUsers] = useState([]);
   const [branches, setBranches] = useState([]);
-  const [maxUsers, setMaxUsers] = useState(10);
+  const [maxUsers, setMaxUsers] = useState(30);
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     email: "",
     password: "",
     name: "",
-    role: "CASHIER",
+    role: "SALES",
     branchId: "",
   });
 
@@ -29,11 +30,11 @@ export default function Users() {
     const data = await api("/api/users");
     if (Array.isArray(data)) {
       setUsers(data);
-      setMaxUsers(10);
+      setMaxUsers(30);
       return;
     }
     setUsers(Array.isArray(data?.users) ? data.users : []);
-    setMaxUsers(data?.maxUsers ?? 10);
+    setMaxUsers(data?.maxUsers ?? 30);
   };
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function Users() {
       setFormError(t("users.limitReached", { max: maxUsers }));
       return;
     }
-    if (form.role !== "ADMIN" && !form.branchId) {
+    if (roleNeedsBranch(form.role) && !form.branchId) {
       setFormError(t("users.branchRequired"));
       return;
     }
@@ -58,7 +59,7 @@ export default function Users() {
         method: "POST",
         body: { ...form, branchId: form.branchId || null },
       });
-      setForm({ email: "", password: "", name: "", role: "CASHIER", branchId: "" });
+      setForm({ email: "", password: "", name: "", role: "SALES", branchId: "" });
       await load();
       await refreshUser?.();
       showToast(t("users.toastCreated"), "success");
@@ -72,6 +73,16 @@ export default function Users() {
 
   const updateRole = async (u, role) => {
     if (u.isOrgOwner) return;
+    // A role change signs the person out so their menus and rights reload.
+    if (!confirm(t("users.confirmRoleChange", { name: u.name, role: t(`role.${role}`) }))) {
+      await load();
+      return;
+    }
+    if (roleNeedsBranch(role) && !u.branchId) {
+      showToast(t("users.branchRequired"), "error");
+      await load();
+      return;
+    }
     try {
       await api(`/api/users/${u.id}`, { method: "PATCH", body: { role, version: u.version } });
       await load();
@@ -85,7 +96,7 @@ export default function Users() {
 
   const updateBranch = async (u, branchId) => {
     if (u.isOrgOwner) return;
-    if (u.role !== "ADMIN" && !branchId) {
+    if (roleNeedsBranch(u.role) && !branchId) {
       showToast(t("users.branchRequired"), "error");
       await load();
       return;
@@ -187,17 +198,18 @@ export default function Users() {
             disabled={atLimit || busy}
             style={inp}
           >
-            <option value="MANAGER">{t("role.MANAGER")}</option>
-            <option value="CASHIER">{t("role.CASHIER")}</option>
+            {ROLE_OPTIONS.filter((r) => r !== "ADMIN").map((r) => (
+              <option key={r} value={r}>{t(`role.${r}`)}</option>
+            ))}
           </select>
           <select
             value={form.branchId}
             onChange={(e) => setForm({ ...form, branchId: e.target.value })}
-            required={form.role !== "ADMIN"}
+            required={roleNeedsBranch(form.role)}
             disabled={atLimit || busy}
             style={inp}
           >
-            <option value="">{t("users.pickBranch")}</option>
+            <option value="">{roleNeedsBranch(form.role) ? t("users.pickBranch") : t("users.allLocations")}</option>
             {branches.map((b) => (
               <option key={b.id} value={b.id}>
                 {branchDisplayName(b, locale)}
@@ -252,10 +264,10 @@ export default function Users() {
                         onChange={(e) => updateRole(u, e.target.value)}
                         style={{ ...inp, minWidth: 140 }}
                       >
-                        <option value="ADMIN">{t("role.ADMIN")}</option>
-                        <option value="MANAGER">{t("role.MANAGER")}</option>
-                        <option value="CASHIER">{t("role.CASHIER")}</option>
-                                  </select>
+                        {roleOptionsFor(u.role).map((r) => (
+                          <option key={r} value={r}>{t(`role.${r}`)}</option>
+                        ))}
+                      </select>
                     )}
                   </td>
                   <td style={td}>
@@ -272,7 +284,7 @@ export default function Users() {
                         style={{ ...inp, minWidth: 160 }}
                       >
                         <option value="">
-                          {u.role === "ADMIN" ? t("users.noBranch") : t("users.pickBranch")}
+                          {u.role === "ADMIN" ? t("users.noBranch") : roleNeedsBranch(u.role) ? t("users.pickBranch") : t("users.allLocations")}
                         </option>
                         {branches.map((b) => (
                           <option key={b.id} value={b.id}>

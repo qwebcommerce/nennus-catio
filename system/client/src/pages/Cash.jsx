@@ -120,13 +120,19 @@ export default function Cash() {
             {cashUp ? (
               <div style={{ marginTop: 8, display: "grid", gap: 2, fontSize: 14 }}>
                 <div>{t("cash.cashSales")} {cashUp.cashSales.toFixed(2)}</div>
+                {cashUp.cashCollections ? <div>{t("so.cashCollections")} {cashUp.cashCollections.toFixed(2)}</div> : null}
+                {cashUp.salesOrderCash ? <div>{t("so.salesOrderCash")} {cashUp.salesOrderCash.toFixed(2)}</div> : null}
                 <div>{t("cash.cashRefunds")} {cashUp.cashRefunds.toFixed(2)}</div>
+                {cashUp.vanReturnsCash ? <div data-testid="cash-van-returns">{t("cash.vanReturns")} {Number(cashUp.vanReturnsCash).toFixed(2)}</div> : null}
                 <div>
                   <strong>{t("cash.expected")}: {cashUp.expectedCash.toFixed(2)} {t("common.currency")}</strong>
                 </div>
                 <div>
                   <strong>{t("cash.cardTotal")}: {cashUp.cardTotal.toFixed(2)} {t("common.currency")}</strong>
                 </div>
+                {cashUp.bankTransferSales ? (
+                  <div className="fd-muted">{t("so.bankTransferNotCash", { n: cashUp.bankTransferSales.toFixed(2) })}</div>
+                ) : null}
               </div>
             ) : null}
           </div>

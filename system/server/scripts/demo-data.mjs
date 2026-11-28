@@ -35,6 +35,13 @@ import { performance } from "perf_hooks";
 import "../src/loadEnv.js";
 import { DemoRecords, countByTable } from "./demo/records.mjs";
 import * as C from "./demo/content.mjs";
+import { demoPdf, planSalesOrdersDemo } from "./demo/salesOrders.mjs";
+import { planB2bDemo } from "./demo/b2b.mjs";
+import { planDispatchDemo } from "./demo/dispatch.mjs";
+import { decidePayment, planPaymentConfirmDemo } from "./demo/payments.mjs";
+import * as A from "./demo/analytics.mjs";
+// fix-re: generated grooming coupons
+import { planCouponDemo } from "./demo/coupons.mjs";
 
 const command = String(process.argv[2] || "").toLowerCase();
 const START = Date.now();
@@ -481,8 +488,8 @@ function makeApi(baseUrl) {
       res = await fetch(baseUrl + path, { method, headers, body: body == null ? undefined : JSON.stringify(body) });
       text = await res.text();
       // Lanes run in parallel: a database deadlock or busy pool rolls the request back; try again.
-      // (The till answers a rolled-back deadlock with 400, the webhook with 500.)
-      const transient = (res.status >= 400 && /deadlock detected|40P01|P2034|could not serialize/i.test(text)) || res.status === 503;
+      // (The till answers a rolled-back deadlock with 400 or 409 TRY_AGAIN, the webhook with 500.)
+      const transient = (res.status >= 400 && /deadlock detected|40P01|P2034|could not serialize|"TRY_AGAIN"/i.test(text)) || res.status === 503;
       if (!transient || attempt >= 4) break;
       call.retries += 1;
       await new Promise((r) => setTimeout(r, 150 * attempt + Math.floor(Math.random() * 200)));
@@ -502,6 +509,20 @@ function makeApi(baseUrl) {
     return json;
   }
   call.retries = 0;
+  /** Multipart file upload (PO attachments, payment proofs), with the same demo clock and address headers. */
+  call.upload = async (path, buffer, fileName, mime, token) => {
+    n += 1;
+    const headers = { "X-Requested-With": "XMLHttpRequest", "X-Forwarded-For": `10.${(n >> 16) & 255}.${(n >> 8) & 255}.${n & 255}` };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const clock = clientClock.getStore();
+    if (clock) headers["X-Demo-Clock"] = String(Math.floor(clock.at + (performance.now() - clock.t0)));
+    const fd = new FormData();
+    fd.append("file", new Blob([buffer], { type: mime }), fileName);
+    const res = await fetch(baseUrl + path, { method: "POST", headers, body: fd });
+    const text = await res.text();
+    if (res.status !== 201) throw new Error(`POST ${path} (upload) -> ${res.status}: ${text.slice(0, 300)}`);
+    return JSON.parse(text);
+  };
   return call;
 }
 
@@ -685,7 +706,7 @@ async function setup(ctx, now) {
   const areas = await api("GET", "/api/delivery-setup/areas", null, T.owner);
   await P6(C.DELIVERY_AREAS, async (a) => {
     const found = (Array.isArray(areas) ? areas : []).find((x) => x.isActive !== false && String(x.nameEn || x.name || "").toLowerCase() === a.nameEn.toLowerCase());
-    S.area[a.nameEn] = found ? found.id : (await api("POST", "/api/delivery-setup/areas", { name: a.name, nameEn: a.nameEn, city: "Doha", fee: a.fee }, T.owner)).id;
+    S.area[a.nameEn] = found ? found.id : (await api("POST", "/api/delivery-setup/areas", { name: a.name, nameEn: a.nameEn, city: "Doha", zone: a.zone, fee: a.fee }, T.owner)).id;
   });
   for (const w of C.DELIVERY_WINDOWS) {
     S.windows.push((await api("POST", "/api/delivery-setup/windows", { ...w, weekday: null }, T.owner)).id);
@@ -807,7 +828,9 @@ function buildPlan(ctx, now) {
   const payBill = (key, fraction, method, note) => async () => {
     const bill = po[key].bill;
     const amount = Math.round(dirhams(bill.amount) * fraction);
-    await api("POST", `/api/purchase-orders/bills/${bill.id}/payments`, { amount: riyals(amount), method, note }, owner);
+    // A bank payment carries a proof file (required for bank transfers).
+    const proofFileId = method === "BANK" ? (await api.upload("/api/files", demoPdf(`Bank transfer ${key}`), `transfer-${key}.pdf`, "application/pdf", owner)).id : undefined;
+    await api("POST", `/api/purchase-orders/bills/${bill.id}/payments`, { amount: riyals(amount), method, note, proofFileId }, owner);
   };
   const food = (it) => it.supplier === "gulfPet";
   const care = (it) => it.supplier === "doha";
@@ -838,9 +861,14 @@ function buildPlan(ctx, now) {
       if (qty > 0) lines.push({ item: it, quantity: qty });
     }
     if (!lines.length) return;
+    // Transfer record: the van's driver (or the shop cashier) moves it, the owner authorises it;
+    // the vehicle defaults to the van's. Cartons where the line is a whole number of them.
+    const mover = to === "shop" ? S.staff.cashier : S.staff[to];
     await api("POST", "/api/inventory/transfer", {
       fromBranchId: L.warehouse, toBranchId: L[to],
-      items: lines.map((l) => ({ productId: l.item.productId, variantId: l.item.variantId, quantity: l.quantity })),
+      ...(mover ? { transferredByUserId: mover } : {}),
+      authorisedByUserId: ctx.owner.id,
+      items: lines.map((l) => ({ productId: l.item.productId, variantId: l.item.variantId, unit: "PIECE", quantity: l.quantity })),
     }, owner);
     for (const l of lines) {
       addStock(S, L.warehouse, l.item, -l.quantity);
@@ -878,8 +906,7 @@ function buildPlan(ctx, now) {
   // ---- customers
   const webCustomers = C.CUSTOMERS.filter((c) => c.web);
   const walkIns = C.CUSTOMERS.filter((c) => !c.web);
-  webCustomers.forEach((c, i) => {
-    at(-29 + i, `${String(between(18, 22)).padStart(2, "0")}:${String(between(0, 59)).padStart(2, "0")}`, `register ${c.email}`, async () => {
+  const registerWeb = (c) => async () => {
       const password = crypto.randomBytes(24).toString("base64url");
       const reg = await api("POST", "/api/shop/register", { name: c.name, email: c.email, password, phone: c.phone, locale: c.locale });
       // The confirmation link is in the (never sent) e-mail; open it the way the customer would.
@@ -895,8 +922,12 @@ function buildPlan(ctx, now) {
         S.customers[c.key].pets[p.name] = pet.id;
       }
       await api("POST", "/api/shop/me/addresses", { label: "Home", line1: c.address, area: c.area, city: "Doha", isDefault: true }, ctok);
-    });
+  };
+  webCustomers.forEach((c, i) => {
+    at(-29 + i, `${String(between(18, 22)).padStart(2, "0")}:${String(between(0, 59)).padStart(2, "0")}`, `register ${c.email}`, registerWeb(c));
   });
+  // Analytics demo (fix-rc): more sign-ups spread over the month, at different hours.
+  for (const c of A.EXTRA_SIGNUPS) at(c.day, c.time, `register ${c.email}`, registerWeb(c));
   walkIns.forEach((c, i) => {
     at(-28 + i * 2, "10:05", `customer at the till ${c.email}`, async () => {
       const row = await staffCall("cashier", "POST", "/api/customers", { name: c.name, phone: c.phone, email: c.email, address: `${c.address}, Doha` });
@@ -994,6 +1025,82 @@ function buildPlan(ctx, now) {
       at(day, hhmm(9 * 60 + i * 75 + between(0, 50)), `${van} sale ${day}/${i}`, sale(van, van, { method: pick(vanMethods), lines: between(1, 2) }));
     }
     at(day, "14:00", `close ${van} till`, closeTill(van, van));
+  }
+
+  // ---- van returns: goods a driver collects back from a customer (some still in the van, some
+  // received at the warehouse, one with a damaged line and its photo; paid in cash or by bank with a
+  // proof file, and one unpaid).
+  const vr = {};
+  // The cheaper van lines (what is paid back in cash must fit in the van's drawer).
+  const returnGoods = () => S.items.filter((it) => vanGoods(it) && it.sellBy !== "WEIGHT" && it.takesStock && it.price <= 5000).sort((a, b) => a.price - b.price || a.key.localeCompare(b.key));
+  const demoPhoto = async () => {
+    const { default: sharp } = await import("sharp");
+    const buf = await sharp({ create: { width: 160, height: 120, channels: 3, background: { r: 176, g: 120, b: 72 } } })
+      .composite([{ input: Buffer.from('<svg width="160" height="120"><path d="M20 20 L140 100 M140 20 L20 100" stroke="#5a2d0c" stroke-width="10"/></svg>'), top: 0, left: 0 }])
+      .jpeg({ quality: 80 }).toBuffer();
+    return { dataBase64: buf.toString("base64") };
+  };
+  const demoProof = () => ({
+    fileName: "bank-transfer-receipt.pdf",
+    dataBase64: Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n").toString("base64"),
+  });
+  const vanReturn = (key, van, { lines, customer, payment }) => async () => {
+    const goods = returnGoods();
+    if (!goods.length) return;
+    const body = {
+      vanBranchId: L[van],
+      customerName: customer.name, customerPhone: customer.phone,
+      ...(S.staff[van] ? { collectedByUserId: S.staff[van] } : {}),
+      lines: await Promise.all(lines.map(async (l, i) => ({
+        productId: goods[(l.pick + i) % goods.length].productId,
+        variantId: goods[(l.pick + i) % goods.length].variantId,
+        unit: "PIECE", quantity: l.quantity, condition: l.condition,
+        ...(l.condition === "DAMAGED" ? { photo: await demoPhoto() } : {}),
+      }))),
+      note: customer.note,
+    };
+    body.amountOwed = riyals(body.lines.reduce((sum, l) => sum + (goods.find((g) => g.productId === l.productId && g.variantId === l.variantId)?.price || 0) * l.quantity, 0));
+    if (payment) body.payment = { method: payment, ...(payment === "BANK" ? { reference: `FT${between(100000, 999999)}`, proof: demoProof() } : {}) };
+    // fix-rd: the sales lady records the return into the van (the driver only moves it to the warehouse).
+    const row = await staffCall("cashier", "POST", "/api/van-returns", body);
+    vr[key] = row;
+    if (row.cashSessionId) drawer[van] = (drawer[van] || 0) - dirhams(row.amountOwed);
+  };
+  const receiveReturn = (key, van) => async () => {
+    if (!vr[key]) return;
+    // fix-rd: the van's driver moves it to the warehouse from the driver dashboard.
+    vr[key] = await staffCall(van, "POST", `/api/van-returns/${vr[key].id}/receive`, { version: vr[key].version, branchId: L.warehouse });
+    // Good lines are back in the warehouse's sellable stock (damaged ones are kept apart).
+    for (const line of vr[key].lines || []) {
+      if (line.condition !== "GOOD") continue;
+      const it = S.items.find((x) => x.productId === line.product?.id && (x.variantId || null) === (line.variant?.id || null));
+      if (it) addStock(S, L.warehouse, it, line.baseQty);
+    }
+  };
+  const payReturn = (key, van, method) => async () => {
+    if (!vr[key] || vr[key].paymentStatus === "PAID") return;
+    // fix-rd: paying the customer back is for sales (returns → refund), never the driver.
+    const row = await staffCall("cashier", "POST", `/api/van-returns/${vr[key].id}/pay`, {
+      version: vr[key].version, method, ...(method === "BANK" ? { reference: `FT${between(100000, 999999)}`, proof: demoProof() } : {}),
+    });
+    vr[key] = row;
+    if (row.cashSessionId) drawer[van] = (drawer[van] || 0) - dirhams(row.amountOwed);
+  };
+  const vanDay = (van, from) => vanDays.filter(([d, v]) => v === van && d >= from && weekdayOf(d) !== 5)[0]?.[0];
+  {
+    const d1 = vanDay("van1", -20), d2 = vanDay("van2", -16), d3 = vanDay("van1", -11), d4 = vanDay("van1", -6);
+    if (d1 != null) at(d1, "11:40", "van1 return (good, paid cash)", vanReturn("a", "van1", { customer: { name: "Fatima Al Kuwari", phone: "+974 5000 2101", note: "Wrong flavour, unopened" }, lines: [{ pick: 0, quantity: 2, condition: "GOOD" }], payment: "CASH" }));
+    if (d2 != null) {
+      at(d2, "12:10", "van2 return (good + damaged)", vanReturn("b", "van2", { customer: { name: "Ahmed Al Marri", phone: "+974 5000 2102", note: "One bag torn on delivery" }, lines: [{ pick: 1, quantity: 1, condition: "GOOD" }, { pick: 2, quantity: 1, condition: "DAMAGED" }] }));
+      at(d2, "13:40", "van2 receive return at warehouse", receiveReturn("b", "van2"));
+      at(d2, "13:45", "van2 pay return by bank", payReturn("b", "van2", "BANK"));
+    }
+    if (d3 != null) at(d3, "12:20", "van1 return (still in the van, unpaid)", vanReturn("c", "van1", { customer: { name: "Sara Ibrahim", phone: "+974 5000 2103", note: "Ordered twice" }, lines: [{ pick: 3, quantity: 1, condition: "GOOD" }] }));
+    if (d4 != null) {
+      at(d4, "10:50", "van1 return (received, paid later)", vanReturn("d", "van1", { customer: { name: "Mohammed Hassan", phone: "+974 5000 2104", note: "Customer moved away" }, lines: [{ pick: 4, quantity: 2, condition: "GOOD" }] }));
+      at(d4, "12:30", "van1 receive return at warehouse", receiveReturn("d", "van1"));
+      at(d4, "13:10", "van1 pay return in cash", payReturn("d", "van1", "CASH"));
+    }
   }
 
   // ---- till refunds: one money-only, one with the goods returned
@@ -1099,6 +1206,8 @@ function buildPlan(ctx, now) {
   order("w14", 0, "08:10", "noora", [["adultCat:1.5 kg", 1], ["catTreats", 1]], { pickup: true, steps: [[0, "09:40", "PREPARING"]] });
   order("w15", 0, "09:05", "priya", [["kittenDry:400 g", 2], ["featherWand", 1]], { deliverDay: 1, window: 2 });
   order("w16", -6, "12:10", "fatima", [["aviary", 1], ["budgieSeed", 1]], { steps: delivered(-4, "10:30", "12:30"), deliverDay: -4, window: 0 });
+  // Analytics demo (fix-rc): a late-night order (23:35 Qatar time counts on its own Qatar day).
+  order("w17", -9, "23:35", "khalid", [["catTreats", 2], ["wetPouch", 3]], { steps: delivered(-8), deliverDay: -8 });
 
   // ---- grooming (booked and paid on the website; staff run the day)
   const bookings = [
@@ -1170,6 +1279,30 @@ function buildPlan(ctx, now) {
     }
   }
 
+  // ---- analytics demo (fix-rc): bookings taken at the desk, two cancelled by phone and one no-show
+  for (const [key, day0, time0, cust, pkgKey, outcome] of A.DESK_BOOKINGS) {
+    const pkg = S.pkg[pkgKey];
+    const fit = pkg && fitSlot(day0, time0, pkg.durationMin);
+    if (!fit) continue;
+    at(fit.day - 2, "10:40", `grooming desk booking ${key}`, async () => {
+      const c = S.customers[cust];
+      const pet = c?.def.pets[0];
+      web[key] = await staffCall("owner", "POST", "/api/appointments", {
+        branchId: L.shop, serviceId: pkg.id, customerId: c?.id, startAt: qAt(fit.day, fit.time, now).toISOString(),
+        petName: pet?.name, petType: pet?.type === "dogs" ? "DOG" : pet?.type === "cats" ? "CAT" : "OTHER", notes: "Booked by phone",
+      });
+    }, { optional: true });
+    const startMin = toMin(fit.time);
+    if (outcome === "cancel") {
+      at(fit.day - 1, "12:15", `grooming desk ${key} cancelled`, async () => web[key] && staffCall("owner", "PATCH", `/api/appointments/${web[key].id}`, { status: "CANCELLED", version: web[key].version }), { optional: true });
+    } else {
+      at(fit.day, hhmm(startMin + 40), `grooming desk ${key} no-show`, async () => web[key] && staffCall("owner", "PATCH", `/api/appointments/${web[key].id}`, { status: "NO_SHOW", version: web[key].version }), { optional: true });
+    }
+  }
+
+  // ---- fix-re: generated grooming coupons (scripts/demo/coupons.mjs)
+  planCouponDemo({ at, api, owner, S, L, qDay, qAt, now, pay, staffCall });
+
   // ---- pet relocation requests
   const relocation = (key, day, time, cust, petNames, destination, steps) => {
     at(day, time, `relocation ${key}`, async () => {
@@ -1208,8 +1341,10 @@ function buildPlan(ctx, now) {
   relocation("r3", -2, "19:30", "priya", ["Oreo"], "Kochi, India", []);
 
   // ---- expenses
-  const expense = (day, time, category, amount, paidFrom, description) =>
-    at(day, time, `expense ${description}`, async () => api("POST", "/api/expenses", { category, amount, paidFrom, description, expenseDate: qDay(day) }, owner));
+  const expense = (day, time, category, amount, paidFrom, description) => {
+    const [payee, reference] = A.EXPENSE_PAYEES[description] || [];
+    at(day, time, `expense ${description}`, async () => api("POST", "/api/expenses", { category, amount, paidFrom, description, payee, reference, expenseDate: qDay(day) }, owner));
+  };
   expense(-28, "11:00", "RENT", "9500.00", "BANK", "Shop rent – Al Waab (monthly)");
   expense(-28, "11:05", "RENT", "3500.00", "BANK", "Warehouse rent – Industrial Area (monthly)");
   expense(-20, "12:10", "ELECTRICITY", "980.50", "BANK", "Kahramaa – shop electricity and water");
@@ -1217,6 +1352,17 @@ function buildPlan(ctx, now) {
   expense(-22, "16:30", "OTHER", "185.00", "CASH", "Supplies – cleaning products and receipt rolls");
   expense(-8, "16:45", "OTHER", "96.50", "CASH", "Supplies – carrier bags and packing tape");
   for (const [d, amt] of [[-27, "140.00"], [-20, "155.00"], [-13, "150.00"], [-6, "160.00"]]) expense(d, "08:15", "OTHER", amt, "CASH", "Fuel – sales vans");
+
+  // ---- sales orders, free goods, bank transfers, PO quotation / prepayment / freight (scripts/demo/salesOrders.mjs)
+  // fix-rd: collected money is confirmed by someone other than who recorded it (accountant / supervisor).
+  const confirm = (key, who = "accountant") => decidePayment(api, T[who] || owner, key);
+  planSalesOrdersDemo({ at, api, owner, S, L, plan, addStock, onHand, basket, qDay, riyals, upload: api.upload, confirm });
+  // ---- B2B / Wholesale: paid, invoiced-unpaid, delivered-not-invoiced (scripts/demo/b2b.mjs, fix-ra)
+  planB2bDemo({ at, api, T, owner, S, L, addStock, onHand, qDay, upload: api.upload, confirm });
+  // ---- fix-rb: vans and drivers, dispatch, driver change requests, grooming vans (scripts/demo/dispatch.mjs)
+  planDispatchDemo({ at, api, owner, S, L, ctx, basket, addStock, qDay });
+  // ---- fix-rd: payments awaiting confirmation, a rejected one (scripts/demo/payments.mjs)
+  planPaymentConfirmDemo({ at, api, T, owner, S, L, ctx, basket, addStock, qDay, upload: api.upload });
 
   return plan;
 }

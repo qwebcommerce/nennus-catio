@@ -2,6 +2,20 @@ import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
+import { supplierBalances } from "../lib/pending.js";
+import { fail } from "../lib/bizError.js";
+
+/** Freight-company flag and default payment terms (days) from a supplier form. */
+function supplierExtras(body) {
+  const out = {};
+  if (body?.isFreight !== undefined) out.isFreight = body.isFreight === true || body.isFreight === "true";
+  if (body?.paymentTermsDays !== undefined) {
+    const n = body.paymentTermsDays == null || body.paymentTermsDays === "" ? null : Number(body.paymentTermsDays);
+    if (n != null && (!Number.isInteger(n) || n < 0 || n > 365)) throw fail(400, "TERMS_INVALID", "مدة السداد غير صالحة (0 إلى 365 يوماً)", "Payment terms must be 0 to 365 days");
+    out.paymentTermsDays = n;
+  }
+  return out;
+}
 
 const router = Router();
 router.use(authMiddleware);
@@ -13,6 +27,11 @@ router.get("/", async (req, res) => {
     orderBy: { name: "asc" },
   });
   res.json(rows);
+});
+
+/** Balances per supplier and freight company: billed, paid, prepaid, balance (as of a date). */
+router.get("/balances", async (req, res) => {
+  res.json(await supplierBalances(req.user.organizationId, req.query));
 });
 
 router.post("/", requireModule("purchasing", "create"), async (req, res) => {
@@ -28,6 +47,7 @@ router.post("/", requireModule("purchasing", "create"), async (req, res) => {
       address: address != null && String(address).trim() ? String(address).trim() : null,
       note: note != null && String(note).trim() ? String(note).trim() : null,
       isActive: isActive === false ? false : true,
+      ...supplierExtras(req.body),
     },
   });
   res.status(201).json(row);
@@ -47,6 +67,7 @@ router.patch("/:id", requireModule("purchasing", "edit"), async (req, res) => {
   if (email !== undefined) data.email = email ? String(email).trim() : null;
   if (address !== undefined) data.address = address ? String(address).trim() : null;
   if (isActive !== undefined) data.isActive = isActive !== false;
+  Object.assign(data, supplierExtras(req.body));
   const existing = await prisma.supplier.findFirst({
     where: { id: req.params.id, organizationId: req.user.organizationId },
   });

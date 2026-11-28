@@ -1,6 +1,7 @@
 import { stockRowKey } from "./dbErrors.js";
 import { prisma } from "./prisma.js";
 import { lookupExpiredPayments } from "./paymentLookup.js";
+import { sweepCouponUses } from "./coupons.js";
 
 /**
  * Releases expired holds and cancels unpaid orders / bookings whose hold lapsed. A pending
@@ -32,6 +33,8 @@ export async function sweepExpiredHolds() {
     where: { status: "PENDING_PAYMENT", holdExpiresAt: { lt: now }, ...(deferred.appointmentIds.length ? { id: { notIn: deferred.appointmentIds } } : {}) },
     data: { status: "CANCELLED" },
   });
+  // fix-re: coupon uses held by bookings that are now cancelled go back (exactly once).
+  await sweepCouponUses(prisma);
 }
 
 export async function heldQuantity(db, { branchId, productId, variantId }) {

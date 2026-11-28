@@ -7,6 +7,7 @@ import { useToast } from "../context/ToastContext.jsx";
 import { branchDisplayName } from "../utils/displayLabels.js";
 import { apiErrorMessage } from "../utils/apiError.js";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { LOCATION_KINDS } from "../lib/locationKinds.js";
 
 export default function Branches() {
   const { t, locale } = useI18n();
@@ -15,11 +16,12 @@ export default function Branches() {
   const { showToast } = useToast();
   const [list, setList] = useState([]);
   const [name, setName] = useState("");
+  const [nameEn, setNameEn] = useState("");
   const [address, setAddress] = useState("");
   const [kind, setKind] = useState("SHOP");
   const [busy, setBusy] = useState(false);
   const [editBranch, setEditBranch] = useState(null);
-  const [editForm, setEditForm] = useState({ name: "", address: "", kind: "SHOP", isActive: true });
+  const [editForm, setEditForm] = useState({ name: "", nameEn: "", address: "", kind: "SHOP", isActive: true });
   const [editBusy, setEditBusy] = useState(false);
 
   const load = async () => {
@@ -35,8 +37,9 @@ export default function Branches() {
     e.preventDefault();
     setBusy(true);
     try {
-      await api("/api/branches", { method: "POST", body: { name, address, kind } });
+      await api("/api/branches", { method: "POST", body: { name, nameEn, address, kind } });
       setName("");
+      setNameEn("");
       setAddress("");
       setKind("SHOP");
       await load();
@@ -54,6 +57,7 @@ export default function Branches() {
     setEditBranch(b);
     setEditForm({
       name: b.name || "",
+      nameEn: b.nameEn || "",
       address: b.address || "",
       kind: b.kind || "SHOP",
       isActive: b.isActive !== false,
@@ -79,6 +83,7 @@ export default function Branches() {
         method: "PATCH",
         body: {
           name: nextName,
+          nameEn: editForm.nameEn.trim() || null,
           address: editForm.address.trim() || null,
           kind: editForm.kind || "SHOP",
           isActive: editForm.isActive !== false,
@@ -105,6 +110,19 @@ export default function Branches() {
       }
     } finally {
       setEditBusy(false);
+    }
+  };
+
+  /** Exactly one main location (the showroom / store); the server clears the previous one. */
+  const makeMain = async (b) => {
+    try {
+      await api(`/api/branches/${b.id}/main`, { method: "POST", body: { version: b.version } });
+      await load();
+      await reloadBranches();
+      showToast(t("branches.mainSaved"), "success");
+    } catch (err) {
+      showToast(isStaleEdit(err) ? editErrorMessage(err, t) : apiErrorMessage(err, t), "error");
+      await load();
     }
   };
 
@@ -141,17 +159,27 @@ export default function Branches() {
             <span>{t("branches.name")}</span>
             <input
               required
+              dir="rtl"
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={busy}
             />
           </label>
           <label className="branches-field">
+            <span>{t("branches.nameEn")}</span>
+            <input
+              dir="ltr"
+              value={nameEn}
+              onChange={(e) => setNameEn(e.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <label className="branches-field">
             <span>{t("branches.kind")}</span>
             <select value={kind} onChange={(e) => setKind(e.target.value)} disabled={busy}>
-              <option value="SHOP">{t("branches.kind.SHOP")}</option>
-              <option value="VAN">{t("branches.kind.VAN")}</option>
-              <option value="WAREHOUSE">{t("branches.kind.WAREHOUSE")}</option>
+              {LOCATION_KINDS.map((k) => (
+                <option key={k} value={k}>{t(`branches.kind.${k}`)}</option>
+              ))}
             </select>
           </label>
           <label className="branches-field">
@@ -175,14 +203,17 @@ export default function Branches() {
         ) : (
           list.map((b, index) => {
             return (
-              <article key={b.id} className="branch-card">
+              <article key={b.id} className="branch-card" data-branch={b.id}>
                 <div className="branch-card__top">
                   <div className="branch-card__identity">
                     <span className="branch-card__index" aria-hidden="true">
                       {String(index + 1).padStart(2, "0")}
                     </span>
                     <div>
-                      <h2 className="branch-card__name">{branchDisplayName(b, locale)}</h2>
+                      <h2 className="branch-card__name">
+                        {branchDisplayName(b, locale)}
+                        {b.isMain ? <span className="branch-card__main" style={mainPill}>{t("branches.mainBadge")}</span> : null}
+                      </h2>
                       <p className="branch-card__address">
                         {t(`branches.kind.${b.kind || "SHOP"}`)}
                         {" · "}
@@ -193,14 +224,19 @@ export default function Branches() {
                   </div>
                   <div className="branch-card__aside">
                     <div className="branch-card__actions">
+                      {!b.isMain && b.kind !== "VAN" && b.isActive !== false ? (
+                        <button type="button" className="btn-touch branch-card__main-btn" style={{ background: "var(--surface2)" }} onClick={() => makeMain(b)}>
+                          {t("branches.makeMain")}
+                        </button>
+                      ) : null}
                       <button type="button" className="btn-touch branch-card__edit" onClick={() => openEdit(b)}>
                         {t("common.edit")}
                       </button>
                       <button
                         type="button"
                         className="btn-touch branch-card__delete"
-                        disabled={list.length <= 1}
-                        title={list.length <= 1 ? t("branches.cannotDeleteLast") : undefined}
+                        disabled={list.length <= 1 || b.isMain}
+                        title={b.isMain ? t("branches.cannotDeleteMain") : list.length <= 1 ? t("branches.cannotDeleteLast") : undefined}
                         onClick={() => removeBranch(b)}
                       >
                         {t("common.delete")}
@@ -234,8 +270,18 @@ export default function Branches() {
               <span>{t("branches.name")}</span>
               <input
                 required
+                dir="rtl"
                 value={editForm.name}
                 onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                disabled={editBusy}
+              />
+            </label>
+            <label className="branches-field">
+              <span>{t("branches.nameEn")}</span>
+              <input
+                dir="ltr"
+                value={editForm.nameEn}
+                onChange={(e) => setEditForm((f) => ({ ...f, nameEn: e.target.value }))}
                 disabled={editBusy}
               />
             </label>
@@ -246,9 +292,9 @@ export default function Branches() {
                 onChange={(e) => setEditForm((f) => ({ ...f, kind: e.target.value }))}
                 disabled={editBusy}
               >
-                <option value="SHOP">{t("branches.kind.SHOP")}</option>
-                <option value="VAN">{t("branches.kind.VAN")}</option>
-                <option value="WAREHOUSE">{t("branches.kind.WAREHOUSE")}</option>
+              {LOCATION_KINDS.map((k) => (
+                <option key={k} value={k}>{t(`branches.kind.${k}`)}</option>
+              ))}
               </select>
             </label>
             <label className="branches-field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -282,3 +328,15 @@ export default function Branches() {
     </div>
   );
 }
+
+const mainPill = {
+  display: "inline-block",
+  marginInlineStart: 8,
+  padding: "2px 8px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+  verticalAlign: "middle",
+  background: "color-mix(in srgb, var(--accent) 15%, var(--surface2))",
+  color: "var(--text)",
+};

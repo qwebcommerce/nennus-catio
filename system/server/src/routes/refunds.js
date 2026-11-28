@@ -218,6 +218,11 @@ router.post("/", requireModule("pos", "refund"), async (req, res) => {
           if (!candidates.length) {
             throw refundError("الصنف غير موجود في الفاتورة", "This item is not on the sale");
           }
+          // Complimentary (free) lines brought no money and are reported at cost: they are not refunded.
+          if (candidates.every((st) => st.line.isFree)) {
+            throw refundError("لا يمكن استرجاع بضاعة أُعطيت مجاناً", "Goods given free cannot be refunded");
+          }
+          for (let i = candidates.length - 1; i >= 0; i -= 1) if (candidates[i].line.isFree) candidates.splice(i, 1);
           const product = candidates[0].line.product;
           const n = Number(raw?.quantity);
           const qty = product.sellBy === "WEIGHT" ? Math.round(n) : n;

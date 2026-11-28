@@ -76,7 +76,7 @@ export function buildReceiptPlainText(sale, branchName, locale) {
   for (const it of sale.items || []) {
     const nm = productDisplayName(it.product, locale);
     const qty = it.product?.sellBy === "WEIGHT" ? `${(Number(it.quantity) / 1000).toFixed(3)} kg` : it.quantity;
-    lines.push(`${nm} ×${qty} = ${Number(it.subtotal).toFixed(2)} ${cur}`);
+    lines.push(`${nm} ×${qty} = ${it.isFree ? (locale === "en" ? "Free" : "مجاناً") : `${Number(it.subtotal).toFixed(2)} ${cur}`}`);
   }
   lines.push("---");
   const sub = sale.items?.reduce((s, it) => s + Number(it.subtotal), 0) ?? Number(sale.total);

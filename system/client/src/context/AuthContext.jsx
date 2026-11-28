@@ -101,7 +101,8 @@ export function AuthProvider({ children }) {
         /** Module rights enforced by the server. */
         canModule: (mod, action = "view") => user?.role === "ADMIN" || Boolean(user?.modules?.[mod]?.[action]),
         isSuperAdmin: user?.role === "ADMIN",
-        isManager: user?.role === "MANAGER" || user?.role === "ADMIN",
+        /** Top admin or supervisor (legacy manager). Prefer canModule for screen rights. */
+        isManager: ["ADMIN", "SUPERVISOR", "MANAGER"].includes(user?.role),
         permissions,
         can: (key) => Boolean(permissions?.[key]),
       };

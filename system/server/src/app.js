@@ -13,6 +13,8 @@ import authRoutes from "./routes/auth.js";
 import branchRoutes from "./routes/branches.js";
 import productRoutes from "./routes/products.js";
 import inventoryRoutes from "./routes/inventory.js";
+import transferRoutes from "./routes/transfers.js";
+import vanReturnRoutes from "./routes/vanReturns.js";
 import catalogRoutes from "./routes/catalog.js";
 import saleRoutes from "./routes/sales.js";
 import dashboardRoutes from "./routes/dashboard.js";
@@ -36,14 +38,28 @@ import { relocationFiles, relocationShop, relocationStaff } from "./routes/reloc
 import onlineOrderRoutes from "./routes/onlineOrders.js";
 import deliverySetupRoutes from "./routes/deliverySetup.js";
 import promotionRoutes from "./routes/promotions.js";
+// fix-re: generated grooming coupons
+import couponRoutes from "./routes/coupons.js";
 import financeRoutes from "./routes/finance.js";
 import vehicleRoutes from "./routes/vehicles.js";
 import exportRoutes from "./routes/exports.js";
+// Analytics and reports: grooming / product / user / peak-hour analytics and the transactions and expenses history (fix-rc).
+import analyticsRoutes from "./routes/analytics.js";
 import customerAccountsRoutes from "./routes/customerAccounts.js";
 import expensesRoutes from "./routes/expenses.js";
 import reportsRoutes from "./routes/reports.js";
 import appointmentsRoutes from "./routes/appointments.js";
 import cronRoutes from "./routes/cron.js";
+import salesOrderRoutes from "./routes/salesOrders.js";
+import b2bRoutes from "./routes/b2b.js";
+import pendingRoutes from "./routes/pending.js";
+import fileRoutes, { businessFileDownloads } from "./routes/files.js";
+import purchaseOrderExtraRoutes from "./routes/purchaseOrderExtras.js";
+// fix-rb: drivers / dispatch
+import { approvalsRouter as driverApprovalRoutes, dispatchRouter as dispatchRoutes } from "./routes/dispatch.js";
+import driverRoutes from "./routes/driver.js";
+// fix-rd: accountant confirmation of collected money
+import paymentConfirmRoutes from "./routes/paymentConfirm.js";
 import { prisma } from "./lib/prisma.js";
 import { csrfGuard } from "./middleware/auth.js";
 import {
@@ -140,6 +156,8 @@ app.use("/api/branches", branchRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/catalog", catalogRoutes);
 app.use("/api/inventory", inventoryRoutes);
+app.use("/api/transfers", transferRoutes);
+app.use("/api/van-returns", vanReturnRoutes);
 app.use("/api/sales", saleRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/users", userRoutes);
@@ -159,19 +177,34 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/org-settings", orgSettingsRoutes);
 app.use("/api/product-images", productImagesRoutes);
 app.use("/api/pet-types", petTypeRoutes);
+app.use("/api/purchase-orders", purchaseOrderExtraRoutes);
 app.use("/api/purchase-orders", purchaseOrderRoutes);
+app.use("/api/sales-orders", salesOrderRoutes);
+// fix-ra: B2B / Wholesale tab (delivery note → invoice → cash receipt).
+app.use("/api/b2b", b2bRoutes);
+app.use("/api/pending", pendingRoutes);
+app.use("/api/files", fileRoutes);
+app.use("/api/business-files", businessFileDownloads);
 app.use("/api/shop/grooming", groomingShopRoutes);
 app.use("/api/shop/relocation", relocationShop);
 app.use("/api/relocation", relocationStaff);
 app.use("/api/relocation-files", relocationFiles);
 app.use("/api/shop", shopRoutes);
 app.use("/api/promotions", promotionRoutes);
+// fix-re: generated grooming coupons (docs/testing/coupons.md)
+app.use("/api/coupons", couponRoutes);
 app.use("/api/finance", financeRoutes);
 app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/exports", exportRoutes);
+app.use("/api/analytics", analyticsRoutes);
 app.use("/api/online-orders", onlineOrderRoutes);
 app.use("/api/delivery-setup", deliverySetupRoutes);
 app.use("/api/cron", cronRoutes);
+// fix-rb: drivers / dispatch
+app.use("/api/dispatch", dispatchRoutes);
+app.use("/api/driver-approvals", driverApprovalRoutes);
+app.use("/api/driver", driverRoutes);
+app.use("/api/payment-confirmations", paymentConfirmRoutes);
 
 /** Unknown API paths answer JSON (bilingual) instead of Express's HTML page. */
 app.use("/api", (_req, res) => {

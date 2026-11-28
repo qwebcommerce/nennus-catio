@@ -12,6 +12,7 @@ const PAY_KEYS = {
   SPLIT: "payment.split",
   ON_ACCOUNT: "payment.onAccount",
   ON_DELIVERY: "payment.onDelivery",
+  BANK_TRANSFER: "payment.bankTransfer",
 };
 
 /**
@@ -82,6 +83,16 @@ export function InvoicePrint({ sale, branchName }) {
             {sale.customer.phone ? ` — ${sale.customer.phone}` : ""}
           </div>
         ) : null}
+        {sale.freeReason ? (
+          <div>
+            {t("so.freeReason")}: {sale.freeReason}
+          </div>
+        ) : null}
+        {sale.paymentReference ? (
+          <div>
+            {t("so.reference")}: {sale.paymentReference}
+          </div>
+        ) : null}
         {sale.orderNote ? (
           <div>
             {t("invoice.orderNote")}: {sale.orderNote}
@@ -101,7 +112,7 @@ export function InvoicePrint({ sale, branchName }) {
             <tr key={it.id} style={{ borderBottom: "1px solid #eee" }}>
               <td style={{ padding: 8 }}>{productDisplayName(it.product, locale)}</td>
               <td style={{ padding: 8, textAlign: "center" }}>{qtyText(it)}</td>
-              <td style={{ padding: 8 }}>{Number(it.subtotal).toFixed(2)}</td>
+              <td style={{ padding: 8 }}>{it.isFree ? t("so.free") : Number(it.subtotal).toFixed(2)}</td>
             </tr>
           ))}
         </tbody>

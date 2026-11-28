@@ -47,7 +47,8 @@ export async function lockStockRow(tx, { productId, variantId, branchId }) {
  * @param {object} tx Prisma transaction client
  * @param {{ orgId: string; userId?: string | null; productId: string; variantId?: string | null; branchId: string;
  *   delta: number; reason: "RECEIPT"|"TRANSFER"|"SALE"|"RETURN"|"ADJUSTMENT"|"HOLD_COMMIT"|"CANCEL"; note?: string | null;
- *   receiptUnitCost?: number | null }} opts
+ *   receiptUnitCost?: number | null; transferId?: string | null; vanReturnId?: string | null }} opts
+ *   transferId / vanReturnId: the transfer or van return record the movement belongs to.
  *   receiptUnitCost: cost of the units coming in, in whole dirhams; the location unit cost becomes the
  *   weighted average, rounded half away from zero to a whole dirham (NFR-03).
  */
@@ -84,6 +85,10 @@ export async function moveStock(tx, opts) {
         reason,
         note: note != null ? String(note).slice(0, 500) : null,
         userId,
+        // Sales-order delivery: the SALE movement names its order.
+        ...(opts.salesOrderId ? { salesOrderId: opts.salesOrderId } : {}),
+        ...(opts.transferId ? { transferId: opts.transferId } : {}),
+        ...(opts.vanReturnId ? { vanReturnId: opts.vanReturnId } : {}),
       },
     });
   }

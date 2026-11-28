@@ -5,6 +5,13 @@ import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { SupplierBills } from "./SupplierBills.jsx";
 import { statusLabel } from "../utils/statusLabels.js";
 import { branchDisplayName } from "../utils/displayLabels.js";
+import { useSearchParams } from "react-router-dom";
+import { useAuth } from "../context/AuthContext.jsx";
+import { PageTabs } from "../components/BizShared.jsx";
+import { PendingPayments, PendingStock, SupplierBalances } from "../components/PendingPanels.jsx";
+import { PoExtras } from "../components/PoExtras.jsx";
+
+const TERMS = [0, 7, 14, 30, 60];
 
 const inp = { width: "100%", boxSizing: "border-box", minWidth: 0 };
 const fld = { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 };
@@ -22,6 +29,11 @@ export default function PurchaseOrders() {
   const [receive, setReceive] = useState({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [expectedDate, setExpectedDate] = useState("");
+  const [termsDays, setTermsDays] = useState("");
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") || "orders";
+  const { canModule } = useAuth();
 
   const load = async () => {
     const [orderRows, supplierRows, productRows] = await Promise.all([
@@ -72,6 +84,8 @@ export default function PurchaseOrders() {
         body: {
           supplierId,
           branchId,
+          ...(expectedDate ? { expectedDate } : {}),
+          ...(termsDays !== "" ? { paymentTermsDays: Number(termsDays) } : {}),
           lines: lines.map((l) => ({ productId: l.productId, variantId: l.variantId || null, quantity: Number(l.quantity), unitCost: Number(l.unitCost) })),
         },
       });
@@ -97,14 +111,41 @@ export default function PurchaseOrders() {
     <div style={{ display: "grid", gap: 16 }}>
       <h1>{t("po.title")}</h1>
       {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
+      <PageTabs
+        value={tab}
+        onChange={(id) => setParams(id === "orders" ? {} : { tab: id })}
+        tabs={[
+          { id: "orders", label: t("po.title") },
+          { id: "stock", label: t("so.pendingStock") },
+          ...(canModule("finance", "view") ? [{ id: "pending", label: t("so.pendingPayments") }] : []),
+          { id: "balances", label: t("so.supplierBalances") },
+        ]}
+      />
+      {tab === "stock" ? <PendingStock /> : null}
+      {tab === "pending" ? <PendingPayments side="byus" /> : null}
+      {tab === "balances" ? <SupplierBalances /> : null}
+      {tab === "orders" ? (<>
       <form className="card" onSubmit={create} style={{ display: "grid", gap: 10 }}>
         <label style={fld}>
           <span>{t("po.supplier")}</span>
           <select style={inp} required value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
             <option value="">—</option>
-            {suppliers.filter((s) => s.isActive !== false).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {suppliers.filter((s) => s.isActive !== false && !s.isFreight).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </label>
+        <div style={lineGrid}>
+          <label style={fld}>
+            <span>{t("so.expectedDate")}</span>
+            <input style={inp} type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} />
+          </label>
+          <label style={fld}>
+            <span>{t("so.paymentTerms")}</span>
+            <select style={inp} value={termsDays} onChange={(e) => setTermsDays(e.target.value)}>
+              <option value="">{t("so.supplierDefault")}</option>
+              {TERMS.map((d) => <option key={d} value={d}>{d ? t("so.netDays", { n: d }) : t("so.dueOnReceipt")}</option>)}
+            </select>
+          </label>
+        </div>
         {lines.map((line, i) => {
           const product = productOf(line.productId);
           return (
@@ -181,10 +222,12 @@ export default function PurchaseOrders() {
                 <button type="button" disabled={busy} onClick={() => window.confirm(t("po.confirmCancel")) && run(() => api(`/api/purchase-orders/${order.id}/cancel`, { method: "POST", body: { version: order.version } }), t("po.cancelled"))}>{t("po.cancel")}</button>
               ) : null}
             </div>
+            <PoExtras order={order} suppliers={suppliers} onChanged={load} setMsg={setMsg} />
           </article>
         );
       })}
       <SupplierBills suppliers={suppliers} refreshKey={orders} />
+      </>) : null}
     </div>
   );
 }

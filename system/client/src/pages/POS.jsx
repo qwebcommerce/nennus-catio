@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isTillKind } from "../lib/locationKinds.js";
+import PosSubNav from "../components/PosSubNav.jsx";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { PosCartPanel } from "../components/PosCartPanel.jsx";
@@ -21,7 +23,8 @@ import { productDisplayName } from "../utils/productName.js";
 import { ProductImagePreview } from "../components/ProductImagePreview.jsx";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { useAuth } from "../context/AuthContext.jsx";
-import { riyals, toDirhams } from "../utils/money.js";
+import { lineDirhams, riyals, toDirhams } from "../utils/money.js";
+import { TillDeliveryFields, emptyTillDelivery, tillDeliveryBody } from "../components/TillDeliveryFields.jsx";
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -34,7 +37,9 @@ export default function POS() {
   const branchId = useActiveBranchId();
   const branchName = useActiveBranchLabel(locale);
   const { activeBranch, branches, setActiveBranchId, canChooseBranch } = useBranchContext();
-  const { user } = useAuth();
+  const { user, canModule } = useAuth();
+  /** Complimentary goods: manager / owner (complimentary → create). The server checks it again. */
+  const canGiveFree = canModule("complimentary", "create");
   const tillKind = activeBranch?.kind || "SHOP";
   // FR-30: opening the till asks which location (shop or van) it sells from.
   const tillKey = `till:location:${user?.id || ""}`;
@@ -50,7 +55,7 @@ export default function POS() {
       (branches || []).filter(
         (b) =>
           b.isActive !== false &&
-          b.kind !== "WAREHOUSE" &&
+          isTillKind(b.kind) &&
           (canChooseBranch || b.id === activeBranch?.id),
       ),
     [branches, canChooseBranch, activeBranch?.id],
@@ -66,7 +71,7 @@ export default function POS() {
     }
   };
   const tillOpen =
-    Boolean(activeBranch) && activeBranch.isActive !== false && tillKind !== "WAREHOUSE" && tillConfirmed;
+    Boolean(activeBranch) && activeBranch.isActive !== false && isTillKind(tillKind) && tillConfirmed;
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [search, setSearch] = useState("");
@@ -85,6 +90,8 @@ export default function POS() {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  // fix-rb: till sale "for delivery" (becomes a delivery job on the assignment screen).
+  const [tillDelivery, setTillDelivery] = useState(emptyTillDelivery);
   const [quickCustomerName, setQuickCustomerName] = useState("");
   const [discountInput, setDiscountInput] = useState("");
   const [holdLabel, setHoldLabel] = useState("");
@@ -108,13 +115,27 @@ export default function POS() {
   const searchInputRef = useRef(null);
 
   const items = useCartStore((s) => s.items);
+  const [freeKeys, setFreeKeys] = useState(() => new Set());
+  const [wholeFree, setWholeFree] = useState(false);
+  const [freeReason, setFreeReason] = useState("");
+  const isFreeLine = (line) => wholeFree || freeKeys.has(line.lineKey);
+  const toggleFree = (key) =>
+    setFreeKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const syncLinePricesFromProducts = useCartStore((s) => s.syncLinePricesFromProducts);
 
   const addProduct = useCartStore((s) => s.addProduct);
   const setQty = useCartStore((s) => s.setQuantity);
   const removeLine = useCartStore((s) => s.removeLine);
   const total = useCartStore((s) => s.total());
-  const cartSubtotal = total;
+  // Free lines bring no revenue: the amount to pay leaves them out.
+  const freeTotal = riyals(items.filter(isFreeLine).reduce((s, i) => s + lineDirhams(i.unitPrice, i.quantity, i.sellBy), 0));
+  const anyFree = items.some(isFreeLine);
+  const cartSubtotal = riyals(toDirhams(total) - toDirhams(freeTotal));
   const discountNum = Math.min(
     Math.max(0, Number.parseFloat(String(discountInput).replace(",", ".")) || 0),
     cartSubtotal
@@ -125,7 +146,7 @@ export default function POS() {
    */
   const [promoQuote, setPromoQuote] = useState({ key: "", discount: 0, couponValid: null });
   const quoteKey = JSON.stringify([
-    items.map((i) => [i.productId, i.variantId || "", i.quantity]),
+    items.map((i) => [i.productId, i.variantId || "", i.quantity, isFreeLine(i) ? 1 : 0]),
     couponInput.trim(),
     discountNum,
   ]);
@@ -134,7 +155,7 @@ export default function POS() {
     const r = await api("/api/sales/quote", {
       method: "POST",
       body: {
-        items: items.map((i) => ({ productId: i.productId, variantId: i.variantId || undefined, quantity: i.quantity })),
+        items: items.map((i) => ({ productId: i.productId, variantId: i.variantId || undefined, quantity: i.quantity, isFree: isFreeLine(i) || undefined })),
         couponCode: couponInput.trim() || undefined,
         discountAmount: discountNum > 0 ? discountNum : undefined,
       },
@@ -589,7 +610,17 @@ export default function POS() {
         setMsg(t("pos.deliveryCustomerRequired"));
         return;
       }
-      if (!deliveryAddress.trim()) {
+      if (!deliveryAddress.trim() && !(tillDelivery.on && tillDelivery.address.trim())) {
+        setMsg(t("pos.deliveryAddressRequired"));
+        return;
+      }
+    }
+    if (tillDelivery.on) {
+      if (!customerId) {
+        setMsg(t("pos.deliveryCustomerRequired"));
+        return;
+      }
+      if (!tillDelivery.address.trim()) {
         setMsg(t("pos.deliveryAddressRequired"));
         return;
       }
@@ -667,11 +698,21 @@ export default function POS() {
         productId: i.productId,
         variantId: i.variantId || undefined,
         quantity: i.quantity,
+        ...(isFreeLine(i) ? { isFree: true } : {}),
       })),
     };
+    if (anyFree) {
+      if (!freeReason.trim()) {
+        setMsg(t("so.freeReasonRequired"));
+        return;
+      }
+      body.freeReason = freeReason.trim();
+      if (wholeFree) body.complimentary = true;
+    }
     if (paymentMethod === "ON_DELIVERY" && !splitEnabled && deliveryAddress.trim()) {
       body.deliveryAddress = deliveryAddress.trim();
     }
+    Object.assign(body, tillDeliveryBody(tillDelivery) || {});
     if (discountNum > 0 && discountReason.trim()) {
       body.discountReason = discountReason.trim();
     }
@@ -689,7 +730,7 @@ export default function POS() {
         body.amountPaid = round2(Number.parseFloat(String(payNowInput).replace(",", ".")) || 0);
       }
       if (
-        (paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK") &&
+        (paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK" || paymentMethod === "BANK_TRANSFER") &&
         paymentReference.trim()
       ) {
         body.paymentReference = paymentReference.trim();
@@ -707,6 +748,7 @@ export default function POS() {
       clearCart();
       setCustomerId("");
       setDeliveryAddress("");
+      setTillDelivery(emptyTillDelivery());
       setDiscountInput("");
       setDiscountReason("");
       setOrderNote("");
@@ -719,6 +761,9 @@ export default function POS() {
       setPayNowInput("");
       setCashTendered("");
       setPaymentReference("");
+      setFreeKeys(new Set());
+      setWholeFree(false);
+      setFreeReason("");
       await loadProducts();
       await loadHeldCarts();
       api("/api/customers")
@@ -734,6 +779,7 @@ export default function POS() {
 
   return (
     <div className="pos-page-root">
+      <PosSubNav />
       <div className="pos-top-bar">
         <h1 className="pos-top-bar__title">{t("pos.title")}</h1>
         <div className="pos-search" ref={searchWrapRef}>
@@ -999,6 +1045,9 @@ export default function POS() {
             onChangeQty={(id, v) => setQty(id, Number(v))}
             onRemove={removeLine}
             total={cartSubtotal}
+            canGiveFree={canGiveFree}
+            isFree={isFreeLine}
+            onToggleFree={toggleFree}
           />
         </div>
         <div className="pos-checkout-column">
@@ -1098,7 +1147,8 @@ export default function POS() {
                 </option>
               ))}
             </select>
-            {paymentMethod === "ON_DELIVERY" && !splitEnabled ? (
+            {activeBranch?.kind !== "VAN" ? <TillDeliveryFields value={tillDelivery} onChange={setTillDelivery} /> : null}
+            {paymentMethod === "ON_DELIVERY" && !splitEnabled && !tillDelivery.on ? (
               <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
                 <span style={{ fontSize: 13, color: "var(--muted)" }}>
                   {t("pos.deliveryAddress")} *
@@ -1263,6 +1313,19 @@ export default function POS() {
                     )}
                   </label>
                 ) : null}
+                {paymentMethod === "BANK_TRANSFER" ? (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("so.transferReference")}</span>
+                    <input
+                      type="text"
+                      value={paymentReference}
+                      onChange={(e) => setPaymentReference(e.target.value)}
+                      placeholder={t("so.transferReferenceHint")}
+                      aria-label={t("so.transferReference")}
+                    />
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("so.transferNotCash")}</span>
+                  </label>
+                ) : null}
                 {paymentMethod === "FAWRAN" || paymentMethod === "PAYMENT_LINK" ? (
                   <label style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
                     <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.paymentReference")}</span>
@@ -1388,6 +1451,21 @@ export default function POS() {
                 </div>
               </div>
             )}
+            {canGiveFree && items.length ? (
+              <div className="card" style={{ display: "grid", gap: 6, marginBottom: 10, padding: 10 }}>
+                <label className="pos-free-toggle">
+                  <input type="checkbox" checked={wholeFree} onChange={(e) => setWholeFree(e.target.checked)} />
+                  <span>{t("so.wholeInvoiceFree")}</span>
+                </label>
+                {anyFree ? (
+                  <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("so.freeReason")} *</span>
+                    <input type="text" value={freeReason} onChange={(e) => setFreeReason(e.target.value)} placeholder={t("so.freeReasonPh")} aria-label={t("so.freeReason")} />
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("so.freeHint", { n: freeTotal.toFixed(2) })}</span>
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
             <label style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
               <span style={{ fontSize: 12, color: "var(--muted)" }}>{t("pos.discountLabel")}</span>
               <input

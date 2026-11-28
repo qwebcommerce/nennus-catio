@@ -4,7 +4,7 @@ import { toApi } from "../lib/moneyFields.js";
 import { prisma } from "../lib/prisma.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { assertVersion, isStaleEditError, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
-import { authMiddleware, requireModule } from "../middleware/auth.js";
+import { authMiddleware, hasModule, requireModule } from "../middleware/auth.js";
 import { RELOCATION_DOCUMENTS_BUCKET, removeObjects } from "../lib/storage.js";
 
 const router = Router();
@@ -25,6 +25,8 @@ const CUSTOMER_STAFF_SELECT = {
   accountBalance: true,
   emailVerifiedAt: true,
   creditApproved: true,
+  isBusiness: true,
+  companyName: true,
   creditLimit: true,
   locale: true,
   tags: true,
@@ -41,6 +43,14 @@ function parseBalance(raw) {
 }
 
 const api = (row) => toApi("Customer", row);
+
+/** Address with an optional area (fix-rd: the driver's "new customer" form has both). */
+function addressWithArea(address, area) {
+  const a = address != null && String(address).trim() ? String(address).trim() : "";
+  const z = area != null && String(area).trim() ? String(area).trim() : "";
+  const text = a && z ? `${a}, ${z}` : a || z;
+  return text ? text.slice(0, 500) : null;
+}
 
 router.get("/", async (req, res) => {
   const q = String(req.query.q || "").trim();
@@ -86,8 +96,21 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
     });
     if (taken) return res.status(409).json({ error: "This email already belongs to a customer" });
   }
-  if (opening > 0 && req.user.role === "CASHIER") {
-    return res.status(403).json({ error: "لا يمكن للكاشير تعيين رصيد افتتاحي" });
+  // An opening balance is a finance entry: it needs Finance → create (any role).
+  if (opening > 0 && !(await hasModule(req, "finance", "create"))) {
+    return res.status(403).json({ error: "لا يمكن للكاشير تعيين رصيد افتتاحي", errorAr: "لا يمكن للكاشير تعيين رصيد افتتاحي", errorEn: "A cashier cannot set an opening balance", code: "FORBIDDEN" });
+  }
+
+  // Approving credit (or giving a credit limit) needs the same right as changing it later:
+  // Customers → edit. Roles that may only add customers (e.g. drivers) can't grant credit.
+  const wantsCredit = Boolean(req.body?.creditApproved) || Number(openingLimit) > 0;
+  if (wantsCredit && !(await hasModule(req, "customers", "edit"))) {
+    return res.status(403).json({
+      error: "لا يمكنك اعتماد العميل للبيع الآجل",
+      errorAr: "لا يمكنك اعتماد العميل للبيع الآجل",
+      errorEn: "You can't approve a customer for credit",
+      code: "FORBIDDEN",
+    });
   }
 
   const row = await prisma.$transaction(async (tx) => {
@@ -98,10 +121,13 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
         phone: phone != null && String(phone).trim() ? String(phone).trim() : null,
         email: emailNorm,
         notes: notes != null && String(notes).trim() ? String(notes).trim() : null,
-        address: address != null && String(address).trim() ? String(address).trim().slice(0, 500) : null,
+        address: addressWithArea(address, req.body?.area),
         accountBalance: opening,
         creditApproved: Boolean(req.body?.creditApproved),
         creditLimit: openingLimit,
+        // Business (B2B) customer for sales orders.
+        isBusiness: req.body?.isBusiness === true || req.body?.isBusiness === "true",
+        companyName: req.body?.companyName != null && String(req.body.companyName).trim() ? String(req.body.companyName).trim().slice(0, 200) : null,
       },
       select: CUSTOMER_STAFF_SELECT,
     });
@@ -118,6 +144,16 @@ router.post("/", requireModule("customers", "create"), async (req, res) => {
         },
       });
     }
+    // fix-rd: who added the customer (drivers add customers from the driver dashboard).
+    await writeAudit({
+      userId: req.user.sub,
+      action: "CUSTOMER_CREATE",
+      entityType: "Customer",
+      entityId: customer.id,
+      branchId: req.user.branchId || null,
+      summary: `Customer ${customer.name}${customer.phone ? ` (${customer.phone})` : ""} added by ${req.user.role}`,
+      meta: { role: req.user.role, phone: customer.phone, address: customer.address, via: req.body?.via ? String(req.body.via).slice(0, 40) : null },
+    }, tx);
     return customer;
   });
 
@@ -139,6 +175,10 @@ router.patch("/:id", requireModule("customers", "edit"), async (req, res) => {
   if (req.body?.tags !== undefined) data.tags = req.body.tags != null && String(req.body.tags).trim() ? String(req.body.tags).trim().slice(0, 300) : null;
   if (req.body?.creditApproved !== undefined) {
     data.creditApproved = Boolean(req.body.creditApproved);
+  }
+  if (req.body?.isBusiness !== undefined) data.isBusiness = req.body.isBusiness === true || req.body.isBusiness === "true";
+  if (req.body?.companyName !== undefined) {
+    data.companyName = req.body.companyName != null && String(req.body.companyName).trim() ? String(req.body.companyName).trim().slice(0, 200) : null;
   }
   if (req.body?.creditLimit !== undefined) {
     const limit = req.body.creditLimit === "" || req.body.creditLimit == null ? null : toDirhams(req.body.creditLimit);

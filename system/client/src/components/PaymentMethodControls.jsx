@@ -1,6 +1,6 @@
 import React from "react";
 
-export const PAYMENT_METHOD_IDS = ["CASH", "CARD", "ONLINE", "ON_ACCOUNT", "ON_DELIVERY"];
+export const PAYMENT_METHOD_IDS = ["CASH", "CARD", "ONLINE", "BANK_TRANSFER", "ON_ACCOUNT", "ON_DELIVERY"];
 
 /** تقسيم الدفع: بدون «عند الاستلام» */
 export const SPLIT_PAYMENT_METHOD_IDS = ["CASH", "CARD", "ONLINE"];
@@ -45,6 +45,16 @@ function IconDelivery({ className }) {
   );
 }
 
+function IconBank({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 10l9-6 9 6" />
+      <path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8" />
+      <path d="M3 20h18" />
+    </svg>
+  );
+}
+
 function IconSplit({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
@@ -73,6 +83,7 @@ const METHOD_ICONS = {
   PAYMENT_LINK: IconWallet,
   ON_ACCOUNT: IconWallet,
   ON_DELIVERY: IconDelivery,
+  BANK_TRANSFER: IconBank,
 };
 
 const METHOD_LABEL_KEYS = {
@@ -83,6 +94,7 @@ const METHOD_LABEL_KEYS = {
   PAYMENT_LINK: "payment.link",
   ON_ACCOUNT: "payment.onAccount",
   ON_DELIVERY: "payment.onDelivery",
+  BANK_TRANSFER: "payment.bankTransfer",
 };
 
 /**

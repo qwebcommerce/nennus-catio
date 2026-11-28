@@ -28,7 +28,7 @@ export default function Purchases() {
   const [updateProductCost, setUpdateProductCost] = useState(true);
   const [list, setList] = useState([]);
   const [msg, setMsg] = useState("");
-  const [newSupplier, setNewSupplier] = useState({ name: "", phone: "" });
+  const [newSupplier, setNewSupplier] = useState({ name: "", phone: "", isFreight: false, paymentTermsDays: "" });
   const [editingSupplierId, setEditingSupplierId] = useState("");
   const [editSupplier, setEditSupplier] = useState({ name: "", phone: "" });
 
@@ -66,11 +66,16 @@ export default function Purchases() {
     try {
       const s = await api("/api/suppliers", {
         method: "POST",
-        body: { name: newSupplier.name.trim(), phone: newSupplier.phone.trim() || undefined },
+        body: {
+          name: newSupplier.name.trim(),
+          phone: newSupplier.phone.trim() || undefined,
+          isFreight: newSupplier.isFreight,
+          paymentTermsDays: newSupplier.paymentTermsDays === "" ? null : Number(newSupplier.paymentTermsDays),
+        },
       });
       setSuppliers((prev) => [...prev, s].sort((a, b) => a.name.localeCompare(b.name)));
       setSupplierId(s.id);
-      setNewSupplier({ name: "", phone: "" });
+      setNewSupplier({ name: "", phone: "", isFreight: false, paymentTermsDays: "" });
       setMsg(t("purchases.supplierAdded"));
     } catch (err) {
       setMsg(err.message || t("purchases.failed"));
@@ -93,7 +98,7 @@ export default function Purchases() {
 
   const startEditSupplier = (s) => {
     setEditingSupplierId(s.id);
-    setEditSupplier({ name: s.name || "", phone: s.phone || "", version: s.version });
+    setEditSupplier({ name: s.name || "", phone: s.phone || "", isFreight: Boolean(s.isFreight), paymentTermsDays: s.paymentTermsDays ?? "", version: s.version });
   };
 
   const saveSupplier = async () => {
@@ -102,7 +107,13 @@ export default function Purchases() {
     try {
       s = await api(`/api/suppliers/${editingSupplierId}`, {
         method: "PATCH",
-        body: { name: editSupplier.name.trim(), phone: editSupplier.phone.trim() || null, version: editSupplier.version },
+        body: {
+          name: editSupplier.name.trim(),
+          phone: editSupplier.phone.trim() || null,
+          isFreight: Boolean(editSupplier.isFreight),
+          paymentTermsDays: editSupplier.paymentTermsDays === "" ? null : Number(editSupplier.paymentTermsDays),
+          version: editSupplier.version,
+        },
       });
     } catch (err) {
       setMsg(editErrorMessage(err, t));
@@ -213,6 +224,20 @@ export default function Purchases() {
           onChange={(e) => setNewSupplier({ ...newSupplier, phone: e.target.value })}
           style={{ ...inp, width: 160 }}
         />
+        <input
+          type="number"
+          min="0"
+          max="365"
+          placeholder={t("so.termsDays")}
+          aria-label={t("so.termsDays")}
+          value={newSupplier.paymentTermsDays}
+          onChange={(e) => setNewSupplier({ ...newSupplier, paymentTermsDays: e.target.value })}
+          style={{ ...inp, width: 140 }}
+        />
+        <label className="biz-check" style={{ display: "inline-flex" }}>
+          <input type="checkbox" checked={newSupplier.isFreight} onChange={(e) => setNewSupplier({ ...newSupplier, isFreight: e.target.checked })} />
+          <span>{t("so.isFreight")}</span>
+        </label>
         <button type="submit" className="btn-touch" style={{ background: "var(--surface2)" }}>
           {t("common.add")}
         </button>
@@ -241,6 +266,22 @@ export default function Purchases() {
                           style={{ ...inp, minHeight: 36, width: 140 }}
                         />
                       </td>
+                      <td style={{ padding: 6 }}>
+                        <input
+                          type="number"
+                          min="0"
+                          max="365"
+                          aria-label={t("so.termsDays")}
+                          placeholder={t("so.termsDays")}
+                          value={editSupplier.paymentTermsDays}
+                          onChange={(e) => setEditSupplier({ ...editSupplier, paymentTermsDays: e.target.value })}
+                          style={{ ...inp, minHeight: 36, width: 90 }}
+                        />
+                        <label className="biz-check" style={{ display: "inline-flex" }}>
+                          <input type="checkbox" checked={Boolean(editSupplier.isFreight)} onChange={(e) => setEditSupplier({ ...editSupplier, isFreight: e.target.checked })} />
+                          <span>{t("so.isFreight")}</span>
+                        </label>
+                      </td>
                       <td style={{ padding: 6, whiteSpace: "nowrap" }}>
                         <button type="button" className="btn-touch" onClick={saveSupplier} style={{ marginInlineEnd: 6 }}>
                           {t("common.save")}
@@ -257,6 +298,10 @@ export default function Purchases() {
                         {s.isActive === false ? ` · ${t("setup.inactive")}` : ""}
                       </td>
                       <td style={{ padding: 6 }}>{s.phone || "—"}</td>
+                      <td style={{ padding: 6 }}>
+                        {s.isFreight ? <span className="biz-badge">{t("so.freightCompany")}</span> : null}
+                        {s.paymentTermsDays != null ? <span className="biz-badge">{t("so.netDays", { n: s.paymentTermsDays })}</span> : null}
+                      </td>
                       <td style={{ padding: 6, whiteSpace: "nowrap" }}>
                         <button type="button" className="btn-touch" onClick={() => startEditSupplier(s)} style={{ marginInlineEnd: 6 }}>
                           {t("common.edit")}

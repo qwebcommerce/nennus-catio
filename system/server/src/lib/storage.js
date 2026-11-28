@@ -8,12 +8,23 @@ import { createClient } from "@supabase/supabase-js";
 
 export const PRODUCT_IMAGES_BUCKET = "product-images";
 export const RELOCATION_DOCUMENTS_BUCKET = "relocation-documents";
+/** Private: purchase-order quotations / invoices and payment proofs (lib/businessFiles.js). */
+export const BUSINESS_DOCUMENTS_BUCKET = "business-documents";
+/** Private: evidence photos of van returns (WebP, re-encoded, no metadata). */
+export const VAN_RETURN_PHOTOS_BUCKET = "van-return-photos";
+/** Private: proof of van-return payments (WebP images or PDF). */
+export const VAN_RETURN_PROOFS_BUCKET = "van-return-proofs";
 /** Largest relocation document accepted (direct upload). */
 export const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
 /** Lifetime of a Supabase signed download URL. */
 export const SIGNED_DOWNLOAD_SECONDS = 60;
 
 const BUCKET_OPTIONS = {
+  [BUSINESS_DOCUMENTS_BUCKET]: {
+    public: false,
+    fileSizeLimit: 10 * 1024 * 1024,
+    allowedMimeTypes: ["application/pdf", "image/jpeg", "image/png", "image/webp"],
+  },
   [PRODUCT_IMAGES_BUCKET]: {
     public: true,
     fileSizeLimit: 5 * 1024 * 1024,
@@ -24,6 +35,16 @@ const BUCKET_OPTIONS = {
     fileSizeLimit: DOCUMENT_MAX_BYTES,
     // octet-stream: legacy database documents that are not PDF/JPEG/PNG (always downloaded as attachments).
     allowedMimeTypes: ["application/pdf", "image/jpeg", "image/png", "application/octet-stream"],
+  },
+  [VAN_RETURN_PHOTOS_BUCKET]: {
+    public: false,
+    fileSizeLimit: 5 * 1024 * 1024,
+    allowedMimeTypes: ["image/webp"],
+  },
+  [VAN_RETURN_PROOFS_BUCKET]: {
+    public: false,
+    fileSizeLimit: 6 * 1024 * 1024,
+    allowedMimeTypes: ["image/webp", "application/pdf"],
   },
 };
 

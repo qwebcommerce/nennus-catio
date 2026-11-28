@@ -3,7 +3,8 @@ import { Router } from "express";
 import { d, fmt, riyals } from "../lib/money.js";
 import { prisma } from "../lib/prisma.js";
 import { createSkipcashPayment, skipcashConfigured } from "../lib/skipcash.js";
-import { quotePromotions } from "../lib/promotions.js";
+import { priceGrooming, priceBody } from "../lib/groomingPrice.js";
+import { claimCoupon, couponErrorBody, isCouponError, releaseCouponFor } from "../lib/coupons.js";
 import { claimSlot, minutesOf, qatarDateTime, slotTaken, weekdayOf } from "../lib/groomingSlots.js";
 import { sweepExpiredHolds } from "../lib/webOrder.js";
 import { lookupOnReturn } from "../lib/paymentLookup.js";
@@ -65,6 +66,8 @@ function publicBooking(row, org) {
     address: row.address,
     amount: riyals(row.amount),
     homeFee: riyals(row.homeFee),
+    couponCode: row.couponCode || null,
+    couponDiscount: riyals(row.couponDiscount || 0),
     package: row.service ? { id: row.service.id, name: row.service.name, nameEn: row.service.nameEn } : null,
   };
 }
@@ -182,12 +185,41 @@ router.post("/bookings/:id/cancel", async (req, res) => {
     data: { status: "CANCELLED", ...(paid ? { paymentReview: true, paymentReviewReason: "REFUND_DUE" } : {}) },
   });
   if (!moved.count) return res.status(409).json({ error: "This booking changed. Refresh and try again." });
+  // fix-re: a paid booking keeps its coupon use unless the batch gives it back (releaseOnPaidCancel).
+  await releaseCouponFor(prisma, row.id, "CUSTOMER_CANCEL");
   if (paid) {
     await mailStaff(org.id, "alertBooking", `Grooming booking ${row.reference || row.id} was cancelled by the customer. A refund of ${fmt(row.amountPaid)} QAR is due.`);
   }
   const customer = await prisma.customer.findUnique({ where: { id: session.sub } });
   await mailCustomer(customer, "booking", { reference: row.reference || row.id.slice(-8).toUpperCase(), status: "CANCELLED", startAt: row.startAt });
   res.json({ id: row.id, reference: row.reference, status: "CANCELLED", refundDue: paid });
+});
+
+/**
+ * fix-re: price check before payment — the package, home-visit fee, the coupon (or automatic
+ * promotion) and the total SkipCash will charge. Takes no use; /book checks again and claims it.
+ */
+router.post("/quote", async (req, res) => {
+  try {
+    const org = await shopOrg();
+    if (!org) return res.status(400).json({ error: "The shop is not ready" });
+    const body = req.body || {};
+    const service = await prisma.groomingService.findFirst({
+      where: { id: String(body.packageId || ""), organizationId: org.id, active: true },
+    });
+    if (!service) return res.status(400).json({ error: "That package is not available" });
+    const session = await customerSession(req, res);
+    const email = String(session?.email || body.email || "").trim().toLowerCase();
+    const customer = email
+      ? await prisma.customer.findFirst({ where: { organizationId: org.id, email: { equals: email, mode: "insensitive" } }, select: { id: true } })
+      : null;
+    const homeFee = String(body.visitKind || "").toUpperCase() === "HOME" ? d(org.homeVisitFee) : 0;
+    const priced = await priceGrooming(prisma, { organizationId: org.id, service, homeFee, code: body.couponCode ?? body.code, channel: "WEBSITE", customerId: customer?.id || null });
+    res.json(priceBody(priced, riyals));
+  } catch (e) {
+    if (isCouponError(e)) return res.status(e.status || 400).json(couponErrorBody(e));
+    res.status(e.status || 400).json({ error: e.message || "Booking failed" });
+  }
 });
 
 router.post("/book", async (req, res) => {
@@ -253,24 +285,25 @@ router.post("/book", async (req, res) => {
     if (!staff) return res.status(500).json({ error: "A booking needs a staff user on the account" });
     const branch = org.websiteBranchId
       ? await prisma.branch.findFirst({ where: { id: org.websiteBranchId, organizationId: org.id, isActive: true } })
-      : await prisma.branch.findFirst({ where: { organizationId: org.id, isActive: true, kind: { not: "VAN" } } });
+      : await prisma.branch.findFirst({ where: { organizationId: org.id, isActive: true, kind: { not: "VAN" } }, orderBy: [{ isMain: "desc" }, { createdAt: "asc" }] });
     // Whole dirhams (NFR-03).
     const homeFee = visitKind === "HOME" ? d(org.homeVisitFee) : 0;
-    const gross = d(service.price) + homeFee;
-    const promo = await quotePromotions(prisma, {
+    // fix-re: a generated coupon replaces the automatic grooming promotions (lib/groomingPrice.js).
+    const priced = await priceGrooming(prisma, {
       organizationId: org.id,
-      channel: "GROOMING",
-      lines: [],
-      goods: gross,
-      code: body.code,
+      service,
+      homeFee,
+      code: body.couponCode ?? body.code,
+      channel: "WEBSITE",
+      customerId: customer.id,
     });
-    let amount = gross - promo.discount;
-    if (amount < 0) amount = 0;
+    const amount = priced.amount;
+    const coupon = priced.coupon;
     const holdMinutes = Math.max(5, Number(org.holdMinutes) || 20);
     const expiresAt = new Date(Date.now() + holdMinutes * 60 * 1000);
     const booking = await prisma.$transaction(async (tx) => {
       await claimSlot(tx, { organizationId: org.id, startAt, endAt, grid: duration });
-      return tx.appointment.create({
+      const created = await tx.appointment.create({
       data: {
         organizationId: org.id,
         branchId: branch?.id || null,
@@ -290,12 +323,18 @@ router.post("/book", async (req, res) => {
         holdExpiresAt: expiresAt,
         notes: note,
         createdByUserId: staff.id,
+        ...(coupon ? { couponCodeId: coupon.codeRow.id, couponCode: coupon.codeRow.code, couponDiscount: priced.discount } : {}),
       },
       });
+      // fix-re: the use is held while the booking waits for payment (committed at once when free).
+      if (coupon) {
+        await claimCoupon(tx, { checked: coupon, appointmentId: created.id, customerId: customer.id, channel: "WEBSITE", status: amount <= 0 ? "COMMITTED" : "HELD", gross: priced.gross });
+      }
+      return created;
     }, LOCK_TX);
     if (amount <= 0) {
       await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CONFIRMED" } });
-      return res.status(201).json({ bookingId: booking.id, reference: booking.reference, total: 0 });
+      return res.status(201).json({ bookingId: booking.id, reference: booking.reference, total: 0, discount: riyals(priced.discount), couponCode: coupon?.codeRow.code || null });
     }
     const [first, ...rest] = name.split(/\s+/);
     const payment = await createSkipcashPayment({
@@ -312,14 +351,16 @@ router.post("/book", async (req, res) => {
       ReturnUrl: `${publicBase()}/shop/grooming/bookings/${booking.id}`,
     }).catch(async (err) => {
       await prisma.appointment.updateMany({ where: { id: booking.id, status: "PENDING_PAYMENT" }, data: { status: "CANCELLED" } });
+      await releaseCouponFor(prisma, booking.id, "GATEWAY_ERROR");
       throw err;
     });
     await prisma.appointment.update({
       where: { id: booking.id },
       data: { gatewayPaymentId: payment.id, paymentReference: payment.id },
     });
-    res.status(201).json({ bookingId: booking.id, reference: booking.reference, payUrl: payment.payUrl, total: riyals(amount) });
+    res.status(201).json({ bookingId: booking.id, reference: booking.reference, payUrl: payment.payUrl, total: riyals(amount), discount: riyals(priced.discount), couponCode: coupon?.codeRow.code || null });
   } catch (e) {
+    if (isCouponError(e)) return res.status(e.status || 400).json(couponErrorBody(e));
     res.status(e.status || 400).json({ error: e.message || "Booking failed", ...(e.errorAr ? { errorAr: e.errorAr, errorEn: e.message } : {}) });
   }
 });

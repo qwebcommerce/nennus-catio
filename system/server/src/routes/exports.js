@@ -6,6 +6,8 @@ import { d, money, sum } from "../lib/money.js";
 import { qatarRange } from "../lib/qatarTime.js";
 import { financeFilters, financeSummary, financeTransactions, stockValueRows } from "../lib/financeData.js";
 import { tablePdf } from "../lib/pdfTable.js";
+import { EXTRA_ENUMS, EXTRA_HEAD, EXTRA_LISTS, EXTRA_MONEY, EXTRA_TITLES, EXTRA_VALUES, buildExtraList, extraProfitRows } from "../lib/exportExtras.js";
+import { ANALYTICS_HEAD, ANALYTICS_LISTS, ANALYTICS_MONEY, ANALYTICS_NUMERIC, ANALYTICS_TITLES, buildAnalyticsList } from "../lib/analyticsExports.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -46,6 +48,7 @@ const VALUES = {
   SALE: { en: "Sale", ar: "بيع" },
   REFUND: { en: "Refund", ar: "استرجاع" },
   REFUNDED: { en: "Refunded", ar: "مسترد" },
+  UNPAID: { en: "Not paid yet", ar: "غير مدفوع بعد" },
   PAYMENT: { en: "Payment", ar: "دفعة" },
   REJECTED: { en: "Rejected (refunded)", ar: "مرفوضة (مستردة)" },
   GROOMING: { en: "Grooming", ar: "التجميل" },
@@ -193,9 +196,37 @@ const LINES = {
   expensesCash: ["Expenses — cash", "المصروفات — نقداً"],
   expensesBank: ["Expenses — bank", "المصروفات — البنك"],
   net: ["Net money", "صافي الحركة"],
+  vanReturns: ["Van returns (in refunds — Van)", "مرتجعات سيارات البيع (ضمن المرتجعات — سيارة البيع)"],
+  vanReturnsCost: ["Van returns: cost taken off cost of goods", "مرتجعات سيارات البيع: تكلفة مخصومة من تكلفة البضاعة"],
+  stockWrittenOff: ["Damaged stock written off (in cost of goods)", "بضاعة تالفة مشطوبة (ضمن تكلفة البضاعة)"],
+  damagedSales: ["Damaged stock sold (in sales — Van)", "بضاعة تالفة مباعة (ضمن المبيعات — سيارة البيع)"],
+  vanReturnsCash: ["Van returns paid in cash", "مرتجعات سيارات البيع نقداً"],
+  vanReturnsBank: ["Van returns paid by bank transfer", "مرتجعات سيارات البيع بتحويل بنكي"],
 };
 
+// Sales orders, pending payments / stock, supplier balances (lib/exportExtras.js).
+Object.assign(LISTS, EXTRA_LISTS);
+Object.assign(TITLES, EXTRA_TITLES);
+Object.assign(VALUES, EXTRA_VALUES);
+Object.assign(HEAD, EXTRA_HEAD);
+for (const key of EXTRA_ENUMS) ENUMS.add(key);
+for (const key of EXTRA_MONEY) {
+  MONEY_COLUMNS.add(key);
+  NUMERIC.add(key);
+}
+
+// Analytics and the transactions / expenses history (lib/analyticsExports.js, fix-rc).
+Object.assign(LISTS, ANALYTICS_LISTS);
+Object.assign(TITLES, ANALYTICS_TITLES);
+Object.assign(HEAD, ANALYTICS_HEAD);
+for (const key of ANALYTICS_NUMERIC) NUMERIC.add(key);
+for (const key of ANALYTICS_MONEY) MONEY_COLUMNS.add(key);
+
 async function buildList(list, req, lang) {
+  const extraList = await buildExtraList(list, req, { lang, qatarStamp, pick });
+  if (extraList) return extraList;
+  const analyticsList = await buildAnalyticsList(list, req, { lang, qatarStamp, pick });
+  if (analyticsList) return analyticsList;
   const orgId = req.user.organizationId;
   const q = req.query;
   const hasDates = Boolean(q.from || q.to);
@@ -380,7 +411,7 @@ async function buildList(list, req, lang) {
     subtitle = `${qatarStamp(dates.from, false)} – ${qatarStamp(new Date(dates.to.getTime() - 1), false)}`;
     const L = (key) => LINES[key][lang === "ar" ? 1 : 0];
     const ch = (key) => tr(key, lang);
-    const CH = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION"];
+    const CH = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION", "SALES_ORDER"];
     const mi = s.moneyInDetail;
     const mo = s.moneyOutDetail;
     const rows = [
@@ -388,7 +419,10 @@ async function buildList(list, req, lang) {
       ...CH.map((key) => ({ line: `  ${L("sales")} — ${ch(key)}`, amount: s.channels[key].revenue })),
       { line: L("refunds"), amount: -s.refunds },
       ...CH.map((key) => ({ line: `  ${L("refunds")} — ${ch(key)}`, amount: -s.channels[key].refunds })),
+      { line: `  ${L("vanReturns")}`, amount: -s.vanReturns },
       { line: L("cogs"), amount: -s.cogs },
+      { line: `  ${L("vanReturnsCost")}`, amount: s.vanReturnsCost },
+      { line: `  ${L("stockWrittenOff")}`, amount: -s.stockWrittenOff },
       { line: L("gross"), amount: s.grossProfit },
       { line: L("expenses"), amount: -s.expenses },
       { line: L("result"), amount: s.netProfit },
@@ -401,6 +435,7 @@ async function buildList(list, req, lang) {
       { line: `  ${L("groomingIn")}`, amount: mi.grooming },
       { line: `  ${L("relocation")}`, amount: mi.relocation },
       { line: `  ${L("collections")}`, amount: mi.accountCollections },
+      { line: `  ${L("damagedSales")}`, amount: mi.damagedSales },
       { line: `  ${L("byMethod")}: ${L("methodCash")}`, amount: mi.cash },
       { line: `  ${L("byMethod")}: ${L("methodCard")}`, amount: mi.card },
       { line: `  ${L("byMethod")}: ${L("methodBank")}`, amount: mi.bank },
@@ -410,6 +445,8 @@ async function buildList(list, req, lang) {
       { line: `  ${L("refundsCard")}`, amount: mo.refundsCard },
       { line: `  ${L("refundsBank")}`, amount: mo.refundsBank },
       { line: `  ${L("refundsFawran")}`, amount: mo.refundsFawran },
+      { line: `  ${L("vanReturnsCash")}`, amount: mo.vanReturnsCash },
+      { line: `  ${L("vanReturnsBank")}`, amount: mo.vanReturnsBank },
       { line: `  ${L("supplierCash")}`, amount: mo.supplierPaymentsCash },
       { line: `  ${L("supplierBank")}`, amount: mo.supplierPaymentsBank },
       { line: `  ${L("expensesCash")}`, amount: mo.expensesCash },
@@ -419,6 +456,8 @@ async function buildList(list, req, lang) {
       { line: `  ${L("byMethod")}: ${L("methodBank")}`, amount: mo.bank },
       { line: `  ${L("byMethod")}: ${L("methodFawran")}`, amount: mo.fawran },
       { line: L("net"), amount: s.net },
+      { line: "", amount: "" },
+      ...extraProfitRows(s, lang),
     ];
     return { subtitle, columns: ["line", "amount"], rows };
   }

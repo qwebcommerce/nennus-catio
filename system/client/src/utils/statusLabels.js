@@ -49,6 +49,7 @@ const LABELS = {
     WEBSITE: ["Website", "الموقع"],
     GROOMING: ["Grooming", "التجميل"],
     RELOCATION: ["Relocation", "نقل الحيوانات"],
+    SALES_ORDER: ["B2B / sales orders", "طلبات البيع (B2B)"],
   },
   fulfillment: {
     DELIVERY: ["Delivery", "توصيل"],
@@ -64,6 +65,31 @@ const LABELS = {
     ON_DELIVERY: ["On delivery", "عند الاستلام"],
     ON_ACCOUNT: ["On account", "على الحساب"],
     BANK: ["Bank", "البنك"],
+    BANK_TRANSFER: ["Bank transfer", "تحويل بنكي"],
+  },
+  salesOrder: {
+    DRAFT: ["Draft", "مسودة"],
+    CONFIRMED: ["Confirmed", "مؤكد"],
+    PARTLY_DELIVERED: ["Part delivered", "مُسلَّم جزئياً"],
+    DELIVERED: ["Delivered", "مُسلَّم"],
+    COMPLETED: ["Completed", "مكتمل"],
+    CANCELLED: ["Cancelled", "ملغى"],
+  },
+  paidStatus: {
+    UNPAID: ["Unpaid", "غير مدفوع"],
+    PART_PAID: ["Part paid", "مدفوع جزئياً"],
+    PAID: ["Paid", "مدفوع"],
+  },
+  pendingKind: {
+    SALES_ORDER: ["Sales-order installment", "دفعة طلب بيع"],
+    ON_ACCOUNT: ["On-account balance", "رصيد على الحساب"],
+    SUPPLIER_BILL: ["Supplier bill", "فاتورة مورد"],
+    FREIGHT_BILL: ["Freight bill", "فاتورة شحن"],
+    VAN_RETURN: ["Van return (owed to customer)", "مرتجع سيارة (مستحق للعميل)"],
+  },
+  billKind: {
+    GOODS: ["Goods", "بضاعة"],
+    FREIGHT: ["Freight", "شحن"],
   },
   payStatus: {
     PENDING: ["Pending", "قيد الانتظار"],

@@ -9,6 +9,8 @@ import { useAlertsBadgeCount } from "../../hooks/useAlertsBadgeCount.js";
 import { SidebarIcon } from "../SidebarIcon.jsx";
 import { LanguageSwitcher } from "../LanguageSwitcher.jsx";
 import { FloatingCalculator } from "../FloatingCalculator.jsx";
+import { DispatchNavLinks } from "../DispatchNav.jsx";
+import { PaymentConfirmNavLinks } from "../PaymentConfirmShared.jsx";
 
 const NAV_SECTION_IDS = ["dashboard", "inventory", "customers", "admin"];
 
@@ -19,17 +21,20 @@ function navSectionForPath(pathname) {
     p.startsWith("/dashboard") ||
     p.startsWith("/alerts") ||
     p.startsWith("/reports") ||
-    p.startsWith("/sales")
+    p.startsWith("/analytics") ||
+    (p.startsWith("/sales") && !p.startsWith("/sales-orders"))
   ) {
     return "dashboard";
   }
   if (
     p.startsWith("/products") ||
     p.startsWith("/categories") ||
+    p.startsWith("/sales-orders") ||
     p.startsWith("/cash") ||
     p.startsWith("/purchases") ||
     p.startsWith("/transfer") ||
     p.startsWith("/count") ||
+    p.startsWith("/damaged-stock") ||
     p.startsWith("/returns")
   ) {
     return "inventory";
@@ -111,7 +116,7 @@ function SidebarNavSection({ sectionId, title, icon, expanded, onToggle, t, chil
 }
 
 export function AppLayout() {
-  const { user, logout, isAdmin, isManager, isOrgOwner, can } = useAuth();
+  const { user, logout, isAdmin, isManager, isOrgOwner, can, canModule } = useAuth();
   const {
     branches,
     activeBranchId,
@@ -226,6 +231,27 @@ export function AppLayout() {
         </div>
 
         <nav className="app-sidebar-nav">
+          {/* fix-rb: driver / dispatch links; a DRIVER sees only these, the van till and the cash drawer. */}
+          <DispatchNavLinks />
+          {/* fix-rd: payment confirmations (with count), sales' van returns desk */}
+          <PaymentConfirmNavLinks />
+          {user?.role === "DRIVER" ? (
+            <>
+              {can("pos") ? (
+                <NavLink to="/pos" className={sidebarLinkClass} end>
+                  <SidebarIcon name="pos" />
+                  <span>{t("nav.pos")}</span>
+                </NavLink>
+              ) : null}
+              {can("cashSession") ? (
+                <NavLink to="/cash" className={sidebarLinkClass}>
+                  <SidebarIcon name="funds" />
+                  <span>{t("nav.funds")}</span>
+                </NavLink>
+              ) : null}
+            </>
+          ) : (
+          <>
           <SidebarNavSection
             sectionId="dashboard"
             title={t("nav.section.dashboard")}
@@ -234,14 +260,22 @@ export function AppLayout() {
             onToggle={() => toggleNavSection("dashboard")}
             t={t}
           >
+            {/* fix-ra merge: this link opens the Dashboard, so it is named Dashboard; the one
+                "Analytics" entry is fix-rc's /analytics below. */}
             <NavLink to="/dashboard" className={sidebarLinkClass}>
-              <SidebarIcon name="analytics" />
-              <span>{t("nav.analytics")}</span>
+              <SidebarIcon name="dashboard" />
+              <span>{t("nav.section.dashboard")}</span>
             </NavLink>
             {can("reports") ? (
               <NavLink to="/reports" className={sidebarLinkClass}>
                 <SidebarIcon name="reports" />
                 <span>{t("nav.reports")}</span>
+              </NavLink>
+            ) : null}
+            {canModule("finance", "view") ? (
+              <NavLink to="/analytics" className={sidebarLinkClass}>
+                <SidebarIcon name="analytics" />
+                <span>{t("nav.analytics")}</span>
               </NavLink>
             ) : null}
             {(can("pos") || can("reports")) ? (
@@ -267,6 +301,12 @@ export function AppLayout() {
             <NavLink to="/pos" className={sidebarLinkClass} end>
               <SidebarIcon name="pos" />
               <span>{t("nav.pos")}</span>
+            </NavLink>
+          ) : null}
+          {canModule("b2b", "view") ? (
+            <NavLink to="/pos/b2b" className={sidebarLinkClass}>
+              <SidebarIcon name="purchases" />
+              <span>{t("b2b.title")}</span>
             </NavLink>
           ) : null}
 
@@ -296,6 +336,12 @@ export function AppLayout() {
                 <span>{t("nav.purchases")}</span>
               </NavLink>
             ) : null}
+            {canModule("salesOrders", "view") ? (
+              <NavLink to="/sales-orders" className={sidebarLinkClass}>
+                <SidebarIcon name="purchases" />
+                <span>{t("so.title")}</span>
+              </NavLink>
+            ) : null}
             {can("purchases") ? (
               <NavLink to="/purchase-orders" className={sidebarLinkClass}>
                 <SidebarIcon name="purchases" />
@@ -308,31 +354,31 @@ export function AppLayout() {
                 <span>{t("shop.staffOrders")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("promotions", "view") ? (
               <NavLink to="/promotions" className={sidebarLinkClass}>
                 <SidebarIcon name="coupons" />
                 <span>{t("shop.promotions")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("finance", "view") ? (
               <NavLink to="/finance" className={sidebarLinkClass}>
                 <SidebarIcon name="purchases" />
                 <span>{t("shop.finance")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {(canModule("delivery", "create") || canModule("returns", "view")) ? (
               <NavLink to="/vehicles" className={sidebarLinkClass}>
                 <SidebarIcon name="inventory" />
                 <span>{t("shop.vehicles")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("grooming", "view") ? (
               <NavLink to="/admin/grooming" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
                 <span>{t("shop.grooming")}</span>
               </NavLink>
             ) : null}
-            {(isAdmin || isManager) ? (
+            {canModule("relocation", "view") ? (
               <NavLink to="/admin/relocation" className={sidebarLinkClass}>
                 <SidebarIcon name="categories" />
                 <span>{t("shop.relocation")}</span>
@@ -390,7 +436,7 @@ export function AppLayout() {
                 <span>{t("nav.accounts")}</span>
               </NavLink>
             ) : null}
-            {isAdmin || isManager ? (
+            {canModule("grooming", "view") ? (
               <NavLink to="/appointments" className={sidebarLinkClass}>
                 <SidebarIcon name="appointments" />
                 <span>{t("nav.appointments")}</span>
@@ -436,6 +482,8 @@ export function AppLayout() {
             <SidebarIcon name="settings" />
             <span>{t("nav.settings")}</span>
           </NavLink>
+          </>
+          )}
         </nav>
 
         <div className="app-sidebar-footer">

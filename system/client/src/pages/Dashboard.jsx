@@ -17,12 +17,17 @@ import { DashboardCard } from "../components/DashboardCard.jsx";
 import { TopTenList } from "../components/TopTenList.jsx";
 import { DashIcon } from "../components/DashIcon.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { PendingSummaryCard } from "../components/PendingPanels.jsx";
+import { AnalyticsTodayCard } from "../components/AnalyticsTodayCard.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useActiveBranchId } from "../context/BranchContext.jsx";
 import { usePrintSettings } from "../context/PrintSettingsContext.jsx";
 import { printPaperClass } from "../utils/printPaper.js";
 import { useOrgCurrency } from "../lib/orgCurrency.js";
 import { LowStockList } from "../components/LowStockList.jsx";
+import { DispatchDashboardCards } from "../components/DispatchDashboardCards.jsx";
+import { PaymentConfirmDashboardCard } from "../components/PaymentConfirmShared.jsx";
+import { ForwardArrow } from "../components/ForwardArrow.jsx";
 
 const tooltipStyle = {
   background: "var(--surface)",
@@ -61,6 +66,8 @@ export default function Dashboard() {
   useEffect(() => {
     const q = branchId ? `?branchId=${branchId}` : "";
     const run = async () => {
+      // fix-rb: roles without the till right (supervisor / accountant) see only the cards above.
+      if (!canModule("pos", "view")) return;
       // Load dashboard in small batches — parallel fan-out exhausts Supabase session pools.
       const s = await api(`/api/dashboard/summary${q}`);
       setSummary(s);
@@ -82,10 +89,12 @@ export default function Dashboard() {
       ]);
       setTopServices(Array.isArray(ts) ? ts : []);
       setSalesByEmployees(Array.isArray(se) ? se : []);
-      if (user?.role === "ADMIN" && !branchId) {
+      // Per-location figures: every location of the business (any kind), for the top admin or
+      // anyone with Finance → view, whichever location is active.
+      if (user?.role === "ADMIN" || canModule("finance", "view")) {
         try {
           const bb = await api("/api/dashboard/sales-by-branch");
-          setByBranch(Array.isArray(bb) ? bb : []);
+          setByBranch(Array.isArray(bb) ? bb.map((b) => ({ ...b, label: locale === "en" ? b.nameEn || b.name : b.name })) : []);
         } catch {
           setByBranch([]);
         }
@@ -94,7 +103,7 @@ export default function Dashboard() {
       }
     };
     run().catch(() => {});
-  }, [branchId, user?.role]);
+  }, [branchId, user?.role, locale]);
 
   const lowStockPath = "/purchases";
 
@@ -169,8 +178,12 @@ export default function Dashboard() {
             </Link>
           </div>
         </header>
+        {/* fix-rb: dispatch / driver-approval counts */}
+        <DispatchDashboardCards />
+        {/* fix-rd: money awaiting the accountant's confirmation */}
+        <PaymentConfirmDashboardCard />
 
-        {!summary ? (
+        {!summary && !canModule("pos", "view") ? null : !summary ? (
           <div className="dash-shell-card dash-loading">{t("common.loading")}</div>
         ) : (
           <div className="dash-layout">
@@ -187,6 +200,8 @@ export default function Dashboard() {
                 <div className="dash-mini-kpi"><strong>{summary.waitingOrders || 0}</strong><span>{t("shop.waiting")}</span></div>
                 <div className="dash-mini-kpi"><strong>{summary.todayGrooming || 0}</strong><span>{t("shop.todayGrooming")}</span></div>
               </div>
+              {canModule("finance", "view") ? <PendingSummaryCard /> : null}
+              {canModule("finance", "view") ? <AnalyticsTodayCard /> : null}
               <div className="dash-hero-kpis">
                 <DashboardCard
                   title={t("dashboard.salesTodayValue")}
@@ -249,7 +264,7 @@ export default function Dashboard() {
                   <h3>{t("dashboard.topCustomersMonth")}</h3>
                   <Link to="/customers" className="dash-link-all">
                     {t("dashboard.viewAll")}
-                    <span aria-hidden>→</span>
+                    <ForwardArrow />
                   </Link>
                 </div>
                 {!filteredCustomers.length ? (
@@ -314,7 +329,7 @@ export default function Dashboard() {
               </section>
 
               {byBranch.length > 1 ? (
-                <section className="dash-shell-card dash-chart-card">
+                <section className="dash-shell-card dash-chart-card" data-testid="dash-by-location">
                   <div className="dash-chart-head">
                     <div>
                       <h3>{t("dashboard.chartByBranch")}</h3>
@@ -324,12 +339,24 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height={240}>
                     <BarChart data={byBranch}>
                       <CartesianGrid strokeDasharray="3 8" stroke="var(--chart-grid)" vertical={false} />
-                      <XAxis dataKey="name" tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="label" tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={false} tickLine={false} interval={0} angle={byBranch.length > 6 ? -30 : 0} textAnchor={byBranch.length > 6 ? "end" : "middle"} height={byBranch.length > 6 ? 60 : 30} />
                       <YAxis tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={tooltipStyle} formatter={(v) => [cur(v), t("dashboard.tooltipSales")]} />
-                      <Bar dataKey="value" fill="#2563EB" radius={[10, 10, 10, 10]} maxBarSize={40} />
+                      <Tooltip contentStyle={tooltipStyle} formatter={(v, key) => [cur(v), key === "salesOrders" ? t("dashboard.tooltipSalesOrders") : t("dashboard.tooltipSales")]} />
+                      <Bar dataKey="value" stackId="loc" fill="#2563EB" maxBarSize={40} />
+                      <Bar dataKey="salesOrders" stackId="loc" fill="#38BDF8" radius={[10, 10, 0, 0]} maxBarSize={40} />
                     </BarChart>
                   </ResponsiveContainer>
+                  <ul className="dash-location-list" style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 4, fontSize: 13 }}>
+                    {byBranch.map((b) => (
+                      <li key={b.id} data-location={b.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                        <span>
+                          {b.label} · {t(`branches.kind.${b.kind || "SHOP"}`)}
+                          {b.isMain ? ` · ${t("branches.mainBadge")}` : ""}
+                        </span>
+                        <strong>{cur(b.total)}</strong>
+                      </li>
+                    ))}
+                  </ul>
                 </section>
               ) : null}
 

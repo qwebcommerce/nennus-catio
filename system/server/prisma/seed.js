@@ -31,8 +31,14 @@ async function main() {
       name: "الفرع الرئيسي",
       nameEn: "Main branch",
       address: "المتجر — العنوان",
+      isMain: true,
     },
   });
+
+  // The main location (showroom / store): this one, unless another is main already.
+  if (!(await prisma.branch.count({ where: { organizationId: ORG_ID, isMain: true } }))) {
+    await prisma.branch.update({ where: { id: mainBranch.id }, data: { isMain: true } });
+  }
 
   const north = await prisma.branch.upsert({
     where: { id: "seed-branch-north" },
@@ -81,7 +87,8 @@ async function main() {
       passwordHash: cashierHash,
       name: "كاشير",
       nameEn: "Cashier",
-      role: "CASHIER",
+      // Sales staff (the old "Cashier" role was moved to SALES, migration 20261128100100_roles_data).
+      role: "SALES",
       branchId: mainBranch.id,
     },
   });

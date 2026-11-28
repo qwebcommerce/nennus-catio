@@ -22,3 +22,6 @@ backups/
 
 .vercel
 .env*.local
+
+# Worktree symlinks to dependencies must never be committed
+node_modules

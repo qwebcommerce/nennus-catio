@@ -21,6 +21,7 @@ import {
   assertBarcodeAvailable,
 } from "../lib/productBarcode.js";
 import { productExtrasData, syncProductExtras, syncProductLinks } from "../lib/catalogExtras.js";
+import { parsePiecesPerCarton } from "../lib/stockUnits.js";
 import { assertVersion, requireVersion, versionedUpdate } from "../lib/recordVersion.js";
 import { writeAudit } from "../lib/auditLog.js";
 import { normalizeImage } from "../lib/imageNormalize.js";
@@ -303,6 +304,14 @@ async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft
     const height = optionalDimension(r.heightCm);
     const width = optionalDimension(r.widthCm);
     const depth = optionalDimension(r.depthCm);
+    let piecesPerCarton;
+    try {
+      // Empty cell: leave it as it is (new products have none).
+      piecesPerCarton = r.piecesPerCarton == null || String(r.piecesPerCarton).trim() === "" ? undefined : parsePiecesPerCarton(r.piecesPerCarton);
+    } catch (e) {
+      errors.push({ row: rowNum, message: e.errorEn || e.message });
+      continue;
+    }
 
     const catalog = await resolveCatalogFromExcel(orgId, {
       categoryName: r.category,
@@ -331,6 +340,7 @@ async function runProductImportFromRows({ orgId, userId, branchId, rows, asDraft
       categoryId: catalog.categoryId,
       subcategoryId: catalog.subcategoryId,
       ...(imageUrl ? { imageUrl } : {}),
+      ...(piecesPerCarton !== undefined ? { piecesPerCarton } : {}),
       isActive,
     };
 

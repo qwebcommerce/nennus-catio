@@ -1,6 +1,14 @@
 /** @typedef {'ar' | 'en'} Locale */
 import { fdEntries } from "./translationsFd.js";
 import { pwEntries } from "./translationsPw.js";
+import { soEntries } from "./translationsSo.js";
+import { vrEntries } from "./translationsVr.js";
+import { raEntries } from "./translationsRa.js";
+import { rbEntries } from "./translationsRb.js";
+import { rcEntries } from "./translationsRc.js";
+import { rdEntries } from "./translationsRd.js";
+// fix-re: generated grooming coupons
+import { reEntries } from "./translationsRe.js";
 
 const entries = [
   ["common.loading", "جاري التحميل...", "Loading..."],
@@ -87,7 +95,6 @@ const entries = [
   ["branches.emptyHint", "أضف أول فرع للبدء. الحد يعتمد على خطتك.", "Add your first branch to get started. The limit depends on your plan."],
   ["branches.createFailed", "تعذر إنشاء الفرع", "Could not create branch"],
   ["errors.generic", "حدث خطأ. حاول مرة أخرى.", "Something went wrong. Please try again."],
-  ["errors.BRANCH_LIMIT", "وصلت للحد الأقصى من الفروع لهذه الخطة", "Branch limit reached for this plan"],
   ["errors.LAST_BRANCH", "لا يمكن حذف الفرع الوحيد", "Cannot delete the only branch"],
   ["errors.BRANCH_HAS_DATA", "لا يمكن حذف الفرع لوجود بيانات مرتبطة", "Cannot delete branch while related data exists"],
   ["errors.PLAN_LIMIT_TOO_LOW", "حد الفروع أقل من عدد الفروع الحالي", "Branch limit is lower than the current branch count"],
@@ -879,7 +886,7 @@ const entries = [
   ["appointments.cancel", "إلغاء", "Cancel"],
 
   ["transfer.title", "تحويل بين الفروع", "Inter-branch transfer"],
-  ["transfer.intro", "يُنقص مخزون فرع المصدر ويُزاد في فرع الوجهة مع نقل دفعات الصلاحية (FEFO). يتطلب توفر الكمية في المصدر.", "Decrements source stock, increments destination, and moves expiry lots (FEFO). Quantity must exist at source."],
+  ["transfer.intro", "ينتقل المخزون فور الحفظ: يُنقص من موقع المصدر ويُضاف إلى الوجهة، ويُحفظ سجل التحويل برقم مرجعي. يجب أن تتوفر الكمية في المصدر.", "Stock moves as soon as you save: it leaves the source and arrives at the destination, and the transfer is kept with a reference. The quantity must be at the source."],
   ["transfer.from", "من فرع", "From branch"],
   ["transfer.to", "إلى فرع", "To branch"],
   ["transfer.submit", "تنفيذ التحويل", "Transfer"],
@@ -1169,7 +1176,7 @@ const entries = [
 ];
 
 const ROOT = {};
-for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries]) {
+for (const [path, ar, en] of [...entries, ...fdEntries, ...pwEntries, ...vrEntries, ...soEntries, ...rbEntries, ...rcEntries, ...raEntries, ...rdEntries, ...reEntries]) {
   const parts = path.split(".");
   let cur = ROOT;
   for (let i = 0; i < parts.length - 1; i++) {

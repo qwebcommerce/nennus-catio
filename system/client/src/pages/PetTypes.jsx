@@ -13,7 +13,7 @@ export default function PetTypes() {
   const [form, setForm] = useState({ name: "", nameEn: "" });
   const [areas, setAreas] = useState([]);
   const [windows, setWindows] = useState([]);
-  const emptyArea = { name: "", nameEn: "", city: "", fee: "0" };
+  const emptyArea = { name: "", nameEn: "", city: "", zone: "", fee: "0" };
   const emptyWindow = { label: "", labelEn: "", startTime: "10:00", endTime: "13:00", seats: "4", weekday: "" };
   const [area, setArea] = useState(emptyArea);
   const [windowForm, setWindowForm] = useState(emptyWindow);
@@ -40,6 +40,11 @@ export default function PetTypes() {
     const fee = window.prompt(`${t("shop.edit")}: ${row.name} (QAR)`, String(Number(row.fee).toFixed(2)));
     if (fee == null) return;
     api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { fee: Number(fee), version: row.version } }).then(() => done()).catch(fail);
+  };
+  const editZone = (row) => {
+    const zone = window.prompt(`${t("dsp.zone")}: ${row.name}`, row.zone || "");
+    if (zone == null) return;
+    api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { zone, version: row.version } }).then(() => done()).catch(fail);
   };
   const toggleArea = (row) =>
     api(`/api/delivery-setup/areas/${row.id}`, { method: "PATCH", body: { isActive: !row.isActive, version: row.version } }).then(() => done()).catch(fail);
@@ -88,13 +93,16 @@ export default function PetTypes() {
           <label style={fld}><span>{t("products.nameArField")}</span><input style={inp} required value={area.name} onChange={(e) => setArea({ ...area, name: e.target.value })} /></label>
           <label style={fld}><span>{t("products.nameEnField")}</span><input style={inp} value={area.nameEn} onChange={(e) => setArea({ ...area, nameEn: e.target.value })} /></label>
           <label style={fld}><span>{t("shop.city")}</span><input style={inp} value={area.city} onChange={(e) => setArea({ ...area, city: e.target.value })} /></label>
+          {/* fix-rb: dispatch zone (groups orders on the assignment screen) */}
+          <label style={fld}><span>{t("dsp.zone")}</span><input style={inp} value={area.zone} onChange={(e) => setArea({ ...area, zone: e.target.value })} data-testid="area-zone" /></label>
           <label style={fld}><span>{t("shop.fee")} ({t("common.currency")})</span><input style={inp} type="number" min="0" step="0.01" value={area.fee} onChange={(e) => setArea({ ...area, fee: e.target.value })} /></label>
           <button className="btn-touch" type="submit">{t("common.add")}</button>
         </div>
         {areas.map((row) => (
           <div key={row.id} style={{ ...rowStyle, opacity: row.isActive ? 1 : 0.55 }}>
-            <span>{row.city ? `${row.city} · ` : ""}{locale === "en" ? row.nameEn || row.name : row.name} · {Number(row.fee).toFixed(2)}{row.isActive ? "" : ` · ${t("shop.inactive")}`}</span>
+            <span>{row.city ? `${row.city} · ` : ""}{locale === "en" ? row.nameEn || row.name : row.name} · {Number(row.fee).toFixed(2)}{row.zone ? ` · ${t("dsp.zone")}: ${row.zone}` : ""}{row.isActive ? "" : ` · ${t("shop.inactive")}`}</span>
             <button type="button" onClick={() => editArea(row)}>{t("shop.edit")}</button>
+            <button type="button" onClick={() => editZone(row)}>{t("dsp.zone")}</button>
             <button type="button" onClick={() => toggleArea(row)}>{row.isActive ? t("shop.deactivate") : t("shop.activate")}</button>
           </div>
         ))}

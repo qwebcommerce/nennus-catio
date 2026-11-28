@@ -5,6 +5,9 @@ import { prisma } from "../lib/prisma.js";
 import { authMiddleware, requireModule } from "../middleware/auth.js";
 import { findBranchInOrg } from "../lib/orgScope.js";
 import { writeAudit } from "../lib/auditLog.js";
+import { FILE_SELECT, checkProof } from "../lib/businessFiles.js";
+import { fail } from "../lib/bizError.js";
+import { requireActiveStaff } from "../lib/staffPick.js";
 
 const router = Router();
 router.use(authMiddleware);
@@ -120,6 +123,9 @@ router.get("/transactions", async (req, res) => {
         user: c.createdBy,
         branch: c.branch,
         note: c.note || null,
+        reference: c.reference || null,
+        proofFileId: c.proofFileId || null,
+        confirmStatus: c.confirmStatus,
       })),
     ]
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -151,6 +157,10 @@ router.get("/:customerId/ledger", async (req, res) => {
       sale: { select: { id: true, total: true, createdAt: true, amountDue: true } },
       branch: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
+      proofFile: { select: FILE_SELECT },
+      collectedBy: { select: { id: true, name: true, nameEn: true } },
+      confirmedBy: { select: { id: true, name: true, nameEn: true } },
+      rejectedBy: { select: { id: true, name: true, nameEn: true } },
     },
   });
   res.json({ customer: toApi("Customer", c), entries: toApi("CustomerAccountLedger", entries) });
@@ -167,7 +177,7 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
       return res.status(400).json({ error: "مبلغ غير صالح", errorAr: "مبلغ غير صالح", errorEn: "Enter a valid amount (at most 2 decimals)" });
     }
     const pm = String(paymentMethod || "CASH").toUpperCase();
-    if (!["CASH", "CARD", "ONLINE"].includes(pm)) {
+    if (!["CASH", "CARD", "ONLINE", "BANK_TRANSFER"].includes(pm)) {
       return res.status(400).json({ error: "طريقة دفع غير صالحة" });
     }
     const bid = bodyBranch || req.user.branchId;
@@ -179,6 +189,12 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
 
     const branchOk = await findBranchInOrg(prisma, orgId, bid);
     if (!branchOk) return res.status(400).json({ error: "فرع غير صالح" });
+    let collector = null;
+    try {
+      collector = req.body?.collectedByUserId ? await requireActiveStaff(prisma, orgId, req.body.collectedByUserId) : null;
+    } catch (e) {
+      return res.status(400).json({ error: e.errorAr, errorAr: e.errorAr, errorEn: e.errorEn });
+    }
 
     if (pm === "CASH") {
       const openSession = await prisma.cashSession.findFirst({
@@ -198,14 +214,19 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
 
     try {
       const out = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${customerId} AND "organizationId" = ${orgId} FOR UPDATE`;
         const cust = await tx.customer.findFirst({
           where: { id: customerId, organizationId: orgId },
         });
         if (!cust) throw new Error("العميل غير موجود");
-        const bal = d(cust.accountBalance);
-        if (bal <= 0) throw new Error("لا يوجد رصيد مستحق لهذا العميل");
+        // Proof of payment: required for a bank transfer, optional otherwise (owner decision).
+        const proofFileId = await checkProof(tx, { orgId, userId: req.user.sub, method: pm, proofFileId: req.body?.proofFileId });
+        if (d(cust.accountBalance) <= 0) throw new Error("لا يوجد رصيد مستحق لهذا العميل");
+        // fix-rd: collections awaiting the accountant's confirmation count against the balance
+        // (the same debt is not collected twice); the balance itself drops on confirmation.
+        const bal = d(cust.accountBalance) - d(cust.accountPending);
+        if (bal <= 0) throw fail(400, "ACCOUNT_AWAITING_CONFIRMATION", "الرصيد كله محصّل وبانتظار تأكيد المحاسب", "The whole balance is already collected and waiting for the accountant's confirmation");
         const apply = Math.min(payAmt, bal);
-        const dec = apply;
         const neg = -apply;
 
         await tx.customerAccountLedger.create({
@@ -217,13 +238,17 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
             amount: neg,
             paymentMethod: pm,
             note: note != null && String(note).trim() ? String(note).trim().slice(0, 500) : null,
+            reference: req.body?.reference != null && String(req.body.reference).trim() ? String(req.body.reference).trim().slice(0, 120) : null,
+            proofFileId,
             createdByUserId: req.user.sub,
+            collectedByUserId: collector?.id || req.user.sub,
+            confirmStatus: "PENDING_CONFIRMATION",
           },
         });
 
         const updated = await tx.customer.update({
           where: { id: customerId },
-          data: { accountBalance: { decrement: dec } },
+          data: { accountPending: { increment: apply } },
         });
 
         return { applied: apply, customer: updated };
@@ -236,11 +261,14 @@ router.post("/:customerId/payments", requireModule("finance", "create"),
         entityId: customerId,
         branchId: bid,
         summary: `تحصيل ذمّة ${fmt(out.applied)}`,
-        meta: { paymentMethod: pm },
+        meta: { paymentMethod: pm, confirmStatus: "PENDING_CONFIRMATION" },
       });
 
-      res.json({ applied: riyals(out.applied), customer: toApi("Customer", out.customer) });
+      res.json({ applied: riyals(out.applied), confirmStatus: "PENDING_CONFIRMATION", customer: toApi("Customer", out.customer) });
     } catch (e) {
+      if (e?.errorAr && e?.errorEn) {
+        return res.status(e.status || 400).json({ error: e.errorAr, errorAr: e.errorAr, errorEn: e.errorEn, code: e.code });
+      }
       const msg = e instanceof Error ? e.message : "فشل التحصيل";
       res.status(400).json({ error: msg });
     }

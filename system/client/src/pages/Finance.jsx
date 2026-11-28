@@ -4,13 +4,16 @@ import { useI18n } from "../context/LanguageContext.jsx";
 import { branchDisplayName } from "../utils/displayLabels.js";
 import { statusLabel } from "../utils/statusLabels.js";
 import { formatDateTime, qatarYmd } from "../utils/qatarDate.js";
+import { useSearchParams } from "react-router-dom";
+import { PageTabs } from "../components/BizShared.jsx";
+import { PendingPayments, PendingStock, SupplierBalances } from "../components/PendingPanels.jsx";
 
 function money(n) {
   return Number(n || 0).toFixed(2);
 }
 
-const CHANNELS = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION"];
-const EXPORTS = ["transactions", "profit", "stockvalue", "bills", "payments", "expenses", "cashups", "orders", "bookings", "customers", "products"];
+const CHANNELS = ["IN_STORE", "VAN", "WEBSITE", "GROOMING", "RELOCATION", "SALES_ORDER"];
+const EXPORTS = ["transactions", "profit", "stockvalue", "bills", "payments", "expenses", "cashups", "orders", "bookings", "customers", "products", "salesorders", "pending", "pendingstock", "supplierbalances"];
 
 function Row({ label, value, strong, indent }) {
   return (
@@ -27,6 +30,8 @@ function Row({ label, value, strong, indent }) {
  */
 export default function Finance() {
   const { t, locale } = useI18n();
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") || "overview";
   const today = qatarYmd();
   const [channel, setChannel] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -87,6 +92,21 @@ export default function Finance() {
   return (
     <div className="fd-page">
       <h1>{t("shop.finance")}</h1>
+      {msg ? <div role="alert" className="fd-alert">{msg}</div> : null}
+      <PageTabs
+        value={tab}
+        onChange={(id) => setParams(id === "overview" ? {} : { tab: id })}
+        tabs={[
+          { id: "overview", label: t("so.overview") },
+          { id: "pending", label: t("so.pendingPayments") },
+          { id: "stock", label: t("so.pendingStock") },
+          { id: "balances", label: t("so.supplierBalances") },
+        ]}
+      />
+      {tab === "pending" ? <PendingPayments /> : null}
+      {tab === "stock" ? <PendingStock /> : null}
+      {tab === "balances" ? <SupplierBalances /> : null}
+      {tab === "overview" ? (<>
 
       <div className="fd-filters">
         <label><span>{t("fd.from")}</span><input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></label>
@@ -116,7 +136,13 @@ export default function Finance() {
             {CHANNELS.map((key) => <Row key={key} indent label={statusLabel("channel", key, locale)} value={summary.channels?.[key]?.revenue} />)}
             <Row label={t("shop.refunds")} value={-summary.refunds} />
             {CHANNELS.map((key) => (summary.channels?.[key]?.refunds ? <Row key={key} indent label={statusLabel("channel", key, locale)} value={-summary.channels[key].refunds} /> : null))}
+            {summary.vanReturns ? <Row indent label={t("fd.vanReturns")} value={-summary.vanReturns} /> : null}
             <Row label={t("shop.cogs")} value={-summary.cogs} />
+            {summary.vanReturnsCost ? <Row indent label={t("fd.vanReturnsCost")} value={summary.vanReturnsCost} /> : null}
+            {summary.stockWrittenOff ? <Row indent label={t("fd.stockWrittenOff")} value={-summary.stockWrittenOff} /> : null}
+            {summary.damagedSales ? <Row indent label={t("fd.damagedSales")} value={summary.damagedSales} /> : null}
+            <Row label={t("so.complimentaryLine")} value={-(summary.complimentary || 0)} />
+            {Number(summary.freightOnSold) ? <Row label={t("so.freightOnSold")} value={-summary.freightOnSold} /> : null}
             <Row label={t("shop.gross")} value={summary.grossProfit} strong />
             <Row label={t("shop.expenses")} value={-summary.expenses} />
             <Row label={t("shop.net")} value={summary.netProfit} strong />
@@ -129,8 +155,13 @@ export default function Finance() {
             <Row indent label={t("fd.bankTaken")} value={mi?.bankSales} />
             <Row indent label={t("fd.fawranTaken")} value={mi?.fawranSales} />
             <Row indent label={t("fd.groomingIn")} value={mi?.grooming} />
+            {/* fix-re: coupon discounts given on grooming (information; money in above is already net) */}
+            {Number(summary.couponDiscounts?.total) ? <Row indent label={t("cp.fin.couponDiscounts")} value={summary.couponDiscounts.total} /> : null}
             <Row indent label={t("fd.relocationIn")} value={mi?.relocation} />
             <Row indent label={t("fd.collections")} value={mi?.accountCollections} />
+            {mi?.damagedSales ? <Row indent label={t("fd.damagedSales")} value={mi.damagedSales} /> : null}
+            <Row indent label={t("so.soPaymentsIn")} value={mi?.salesOrders} />
+            <Row indent label={t("so.bankTransferIn")} value={mi?.bankTransfer} />
             {["cash", "card", "bank", "fawran"].map((key) => (
               <Row key={`in-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mi?.[key]} />
             ))}
@@ -139,14 +170,20 @@ export default function Finance() {
             <Row indent label={t("fd.refundsCard")} value={mo?.refundsCard} />
             <Row indent label={t("fd.refundsBank")} value={mo?.refundsBank} />
             <Row indent label={t("fd.refundsFawran")} value={mo?.refundsFawran} />
+            <Row indent label={t("fd.vanReturnsCash")} value={mo?.vanReturnsCash} />
+            <Row indent label={t("fd.vanReturnsBank")} value={mo?.vanReturnsBank} />
             <Row indent label={t("fd.supplierCash")} value={mo?.supplierPaymentsCash} />
             <Row indent label={t("fd.supplierBank")} value={mo?.supplierPaymentsBank} />
+            <Row indent label={t("so.prepaymentsOut")} value={Number(mo?.supplierPrepaymentsCash || 0) + Number(mo?.supplierPrepaymentsBank || 0)} />
             <Row indent label={t("fd.expensesCash")} value={mo?.expensesCash} />
             <Row indent label={t("fd.expensesBank")} value={mo?.expensesBank} />
             {["cash", "card", "bank", "fawran"].map((key) => (
               <Row key={`out-${key}`} indent label={`${t("fd.byMethod")}: ${t(`fd.method.${key}`)}`} value={mo?.[key]} />
             ))}
             <Row label={t("fd.net")} value={summary.net} strong />
+            {/* fix-rd: recorded money the accountant has not confirmed is not in money in. */}
+            {summary.paymentConfirmation ? <Row label={t("pc.financeAwaiting")} value={summary.paymentConfirmation.awaiting} /> : null}
+            {summary.paymentConfirmation && Number(summary.paymentConfirmation.rejected) ? <Row label={t("pc.financeRejected")} value={summary.paymentConfirmation.rejected} /> : null}
             {channel ? <p className="fd-muted">{t("fd.channelNote")}</p> : null}
           </section>
           <section className="card fd-card">
@@ -236,7 +273,7 @@ export default function Finance() {
           ))}
         </div>
       </section>
-      {msg ? <div role="alert" className="fd-alert">{msg}</div> : null}
+      </>) : null}
     </div>
   );
 }

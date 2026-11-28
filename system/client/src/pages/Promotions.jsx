@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import { api, editErrorMessage, isStaleEdit } from "../api/client.js";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { formatDateTime } from "../utils/qatarDate.js";
+// fix-re: Offers | Grooming coupons tabs
+import { PromoTabs } from "./Coupons.jsx";
 
 const KINDS = ["PERCENT", "FIXED", "PRODUCT", "CATEGORY", "BUNDLE", "BOGO"];
 const CHANNELS = ["ALL", "TILL", "WEBSITE", "GROOMING"];
@@ -84,6 +86,7 @@ export default function Promotions() {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <h1>{t("shop.promotions")}</h1>
+      <PromoTabs value="offers" />
       {msg ? <div role="status" className="card" style={{ padding: "8px 12px" }}>{msg}</div> : null}
       <form className="card" style={{ display: "grid", gap: 10 }} onSubmit={submit}>
         <div style={grid}>

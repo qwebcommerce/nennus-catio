@@ -37,9 +37,13 @@ export const VEHICLES = [
 
 /** Staff accounts get a random password nobody knows (never printed or stored anywhere). */
 export const STAFF = [
-  { key: "cashier", name: "مريم الحمادي", nameEn: "Mariam Al Hammadi", email: "demo.cashier@example.com", role: "CASHIER", location: "shop" },
-  { key: "van1", name: "راجيش كومار", nameEn: "Rajesh Kumar", email: "demo.van1@example.com", role: "CASHIER", location: "van1" },
-  { key: "van2", name: "جوزيف سانتوس", nameEn: "Joseph Santos", email: "demo.van2@example.com", role: "CASHIER", location: "van2" },
+  { key: "cashier", name: "مريم الحمادي", nameEn: "Mariam Al Hammadi", email: "demo.cashier@example.com", role: "SALES", location: "shop" },
+  { key: "van1", name: "راجيش كومار", nameEn: "Rajesh Kumar", email: "demo.van1@example.com", role: "DRIVER", location: "van1" },
+  { key: "van2", name: "جوزيف سانتوس", nameEn: "Joseph Santos", email: "demo.van2@example.com", role: "DRIVER", location: "van2" },
+  // fix-ra: the new roles (business-wide, no fixed location).
+  { key: "accountant", name: "فاطمة النعيمي", nameEn: "Fatima Al Nuaimi", email: "demo.accountant@example.com", role: "ACCOUNTANT", location: null },
+  { key: "b2b", name: "عمر الشمري", nameEn: "Omar Al Shammari", email: "demo.b2b@example.com", role: "B2B", location: null },
+  { key: "supervisor", name: "ليلى حسن", nameEn: "Laila Hassan", email: "demo.supervisor@example.com", role: "SUPERVISOR", location: "shop" },
 ];
 
 export const SUPPLIERS = [
@@ -329,12 +333,12 @@ export const HOUSES = [
 ];
 
 export const DELIVERY_AREAS = [
-  { name: "الخليج الغربي", nameEn: "West Bay", fee: "15.00" },
-  { name: "السد", nameEn: "Al Sadd", fee: "15.00" },
-  { name: "اللؤلؤة", nameEn: "The Pearl", fee: "20.00" },
-  { name: "لوسيل", nameEn: "Lusail", fee: "20.00" },
-  { name: "الريان", nameEn: "Al Rayyan", fee: "20.00" },
-  { name: "الوكرة", nameEn: "Al Wakrah", fee: "25.00" },
+  { name: "الخليج الغربي", nameEn: "West Bay", zone: "Doha Centre", fee: "15.00" },
+  { name: "السد", nameEn: "Al Sadd", zone: "Doha Centre", fee: "15.00" },
+  { name: "اللؤلؤة", nameEn: "The Pearl", zone: "North", fee: "20.00" },
+  { name: "لوسيل", nameEn: "Lusail", zone: "North", fee: "20.00" },
+  { name: "الريان", nameEn: "Al Rayyan", zone: "West", fee: "20.00" },
+  { name: "الوكرة", nameEn: "Al Wakrah", zone: "South", fee: "25.00" },
 ];
 
 export const DELIVERY_WINDOWS = [

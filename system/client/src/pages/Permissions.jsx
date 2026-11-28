@@ -4,10 +4,9 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { useToast } from "../context/ToastContext.jsx";
 
-const ROLE_TABS = [
-  { id: "MANAGER", labelKey: "permissions.roleManager" },
-  { id: "CASHIER", labelKey: "permissions.roleEmployee" },
-];
+/** One tab per editable role (the top admin always has everything). Order and labels: */
+const ROLE_ORDER = ["SUPERVISOR", "SALES", "ACCOUNTANT", "B2B", "DRIVER", "MANAGER", "CASHIER"];
+const LEGACY = ["MANAGER", "CASHIER"];
 
 export default function Permissions() {
   const { refreshUser } = useAuth();
@@ -17,27 +16,39 @@ export default function Permissions() {
     const text = t(`perm.${kind}.${key}`);
     return text === `perm.${kind}.${key}` ? key : text;
   };
+  /** An action may have a module-specific name (e.g. b2b → edit = "Cash receipts"). */
+  const actionLabel = (mod, action) => {
+    const own = t(`perm.action.${mod}.${action}`);
+    return own === `perm.action.${mod}.${action}` ? label("action", action) : own;
+  };
   const { showToast } = useToast();
-  const [tab, setTab] = useState("MANAGER");
+  const [tab, setTab] = useState("SUPERVISOR");
+  const [roles, setRoles] = useState(ROLE_ORDER.filter((r) => !LEGACY.includes(r)));
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loadOk, setLoadOk] = useState(false);
-  const [modules, setModules] = useState({ MANAGER: {}, CASHIER: {} });
+  const [modules, setModules] = useState({});
   const [moduleKeys, setModuleKeys] = useState([]);
   const [moduleActions, setModuleActions] = useState([]);
-  const [moduleDefaults, setModuleDefaults] = useState({ MANAGER: {}, CASHIER: {} });
+  /** Some modules use only some actions (e.g. complimentary → create). */
+  const [moduleActionsFor, setModuleActionsFor] = useState({});
+  const [moduleDefaults, setModuleDefaults] = useState({});
   /** NFR-13: version of the organisation row the matrix was loaded from. */
   const [version, setVersion] = useState(null);
 
   const load = async () => {
     const data = await api("/api/permissions");
-    setModules({
-      MANAGER: data?.modules?.MANAGER || {},
-      CASHIER: data?.modules?.CASHIER || {},
-    });
+    const serverRoles = Array.isArray(data?.roles) ? data.roles : ROLE_ORDER;
+    const counts = data?.userCounts || {};
+    // Legacy roles only show while someone still has one.
+    const shown = ROLE_ORDER.filter((r) => serverRoles.includes(r) && (!LEGACY.includes(r) || counts[r] > 0));
+    setRoles(shown);
+    setTab((cur) => (shown.includes(cur) ? cur : shown[0]));
+    setModules(Object.fromEntries(shown.map((r) => [r, data?.modules?.[r] || {}])));
     setModuleKeys(data?.moduleKeys || []);
     setModuleActions(data?.moduleActions || []);
-    setModuleDefaults(data?.moduleDefaults || { MANAGER: {}, CASHIER: {} });
+    setModuleActionsFor(data?.moduleActionsFor || {});
+    setModuleDefaults(data?.moduleDefaults || {});
     setVersion(data?.version ?? null);
     setDirty(false);
     setLoadOk(true);
@@ -90,33 +101,38 @@ export default function Permissions() {
         </p>
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {ROLE_TABS.map((r) => (
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }} role="tablist" aria-label={t("permissions.rolesLabel")}>
+        {roles.map((id) => (
           <button
-            key={r.id}
+            key={id}
             type="button"
+            role="tab"
+            aria-selected={tab === id}
+            data-role={id}
             className="btn-touch"
-            onClick={() => setTab(r.id)}
+            onClick={() => setTab(id)}
             style={{
-              background: tab === r.id ? "var(--accent)" : "var(--surface2)",
-              color: tab === r.id ? "#fff" : "var(--text)",
+              background: tab === id ? "var(--accent)" : "var(--surface2)",
+              color: tab === id ? "#fff" : "var(--text)",
               minHeight: 40,
             }}
           >
-            {t(r.labelKey)}
+            {t(`role.${id}`)}
           </button>
         ))}
       </div>
+      <p style={{ margin: 0, color: "var(--muted)", fontSize: 13 }}>{t(`permissions.roleHint.${tab}`)}</p>
 
       <div className="card" style={{ display: "grid", gap: 8, overflowX: "auto" }}>
         <strong>{t("shop.modules")}</strong>
         {moduleKeys.map((mod) => (
-          <div key={mod} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div key={mod} data-module={mod} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ minWidth: 150 }}>{label("module", mod)}</span>
-            {moduleActions.map((action) => (
+            {(moduleActionsFor[mod] || moduleActions).map((action) => (
               <label key={action} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <input
                   type="checkbox"
+                  data-action={action}
                   checked={Boolean(modules[tab]?.[mod]?.[action])}
                   onChange={(e) => {
                     setModules((prev) => ({
@@ -129,7 +145,7 @@ export default function Permissions() {
                     setDirty(true);
                   }}
                 />
-                {label("action", action)}
+                {actionLabel(mod, action)}
               </label>
             ))}
           </div>

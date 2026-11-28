@@ -41,7 +41,7 @@ model Organization {
   businessVertical BusinessVertical?
   /// FREE | PREMIUM — يتحكم بحد الفروع والميزات لاحقاً
   plan             String   @default("FREE")
-  /// أقصى عدد فروع حسب الخطة (الافتراضي 3 للخطة المجانية)
+  /// Unused: locations are unlimited (client decision, fix-ra). Kept for old rows; nothing reads it.
   maxBranches      Int      @default(3)
   /// صلاحيات دور المدير (JSON object of permissionKey → boolean)
   managerPermissions String?
@@ -73,6 +73,9 @@ model Organization {
   /// Module rights for manager and cashier. Admin always has every action.
   managerModules  String?
   cashierModules  String?
+  /// Module rights per role: { "SUPERVISOR": { module: { action: bool } }, "SALES": {...}, ... }.
+  /// Read first; managerModules / cashierModules are the fallback for MANAGER / CASHIER.
+  roleModules     Json?
 
   /// Onboarding: account created → profile/docs → Stripe payment → complete
   profileDocsDone Boolean @default(false)
@@ -162,6 +165,22 @@ model Organization {
   relocationRequests      RelocationRequest[]
   promotions              Promotion[]
   vehicles                Vehicle[]
+  salesOrders             SalesOrder[]
+  supplierPrepayments     SupplierPrepayment[]
+  businessFiles           BusinessFile[]
+  stockTransfers          StockTransfer[]
+  vanReturns              VanReturn[]
+  vanReturnPhotos         VanReturnPhoto[]
+  vanReturnProofs         VanReturnPaymentProof[]
+  damagedStocks           DamagedStock[]
+  b2bInvoices             B2bInvoice[]
+  b2bReceipts             B2bReceipt[]
+  // fix-rb: drivers / dispatch
+  dispatchJobs            DispatchJob[]
+  dispatchEvents          DispatchEvent[]
+  driverChangeRequests    DriverChangeRequest[]
+  /// fix-re: generated grooming coupon batches (docs/testing/coupons.md)
+  couponBatches CouponBatch[]
 }
 
 /// GCC VAT / tax pack per organization (default rate + receipt currency)
@@ -254,6 +273,10 @@ model Expense {
   category         ExpenseCategory
   amount           Int
   description      String?
+  /// Who was paid (landlord, utility, supplier of small items). Optional.
+  payee            String?
+  /// Receipt / bill number from the payee. Optional, searchable.
+  reference        String?
   /// تاريخ انتماء المصروف للتقارير (يوم/شهر/سنة)
   expenseDate      DateTime
   /// Paid from the cash drawer or from the bank.
@@ -449,11 +472,19 @@ model LoanRepayment {
 }
 
 enum Role {
+  /// Top admin: full access always.
   ADMIN
+  /// Legacy: migrated to SUPERVISOR (20261128100100_roles_data). Still accepted for old rows.
   MANAGER
+  /// Legacy: migrated to SALES (shop) or DRIVER (van staff). Still accepted for old rows.
   CASHIER
   /// Floor sales associate — scan & checkout only (mobile)
   ASSOCIATE
+  SUPERVISOR
+  SALES
+  ACCOUNTANT
+  B2B
+  DRIVER
 }
 
 enum PetType {
@@ -466,6 +497,10 @@ enum LocationKind {
   WAREHOUSE
   SHOP
   VAN
+  /// Production site: holds stock, no till (like a warehouse).
+  FACTORY
+  /// Any other place (kiosk, stall, office). Can run a till.
+  OTHER
 }
 
 enum OrderChannel {
@@ -543,6 +578,8 @@ enum PaymentMethod {
   ON_DELIVERY
   /// بيع كامل على حساب الزبون (ذمّة)
   ON_ACCOUNT
+  /// Customer paid by bank transfer (optional reference; proof required outside the till).
+  BANK_TRANSFER
 }
 
 enum LoyaltyEarnBase {
@@ -666,6 +703,19 @@ model Customer {
   pets           CustomerPet[]
   addresses      CustomerAddress[]
   relocationRequests RelocationRequest[]
+  /// B2B / company customer (sales orders).
+  isBusiness     Boolean      @default(false)
+  companyName    String?
+  salesOrders    SalesOrder[]
+  vanReturns     VanReturn[]
+  b2bInvoices    B2bInvoice[]
+  b2bReceipts    B2bReceipt[]
+  /// When the customer created a website account (set on register; backfilled from createdAt).
+  registeredAt    DateTime?
+  /// fix-rd: account collections recorded but not yet confirmed (accountBalance drops on confirmation).
+  accountPending  Int          @default(0)
+
+  @@index([organizationId, registeredAt])
 }
 
 /// حركات ذمم الزبائن
@@ -690,6 +740,28 @@ model CustomerAccountLedger {
 
   @@index([organizationId, customerId])
   @@index([saleId])
+  /// Transfer number or other payment reference.
+  reference        String?
+  /// Proof of payment (required for bank transfer).
+  proofFileId      String?
+  proofFile        BusinessFile?           @relation("LedgerProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  // fix-rd: payment confirmation. Only PAYMENT entries (collections) are ever PENDING / REJECTED;
+  // sale credits and adjustments are CONFIRMED (the default here).
+  version          Int                     @default(1)
+  confirmStatus    PaymentConfirmStatus    @default(CONFIRMED)
+  collectedByUserId String?
+  collectedBy      User?                   @relation("LedgerCollectedBy", fields: [collectedByUserId], references: [id], onDelete: SetNull)
+  confirmedAt      DateTime?
+  confirmedByUserId String?
+  confirmedBy      User?                   @relation("LedgerConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?                   @relation("LedgerRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+  /// Driver collection: the delivery job it was collected on.
+  dispatchJobId    String?
+
+  @@index([organizationId, confirmStatus])
 }
 
 /// إعدادات برنامج الولاء والاستبدال لكل مؤسسة
@@ -845,6 +917,9 @@ model Branch {
   address        String?
   kind           LocationKind @default(SHOP)
   isActive       Boolean      @default(true)
+  /// The main location (showroom / store). One per organisation (trigger nc_branch_one_main,
+  /// migration 20261128100200_locations).
+  isMain         Boolean      @default(false)
   websiteFor     Organization[] @relation("OrgWebsiteBranch")
   supabaseId     String?
   createdAt      DateTime     @default(now())
@@ -872,8 +947,17 @@ model Branch {
   stockHolds     StockHold[]
   variantStocks  VariantStock[]
   vehicle        Vehicle?
+  transfersOut   StockTransfer[] @relation("StockTransferFrom")
+  transfersIn    StockTransfer[] @relation("StockTransferTo")
+  vanReturns     VanReturn[]     @relation("VanReturnVan")
+  vanReturnsReceived VanReturn[] @relation("VanReturnReceivedAt")
+  damagedStocks  DamagedStock[]
 
   @@unique([organizationId, supabaseId])
+  salesOrders    SalesOrder[]
+  salesOrderPayments SalesOrderPayment[]
+  salesOrderDeliveries SalesOrderDelivery[]
+  b2bReceipts    B2bReceipt[]
 }
 
 model Supplier {
@@ -895,6 +979,11 @@ model Supplier {
   preferredVariants ProductVariant[] @relation("VariantPreferredSupplier")
   purchaseOrders PurchaseOrder[]
   supplierBills  SupplierBill[]
+  /// A freight company: its bills are freight on purchase orders (landed cost).
+  isFreight      Boolean      @default(false)
+  /// Default payment terms in days (Net 30 = 30). Null = due on receipt.
+  paymentTermsDays Int?
+  prepayments    SupplierPrepayment[]
 }
 
 model Account {
@@ -1132,6 +1221,8 @@ model GroomingService {
   updatedAt      DateTime     @updatedAt
   appointments   Appointment[]
   petLinks       GroomingPackagePet[]
+  /// fix-re: coupon batches limited to this package
+  couponBatches  CouponBatchPackage[]
 
   @@index([organizationId, active])
 }
@@ -1174,10 +1265,42 @@ model User {
   purchaseOrdersCreated PurchaseOrder[]
   stockMovements StockMovement[]
   supplierPayments SupplierPayment[]
+  transfersCreated     StockTransfer[] @relation("StockTransferCreatedBy")
+  transfersMoved       StockTransfer[] @relation("StockTransferTransferredBy")
+  transfersAuthorised  StockTransfer[] @relation("StockTransferAuthorisedBy")
+  vanReturnsCollected  VanReturn[]     @relation("VanReturnCollectedBy")
+  vanReturnsCreated    VanReturn[]     @relation("VanReturnCreatedBy")
+  vanReturnsPaid       VanReturn[]     @relation("VanReturnPaidBy")
+  vanReturnsBroughtBack VanReturn[]    @relation("VanReturnBroughtBackBy")
+  vanReturnsReceived   VanReturn[]     @relation("VanReturnReceivedBy")
+  damagedResolved      DamagedStock[]  @relation("DamagedStockResolvedBy")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
   @@unique([organizationId, email])
+  salesOrdersCreated   SalesOrder[]
+  salesOrderPayments   SalesOrderPayment[]
+  salesOrderDeliveries SalesOrderDelivery[]
+  supplierPrepayments  SupplierPrepayment[]
+  businessFilesUploaded BusinessFile[]
+  b2bInvoicesCreated   B2bInvoice[]    @relation("B2bInvoiceCreatedBy")
+  b2bReceiptsCollected B2bReceipt[]    @relation("B2bReceiptCollectedBy")
+  b2bReceiptsRecorded  B2bReceipt[]    @relation("B2bReceiptRecordedBy")
+  // fix-rb: drivers / dispatch
+  dispatchJobsDriving    DispatchJob[]         @relation("DispatchJobDriver")
+  dispatchJobsAssigned   DispatchJob[]         @relation("DispatchJobAssignedBy")
+  dispatchEvents         DispatchEvent[]
+  driverChangesRequested DriverChangeRequest[] @relation("DriverChangeRequestedBy")
+  driverChangesDecided   DriverChangeRequest[] @relation("DriverChangeDecidedBy")
+  // fix-rd: payment confirmation (who collected / confirmed / rejected)
+  soPaymentsCollected    SalesOrderPayment[]     @relation("SoPaymentCollectedBy")
+  soPaymentsConfirmed    SalesOrderPayment[]     @relation("SoPaymentConfirmedBy")
+  soPaymentsRejected     SalesOrderPayment[]     @relation("SoPaymentRejectedBy")
+  b2bReceiptsConfirmed   B2bReceipt[]            @relation("B2bReceiptConfirmedBy")
+  b2bReceiptsRejected    B2bReceipt[]            @relation("B2bReceiptRejectedBy")
+  ledgerCollected        CustomerAccountLedger[] @relation("LedgerCollectedBy")
+  ledgerConfirmed        CustomerAccountLedger[] @relation("LedgerConfirmedBy")
+  ledgerRejected         CustomerAccountLedger[] @relation("LedgerRejectedBy")
 }
 
 model Product {
@@ -1236,9 +1359,14 @@ model Product {
   expiryDate            DateTime?
   /// عدد الأيام قبل التاريخ لبدء التنبيه (إن وُجد تاريخ؛ الافتراضي في المنطق 14)
   expiryAlertDaysBefore Int?
+  /// Optional: pieces in one carton (whole number, 2 or more). Lets staff move or return stock by the carton.
+  piecesPerCarton Int?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   inventories    Inventory[]
+  transferLines  StockTransferLine[]
+  vanReturnLines VanReturnLine[]
+  damagedStocks  DamagedStock[]
   saleItems      SaleItem[]
   refundItems    RefundItem[]
   purchaseItems  PurchaseItem[]
@@ -1252,6 +1380,7 @@ model Product {
   @@unique([organizationId, sku])
   @@unique([organizationId, externalId])
   @@unique([organizationId, barcode])
+  salesOrderLines SalesOrderLine[]
 }
 
 model Inventory {
@@ -1317,10 +1446,20 @@ model Appointment {
   reminders       AppointmentReminder[]
   commissionEntries CommissionEntry[]
   payments        Payment[]
+  /// fix-rb: home visit assigned to a grooming van.
+  dispatchJob     DispatchJob?
+  /// fix-re: generated coupon used on this booking. amount is already net of couponDiscount
+  /// (whole dirhams); couponCode keeps the code as printed.
+  couponCodeId    String?
+  couponCodeRow   CouponCode?       @relation(fields: [couponCodeId], references: [id], onDelete: SetNull)
+  couponCode      String?
+  couponDiscount  Int               @default(0)
+  couponUse       CouponRedemption?
 
   @@index([organizationId, branchId, startAt])
   @@index([organizationId, groomerId, startAt])
   @@index([organizationId, status])
+  @@index([organizationId, startAt])
 }
 
 model AppointmentReminder {
@@ -1416,6 +1555,13 @@ model Sale {
   payments         Payment[]
 
   @@unique([invoiceNumber])
+  @@index([branchId, createdAt])
+  @@index([createdAt])
+  @@index([customerId])
+  /// Why goods on this sale were given free (required when any line is free).
+  freeReason       String?
+  /// fix-rb: delivery job (website delivery or a till sale "for delivery").
+  dispatchJob      DispatchJob?
 }
 
 model HeldCart {
@@ -1452,6 +1598,8 @@ model CashSession {
   note               String?
   sales              Sale[]
   refunds            Refund[]
+  vanReturns         VanReturn[]
+  b2bReceipts        B2bReceipt[]
 }
 
 model AuditLog {
@@ -1489,6 +1637,7 @@ model Refund {
   items            RefundItem[]
 
   @@index([cashSessionId])
+  @@index([branchId, createdAt])
 }
 
 model OfflineInventoryReceipt {
@@ -1654,6 +1803,10 @@ model SaleItem {
   /// الإضافات المختارة للسطر [{key,label,priceDelta}]
   modifiers Json?
   lotUsages SaleItemLot[]
+  /// Complimentary (free) line: no revenue, cost reported as Complimentary.
+  isFree    Boolean  @default(false)
+
+  @@index([saleId])
 }
 
 /// لوتات المخزون (دفعات استلام منفصلة) لتتبع الصلاحية واستهلاك FEFO
@@ -1767,6 +1920,8 @@ model ProductVariant {
   price               Int
   isActive            Boolean   @default(true)
   packWeight          Decimal?
+  /// Optional: pieces (bags) in one carton, 2 or more. Falls back to the product's value.
+  piecesPerCarton     Int?
   preferredSupplierId String?
   preferredSupplier   Supplier? @relation("VariantPreferredSupplier", fields: [preferredSupplierId], references: [id], onDelete: SetNull)
   createdAt           DateTime  @default(now())
@@ -1776,10 +1931,14 @@ model ProductVariant {
   orderLines          PurchaseOrderLine[]
   stockMovements      StockMovement[]
   stockHolds          StockHold[]
+  transferLines       StockTransferLine[]
+  vanReturnLines      VanReturnLine[]
+  damagedStocks       DamagedStock[]
 
   @@unique([organizationId, sku])
   @@unique([organizationId, barcode])
   @@index([productId])
+  salesOrderLines     SalesOrderLine[]
 }
 
 model VariantStock {
@@ -1816,6 +1975,13 @@ model PurchaseOrder {
   bills          SupplierBill[]
 
   @@index([organizationId, status])
+  /// Expected delivery date (pending stock).
+  expectedDate   DateTime?           @db.Date
+  /// Payment terms in days from receipt (Net 30 = 30); paymentDueDate overrides when set.
+  paymentTermsDays Int?
+  paymentDueDate DateTime?           @db.Date
+  prepayments    SupplierPrepayment[]
+  attachments    BusinessFile[]
 }
 
 model PurchaseOrderLine {
@@ -1848,6 +2014,20 @@ model SupplierBill {
   payments       SupplierPayment[]
 
   @@index([organizationId, supplierId, status])
+  /// GOODS (raised on receipt) or FREIGHT (freight company, landed cost on the order).
+  kind           SupplierBillKind   @default(GOODS)
+  dueDate        DateTime?          @db.Date
+  reference      String?
+  note           String?
+  proofFileId    String?
+  proofFile      BusinessFile?      @relation("BillProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  /// FREIGHT: [{ lineId, amount }] share of each order line (by line value).
+  freightAllocation Json?
+  /// FREIGHT: dirhams added to stock unit cost so far / charged as freight on goods already sold.
+  freightCapitalised Int            @default(0)
+  freightExpensed Int               @default(0)
+  userId         String?
+  prepaymentApplications SupplierPrepaymentApplication[]
 }
 
 model SupplierPayment {
@@ -1860,6 +2040,9 @@ model SupplierPayment {
   userId    String
   user      User              @relation(fields: [userId], references: [id])
   note      String?
+  reference String?
+  proofFileId String?
+  proofFile BusinessFile? @relation("SupplierPaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
 }
 
 model StockMovement {
@@ -1877,10 +2060,22 @@ model StockMovement {
   note           String?
   userId         String?
   user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Transfer record this movement belongs to (TRANSFER rows made since transfer records exist).
+  transferId     String?
+  transfer       StockTransfer?  @relation(fields: [transferId], references: [id], onDelete: SetNull)
+  /// Van return this RETURN movement belongs to.
+  vanReturnId    String?
+  vanReturn      VanReturn?      @relation(fields: [vanReturnId], references: [id], onDelete: SetNull)
   createdAt      DateTime        @default(now())
 
   @@index([organizationId, branchId, createdAt])
   @@index([productId])
+  /// SALE movement of a sales-order delivery.
+  salesOrderId   String?
+  salesOrder     SalesOrder?     @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+
+  @@index([transferId])
+  @@index([vanReturnId])
 }
 
 model StockHold {
@@ -1916,10 +2111,13 @@ model DeliveryArea {
   name           String
   nameEn         String?
   city           String?
+  /// fix-rb: dispatch grouping (e.g. "Doha West"); falls back to city, then the area name.
+  zone           String?
   fee            Int          @default(0)
   isActive       Boolean      @default(true)
   sales          Sale[]
   appointments   Appointment[]
+  dispatchJobs   DispatchJob[]
   createdAt      DateTime     @default(now())
 }
 
@@ -2122,12 +2320,17 @@ model Vehicle {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String
   plate          String
+  /// fix-rb: delivery van or grooming van.
+  type           VehicleType  @default(DELIVERY)
   branchId       String?      @unique
   branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
   isActive       Boolean      @default(true)
   notes          String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+  transfers      StockTransfer[]
+  vanReturns     VanReturn[]
+  dispatchJobs   DispatchJob[]
 
   @@index([organizationId, isActive])
 }
@@ -2158,11 +2361,15 @@ model Payment {
   userId              String?
   note                String?
   createdAt           DateTime           @default(now())
+  /// fix-re: generated coupon on the booking this payment paid (the amount is already net).
+  couponCode          String?
+  couponDiscount      Int                @default(0)
 
   @@index([saleId])
   @@index([appointmentId])
   @@index([relocationRequestId])
   @@index([organizationId, status])
+  @@index([organizationId, createdAt])
 }
 
 /// FR-76: server-side SkipCash status lookups (customer return, staff check, expiry sweep).
@@ -2218,4 +2425,896 @@ model DemoRecord {
   createdAt  DateTime @default(now())
 
   @@unique([entityType, entityId])
+}
+
+// ───────────────────────── Sales orders, supplier prepayments, freight, files ─────────────────────────
+
+enum SupplierBillKind {
+  GOODS
+  FREIGHT
+}
+
+enum SalesOrderType {
+  STANDARD
+  B2B
+}
+
+enum B2bInvoiceStatus {
+  ISSUED
+  PART_PAID
+  PAID
+  CANCELLED
+}
+
+/// B2B / Wholesale invoice (INV-000001): one or more delivered delivery notes (B2B sales orders)
+/// of one customer. Its receipts are spread over those orders as SalesOrderPayment rows.
+model B2bInvoice {
+  id               String           @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int              @default(1)
+  organizationId   String
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reference        String           @unique @default(dbgenerated("nc_ref('INV-'::text, 'nc_b2b_invoice_ref_seq'::regclass)"))
+  customerId       String
+  customer         Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  userId           String
+  user             User             @relation("B2bInvoiceCreatedBy", fields: [userId], references: [id], onDelete: Restrict)
+  invoiceDate      DateTime         @db.Date
+  dueDate          DateTime         @db.Date
+  paymentTermsDays Int?
+  /// Sum of the delivery notes' totals (dirhams).
+  total            Int              @default(0)
+  amountPaid       Int              @default(0)
+  /// fix-rd: receipts recorded but not yet confirmed by the accountant (not in amountPaid).
+  amountPending    Int              @default(0)
+  status           B2bInvoiceStatus @default(ISSUED)
+  note             String?
+  cancelReason     String?
+  cancelledAt      DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  orders           SalesOrder[]
+  receipts         B2bReceipt[]
+
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+/// B2B cash receipt (RC-000001) against an invoice: cash or bank transfer (proof required), who
+/// collected it, and the cash session it went into when the collector's location had one open.
+model B2bReceipt {
+  id             String              @id @default(cuid())
+  organizationId String
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reference      String              @unique @default(dbgenerated("nc_ref('RC-'::text, 'nc_b2b_receipt_ref_seq'::regclass)"))
+  invoiceId      String
+  invoice        B2bInvoice          @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customerId     String
+  customer       Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  amount         Int
+  method         PaymentMethod
+  bankReference  String?
+  note           String?
+  paidAt         DateTime            @default(now())
+  proofFileId    String?             @unique
+  proofFile      BusinessFile?       @relation("B2bReceiptProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  collectedById  String
+  collectedBy    User                @relation("B2bReceiptCollectedBy", fields: [collectedById], references: [id], onDelete: Restrict)
+  /// Location the money came in at: the collector's location, else the delivery note's.
+  branchId       String
+  branch         Branch              @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  cashSessionId  String?
+  cashSession    CashSession?        @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  userId         String
+  user           User                @relation("B2bReceiptRecordedBy", fields: [userId], references: [id], onDelete: Restrict)
+  createdAt      DateTime            @default(now())
+  payments       SalesOrderPayment[]
+  // fix-rd: payment confirmation (new receipts start PENDING_CONFIRMATION).
+  version          Int                  @default(1)
+  confirmStatus    PaymentConfirmStatus @default(PENDING_CONFIRMATION)
+  confirmedAt      DateTime?
+  confirmedByUserId String?
+  confirmedBy      User?                @relation("B2bReceiptConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?                @relation("B2bReceiptRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+  dispatchJobId    String?
+
+  @@index([organizationId, confirmStatus])
+  @@index([organizationId, paidAt])
+  @@index([invoiceId])
+  @@index([customerId])
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTLY_DELIVERED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+/// B2B / project order: paid by installments, stock leaves at delivery (revenue and cost at delivery).
+model SalesOrder {
+  id               String                  @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int                     @default(1)
+  organizationId   String
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Short reference staff and customers quote (NC-SO-000001).
+  reference        String                  @unique @default(dbgenerated("nc_ref('NC-SO-'::text, 'nc_sales_order_ref_seq'::regclass)"))
+  customerId       String
+  customer         Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  branchId         String
+  branch           Branch                  @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  userId           String
+  user             User                    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  status           SalesOrderStatus        @default(DRAFT)
+  deliveryDate     DateTime?               @db.Date
+  note             String?
+  /// Payment terms label (e.g. "50% now, 50% in 14 days") and default days.
+  paymentTerms     String?
+  paymentTermsDays Int?
+  /// Sum of paid line amounts before the order discount (dirhams).
+  subtotal         Int                     @default(0)
+  discountAmount   Int                     @default(0)
+  total            Int                     @default(0)
+  amountPaid       Int                     @default(0)
+  /// fix-rd: payments recorded but not yet confirmed (not in amountPaid; they block overpaying).
+  amountPending    Int                     @default(0)
+  /// Revenue recognised so far (delivered value).
+  deliveredRevenue Int                     @default(0)
+  freeReason       String?
+  /// STANDARD sales order, or B2B: a delivery note (dnReference DN-000001) of the B2B / Wholesale
+  /// tab, invoiced on a B2bInvoice and paid by B2bReceipt (see lib/b2b.js).
+  orderType        SalesOrderType          @default(STANDARD)
+  dnReference      String?                 @unique
+  invoiceId        String?
+  invoice          B2bInvoice?             @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  confirmedAt      DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  lines            SalesOrderLine[]
+  installments     SalesOrderInstallment[]
+  payments         SalesOrderPayment[]
+  deliveries       SalesOrderDelivery[]
+  stockMovements   StockMovement[]
+  /// fix-rb: delivery job (driver assignment).
+  dispatchJob      DispatchJob?
+
+  @@index([organizationId, status])
+  @@index([customerId])
+  @@index([invoiceId])
+}
+
+model SalesOrderLine {
+  id                String                   @id @default(cuid())
+  orderId           String
+  order             SalesOrder               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product                  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId         String?
+  variant           ProductVariant?          @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  sortOrder         Int                      @default(0)
+  /// Pieces, or grams for weight goods.
+  quantity          Int
+  quantityDelivered Int                      @default(0)
+  /// Current catalogue price when the line was written; unitPrice may differ (manager override).
+  listPrice         Int
+  unitPrice         Int
+  /// quantity × unitPrice (0 on a free line).
+  subtotal          Int
+  /// Share of the order discount.
+  discountShare     Int                      @default(0)
+  isFree            Boolean                  @default(false)
+  deliveryLines     SalesOrderDeliveryLine[]
+
+  @@index([orderId])
+}
+
+model SalesOrderInstallment {
+  id         String     @id @default(cuid())
+  orderId    String
+  order      SalesOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  seq        Int
+  /// Percent of the total when the plan was given in percent (the amount is authoritative).
+  percent    Decimal?   @db.Decimal(7, 3)
+  amount     Int
+  dueDate    DateTime   @db.Date
+  amountPaid Int        @default(0)
+
+  @@unique([orderId, seq])
+}
+
+model SalesOrderPayment {
+  id          String        @id @default(cuid())
+  orderId     String
+  order       SalesOrder    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  branchId    String
+  branch      Branch        @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  amount      Int
+  method      PaymentMethod
+  reference   String?
+  note        String?
+  paidAt      DateTime      @default(now())
+  proofFileId String?
+  proofFile   BusinessFile? @relation("SalesOrderPaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  /// [{ installmentId, seq, amount }] how this payment was spread over the installments (oldest first).
+  allocation  Json?
+  /// The B2B cash receipt this payment is part of (one receipt can pay several delivery notes).
+  receiptId   String?
+  receipt     B2bReceipt?   @relation(fields: [receiptId], references: [id], onDelete: Restrict)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt   DateTime      @default(now())
+  // fix-rd: payment confirmation. New rows start PENDING_CONFIRMATION; the order's amountPaid and
+  // the installments only count CONFIRMED rows (allocation is set at confirmation).
+  version          Int                  @default(1)
+  confirmStatus    PaymentConfirmStatus @default(PENDING_CONFIRMATION)
+  collectedByUserId String?
+  collectedBy      User?                @relation("SoPaymentCollectedBy", fields: [collectedByUserId], references: [id], onDelete: SetNull)
+  confirmedAt      DateTime?
+  confirmedByUserId String?
+  confirmedBy      User?                @relation("SoPaymentConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?                @relation("SoPaymentRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+  dispatchJobId    String?
+
+  @@index([orderId])
+  @@index([confirmStatus])
+}
+
+/// fix-rd: money collected outside the till drawer flow waits for the accountant.
+enum PaymentConfirmStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  REJECTED
+}
+
+model SalesOrderDelivery {
+  id                String                   @id @default(cuid())
+  orderId           String
+  order             SalesOrder               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  branchId          String
+  branch            Branch                   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  userId            String
+  user              User                     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  note              String?
+  /// Revenue recognised by this delivery, cost of the paid lines, cost of the free lines.
+  revenue           Int                      @default(0)
+  cost              Int                      @default(0)
+  complimentaryCost Int                      @default(0)
+  deliveredAt       DateTime                 @default(now())
+  lines             SalesOrderDeliveryLine[]
+
+  @@index([orderId])
+  @@index([deliveredAt])
+}
+
+model SalesOrderDeliveryLine {
+  id         String             @id @default(cuid())
+  deliveryId String
+  delivery   SalesOrderDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  lineId     String
+  line       SalesOrderLine     @relation(fields: [lineId], references: [id], onDelete: Restrict)
+  quantity   Int
+  revenue    Int
+  unitCost   Int
+  costAmount Int
+  isFree     Boolean            @default(false)
+
+  @@index([deliveryId])
+}
+
+/// Money paid to a supplier against a purchase order before (or without) a bill. Applied to the
+/// order's goods bills when goods are received (SupplierPrepaymentApplication); never a SupplierPayment.
+model SupplierPrepayment {
+  id              String                          @id @default(cuid())
+  organizationId  String
+  organization    Organization                    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplierId      String
+  supplier        Supplier                        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder                   @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+  amount          Int
+  amountApplied   Int                             @default(0)
+  method          SupplierPayMethod
+  reference       String?
+  note            String?
+  paidAt          DateTime                        @default(now())
+  proofFileId     String?
+  proofFile       BusinessFile?                   @relation("PrepaymentProof", fields: [proofFileId], references: [id], onDelete: Restrict)
+  userId          String
+  user            User                            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt       DateTime                        @default(now())
+  applications    SupplierPrepaymentApplication[]
+
+  @@index([organizationId, supplierId])
+  @@index([purchaseOrderId])
+}
+
+model SupplierPrepaymentApplication {
+  id           String             @id @default(cuid())
+  prepaymentId String
+  prepayment   SupplierPrepayment @relation(fields: [prepaymentId], references: [id], onDelete: Cascade)
+  billId       String
+  bill         SupplierBill       @relation(fields: [billId], references: [id], onDelete: Cascade)
+  amount       Int
+  createdAt    DateTime           @default(now())
+
+  @@index([billId])
+}
+
+/// Private business document: PO quotation / invoice attachment or a payment proof (JPEG, PNG, WebP, PDF, at most 10 MB).
+model BusinessFile {
+  id                      String                  @id @default(cuid())
+  organizationId          String
+  organization            Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// PO_ATTACHMENT or PAYMENT_PROOF.
+  purpose                 String
+  purchaseOrderId         String?
+  purchaseOrder           PurchaseOrder?          @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  fileName                String
+  mime                    String
+  size                    Int
+  /// Bytes kept in the database when Supabase Storage is not configured.
+  content                 Bytes?
+  /// Object key in the private "business-documents" bucket.
+  storagePath             String?
+  uploadedByUserId        String?
+  uploadedBy              User?                   @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  createdAt               DateTime                @default(now())
+  ledgerProofs            CustomerAccountLedger[] @relation("LedgerProof")
+  billProofs              SupplierBill[]          @relation("BillProof")
+  supplierPaymentProofs   SupplierPayment[]       @relation("SupplierPaymentProof")
+  salesOrderPaymentProofs SalesOrderPayment[]     @relation("SalesOrderPaymentProof")
+  prepaymentProofs        SupplierPrepayment[]    @relation("PrepaymentProof")
+  b2bReceiptProofs        B2bReceipt[]            @relation("B2bReceiptProof")
+
+  @@index([organizationId, purpose])
+  @@index([purchaseOrderId])
+}
+
+/// Unit a transfer or van-return line was entered in. Stock itself is always pieces (or grams for weight goods).
+enum StockUnit {
+  /// One piece (a bag for pack-size variants).
+  PIECE
+  /// A carton of `piecesPerCarton` pieces.
+  CARTON
+  /// Kilograms of a weight product (stored as grams).
+  KG
+}
+
+/// One-step stock transfer between two locations (stock moves when it is saved).
+model StockTransfer {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Human reference, e.g. TR-000123.
+  reference           String?             @unique @default(dbgenerated("nc_ref('TR-'::text, 'nc_transfer_ref_seq'::regclass)"))
+  fromBranchId        String
+  fromBranch          Branch              @relation("StockTransferFrom", fields: [fromBranchId], references: [id])
+  toBranchId          String
+  toBranch            Branch              @relation("StockTransferTo", fields: [toBranchId], references: [id])
+  createdByUserId     String
+  createdBy           User                @relation("StockTransferCreatedBy", fields: [createdByUserId], references: [id])
+  transferredByUserId String?
+  transferredBy       User?               @relation("StockTransferTransferredBy", fields: [transferredByUserId], references: [id], onDelete: SetNull)
+  authorisedByUserId  String?
+  authorisedBy        User?               @relation("StockTransferAuthorisedBy", fields: [authorisedByUserId], references: [id], onDelete: SetNull)
+  vehicleId           String?
+  vehicle             Vehicle?            @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  /// Vehicle name and plate when the transfer was made (later edits do not rewrite history).
+  vehicleName         String?
+  vehiclePlate        String?
+  note                String?
+  createdAt           DateTime            @default(now())
+  lines               StockTransferLine[]
+  movements           StockMovement[]
+
+  @@index([organizationId, createdAt])
+  @@index([fromBranchId])
+  @@index([toBranchId])
+}
+
+model StockTransferLine {
+  id              String          @id @default(cuid())
+  transferId      String
+  transfer        StockTransfer   @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product         @relation(fields: [productId], references: [id])
+  variantId       String?
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  unit            StockUnit
+  /// Quantity as entered in `unit` (kg may have decimals).
+  enteredQty      Decimal         @db.Decimal(12, 3)
+  /// Pieces per carton used for a CARTON line.
+  piecesPerCarton Int?
+  /// Quantity in stock units: pieces, or grams for weight goods.
+  baseQty         Int
+  /// Source unit cost when moved (whole dirhams per piece, or per kg for weight goods).
+  unitCost        Int?
+  /// Value moved (whole dirhams): baseQty x unitCost, grams x cost per kg / 1000 for weight goods.
+  lineValue       Int             @default(0)
+  fromBefore      Int
+  fromAfter       Int
+  toBefore        Int
+  toAfter         Int
+
+  @@index([transferId])
+  @@index([productId])
+}
+
+enum VanReturnStatus {
+  /// Collected from the customer, still in the van (not sellable stock).
+  IN_VAN
+  /// Converted into a warehouse return at the main store.
+  RECEIVED
+}
+
+enum ReturnCondition {
+  GOOD
+  DAMAGED
+}
+
+enum VanReturnPayStatus {
+  UNPAID
+  PAID
+}
+
+/// How money moved for a van return payment (cash, bank) or a damaged-stock sale (also card).
+enum ReturnMoneyMethod {
+  CASH
+  BANK
+  CARD
+}
+
+/// Goods a van driver collected back from a customer. Not a till refund.
+model VanReturn {
+  id                  String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version             Int                @default(1)
+  organizationId      String
+  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Human reference, e.g. VR-000045.
+  reference           String?            @unique @default(dbgenerated("nc_ref('VR-'::text, 'nc_van_return_ref_seq'::regclass)"))
+  status              VanReturnStatus    @default(IN_VAN)
+  vanBranchId         String
+  vanBranch           Branch             @relation("VanReturnVan", fields: [vanBranchId], references: [id])
+  vehicleId           String?
+  vehicle             Vehicle?           @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  vehicleName         String?
+  vehiclePlate        String?
+  customerId          String?
+  customer            Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerName        String?
+  customerPhone       String?
+  collectedByUserId   String
+  collectedBy         User               @relation("VanReturnCollectedBy", fields: [collectedByUserId], references: [id])
+  createdByUserId     String
+  createdBy           User               @relation("VanReturnCreatedBy", fields: [createdByUserId], references: [id])
+  collectedAt         DateTime           @default(now())
+  /// Owed to the customer, whole dirhams (0 allowed).
+  amountOwed          Int                @default(0)
+  note                String?
+  paymentStatus       VanReturnPayStatus @default(UNPAID)
+  paidMethod          ReturnMoneyMethod?
+  paidReference       String?
+  paidByUserId        String?
+  paidBy              User?              @relation("VanReturnPaidBy", fields: [paidByUserId], references: [id], onDelete: SetNull)
+  paidAt              DateTime?
+  /// Van till session the cash left from (cash payments only). Expected cash at close subtracts it.
+  cashSessionId       String?
+  cashSession         CashSession?       @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  receivedBranchId    String?
+  receivedBranch      Branch?            @relation("VanReturnReceivedAt", fields: [receivedBranchId], references: [id])
+  receivedAt          DateTime?
+  broughtBackByUserId String?
+  broughtBackBy       User?              @relation("VanReturnBroughtBackBy", fields: [broughtBackByUserId], references: [id], onDelete: SetNull)
+  receivedByUserId    String?
+  receivedBy          User?              @relation("VanReturnReceivedBy", fields: [receivedByUserId], references: [id], onDelete: SetNull)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  lines               VanReturnLine[]
+  photos              VanReturnPhoto[]
+  paymentProof        VanReturnPaymentProof?
+  movements           StockMovement[]
+  damagedStocks       DamagedStock[]
+
+  @@index([organizationId, status])
+  @@index([vanBranchId, createdAt])
+  @@index([receivedAt])
+  @@index([paidAt])
+  @@index([cashSessionId])
+}
+
+model VanReturnLine {
+  id              String          @id @default(cuid())
+  vanReturnId     String
+  vanReturn       VanReturn       @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product         @relation(fields: [productId], references: [id])
+  variantId       String?
+  variant         ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  unit            StockUnit
+  enteredQty      Decimal         @db.Decimal(12, 3)
+  piecesPerCarton Int?
+  /// Pieces, or grams for weight goods.
+  baseQty         Int
+  condition       ReturnCondition
+  /// Evidence photo (required for a damaged line).
+  photoId         String?
+  photo           VanReturnPhoto? @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  /// Cost per unit at receipt (whole dirhams; per kg for weight goods).
+  unitCost        Int?
+  /// Cost reversed at receipt (whole dirhams).
+  costAmount      Int?
+  damagedStock    DamagedStock?
+
+  @@index([vanReturnId])
+  @@index([productId])
+}
+
+/// Evidence photo of a returned line, re-encoded as WebP without metadata. Private.
+model VanReturnPhoto {
+  id             String          @id @default(cuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId    String
+  vanReturn      VanReturn       @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  mime           String
+  size           Int
+  width          Int?
+  height         Int?
+  /// Bytes in the database when file storage is off.
+  content        Bytes?
+  /// Object key in the private "van-return-photos" bucket.
+  storagePath    String?
+  createdAt      DateTime        @default(now())
+  lines          VanReturnLine[]
+  damagedStocks  DamagedStock[]
+
+  @@index([vanReturnId])
+}
+
+enum DamagedStockStatus {
+  /// Kept out of sale, waiting for the owner.
+  HELD
+  WRITTEN_OFF
+  SOLD
+}
+
+/// Damaged goods from a received van return. Never part of sellable stock.
+model DamagedStock {
+  id               String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int                @default(1)
+  organizationId   String
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId      String
+  vanReturn        VanReturn          @relation(fields: [vanReturnId], references: [id])
+  vanReturnLineId  String             @unique
+  vanReturnLine    VanReturnLine      @relation(fields: [vanReturnLineId], references: [id])
+  /// Where the damaged goods are kept.
+  branchId         String
+  branch           Branch             @relation(fields: [branchId], references: [id])
+  productId        String
+  product          Product            @relation(fields: [productId], references: [id])
+  variantId        String?
+  variant          ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  /// Pieces, or grams for weight goods.
+  quantity         Int
+  unitCost         Int?
+  /// Cost of the goods (whole dirhams).
+  costAmount       Int                @default(0)
+  photoId          String?
+  photo            VanReturnPhoto?    @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  status           DamagedStockStatus @default(HELD)
+  /// Reduced-price sale: amount (whole dirhams) and how it was paid.
+  saleAmount       Int?
+  saleMethod       ReturnMoneyMethod?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  resolvedBy       User?              @relation("DamagedStockResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  resolveNote      String?
+  createdAt        DateTime           @default(now())
+
+  @@index([organizationId, status])
+  @@index([branchId])
+  @@index([resolvedAt])
+}
+
+/// Proof of a van-return payment (required for a bank transfer, optional for cash). Private.
+/// Images are re-encoded as WebP without metadata; PDFs are kept as sent (checked by their bytes).
+model VanReturnPaymentProof {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vanReturnId    String       @unique
+  vanReturn      VanReturn    @relation(fields: [vanReturnId], references: [id], onDelete: Cascade)
+  fileName       String
+  mime           String
+  size           Int
+  /// Bytes in the database when file storage is off.
+  content        Bytes?
+  /// Object key in the private "van-return-proofs" bucket.
+  storagePath    String?
+  createdAt      DateTime     @default(now())
+}
+
+// ------------------------------------------------------------------ fix-rb: drivers / dispatch
+
+enum VehicleType {
+  DELIVERY
+  GROOMING
+}
+
+/// What a delivery job delivers: a website order, a till sale for delivery, a sales order, or a
+/// home-visit grooming booking (grooming vans only).
+enum DispatchKind {
+  WEB_ORDER
+  POS_DELIVERY
+  SALES_ORDER
+  GROOMING
+}
+
+enum DispatchStatus {
+  UNASSIGNED
+  ASSIGNED
+  ACCEPTED
+  DECLINED
+  DELIVERED
+  CANCELLED
+}
+
+enum DispatchEventType {
+  ASSIGNED
+  REASSIGNED
+  UNASSIGNED
+  SEEN
+  ACCEPTED
+  DECLINED
+  DELIVERED
+  CLOSED
+  CHANGE_REQUESTED
+  CHANGE_APPROVED
+  CHANGE_REJECTED
+  EDITED
+  /// fix-rd: the driver recorded money collected for the order.
+  PAYMENT_COLLECTED
+}
+
+enum DriverChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// One delivery job per order / booking: who it is assigned to (driver and van) and where it goes.
+model DispatchJob {
+  id               String                @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version          Int                   @default(1)
+  organizationId   String
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  kind             DispatchKind
+  status           DispatchStatus        @default(UNASSIGNED)
+  saleId           String?               @unique
+  sale             Sale?                 @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  salesOrderId     String?               @unique
+  salesOrder       SalesOrder?           @relation(fields: [salesOrderId], references: [id], onDelete: Restrict)
+  appointmentId    String?               @unique
+  appointment      Appointment?          @relation(fields: [appointmentId], references: [id], onDelete: Restrict)
+  vehicleId        String?
+  vehicle          Vehicle?              @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driverUserId     String?
+  driver           User?                 @relation("DispatchJobDriver", fields: [driverUserId], references: [id], onDelete: SetNull)
+  /// Where and when (copied from the order when the job is made; dispatch / approved driver edits change it).
+  address          String?
+  areaId           String?
+  area             DeliveryArea?         @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  deliveryDate     DateTime?             @db.Date
+  timeNote         String?
+  note             String?
+  assignedAt       DateTime?
+  assignedByUserId String?
+  assignedBy       User?                 @relation("DispatchJobAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  seenAt           DateTime?
+  acceptedAt       DateTime?
+  declinedAt       DateTime?
+  declineReason    String?
+  deliveredAt      DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  events           DispatchEvent[]
+  changeRequests   DriverChangeRequest[]
+
+  @@index([organizationId, status])
+  @@index([vehicleId, status])
+}
+
+/// Assignment history: every assign, reassign, unassign, seen, accept, decline, delivery and change request.
+model DispatchEvent {
+  id             String            @id @default(cuid())
+  organizationId String
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobId          String
+  job            DispatchJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type           DispatchEventType
+  userId         String?
+  user           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Driver / van the event concerns (names in meta, so later edits do not rewrite history).
+  driverUserId   String?
+  vehicleId      String?
+  note           String?
+  meta           Json?
+  createdAt      DateTime          @default(now())
+
+  @@index([jobId, createdAt])
+}
+
+/// A driver's edit of an assigned order. Applied only when a supervisor / accountant (or admin) approves it.
+model DriverChangeRequest {
+  id                String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version           Int                @default(1)
+  organizationId    String
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobId             String
+  job               DispatchJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status            DriverChangeStatus @default(PENDING)
+  requestedByUserId String
+  requestedBy       User               @relation("DriverChangeRequestedBy", fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  /// { lines: [{ lineId, quantity }], note, address, timeNote, deliveryDate }
+  changes           Json
+  /// The order as the driver saw it (line quantities, address, ...) — approval checks it is unchanged.
+  before            Json
+  reason            String?
+  decidedByUserId   String?
+  decidedBy         User?              @relation("DriverChangeDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  decidedAt         DateTime?
+  decisionNote      String?
+  /// What approval changed (order version, totals before / after).
+  applied           Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([organizationId, status])
+  @@index([jobId])
+}
+
+// ---------------------------------------------------------------------------------------------
+// fix-re: generated grooming coupons (docs/testing/coupons.md). A batch holds N unique codes;
+// each use of a code is a CouponRedemption (HELD while a website booking waits for payment,
+// COMMITTED when paid / booked at the desk, RELEASED when the booking is cancelled unpaid).
+// Money columns are whole dirhams (NFR-03).
+
+enum CouponDiscountType {
+  PERCENT
+  AMOUNT
+}
+
+enum CouponBatchChannel {
+  WEBSITE
+  DESK
+  BOTH
+}
+
+enum CouponUseChannel {
+  WEBSITE
+  DESK
+}
+
+enum CouponUseStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}
+
+model CouponBatch {
+  id                  String               @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version             Int                  @default(1)
+  organizationId      String
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                String
+  nameEn              String?
+  prefix              String?
+  discountType        CouponDiscountType
+  /// Whole percent 1–100 (PERCENT).
+  percent             Int?
+  /// Whole dirhams (AMOUNT).
+  amount              Int?
+  /// true = every grooming package; otherwise the packages in `packages`.
+  allPackages         Boolean              @default(false)
+  /// Valid from the start of validFrom's Qatar day until the end of validUntil's Qatar day.
+  validFrom           DateTime
+  validUntil          DateTime
+  codeCount           Int
+  usesPerCode         Int                  @default(1)
+  onePerCustomer      Boolean              @default(false)
+  /// Optional minimum booking value (package + home-visit fee), whole dirhams.
+  minAmount           Int?
+  channel             CouponBatchChannel   @default(BOTH)
+  /// Cancelling a PAID booking gives the use back only when this is on (default off).
+  releaseOnPaidCancel Boolean              @default(false)
+  active              Boolean              @default(true)
+  createdByUserId     String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  packages            CouponBatchPackage[]
+  codes               CouponCode[]
+  redemptions         CouponRedemption[]
+
+  @@index([organizationId, createdAt])
+}
+
+model CouponBatchPackage {
+  batchId   String
+  batch     CouponBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   GroomingService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@id([batchId, serviceId])
+  @@index([serviceId])
+}
+
+model CouponCode {
+  id             String             @id @default(cuid())
+  /// NFR-13: optimistic-lock version, bumped on every write
+  version        Int                @default(1)
+  organizationId String
+  batchId        String
+  batch          CouponBatch        @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  /// As printed, e.g. GROOM-7KQ4-X9PM.
+  code           String
+  /// Upper-case letters and digits only: what a typed code is matched on (case and dashes ignored).
+  codeKey        String
+  /// Uses allowed (copied from the batch) and uses taken (HELD + COMMITTED): one guarded UPDATE
+  /// "usedCount < maxUses" claims a use, so parallel bookings cannot over-use a code.
+  maxUses        Int                @default(1)
+  usedCount      Int                @default(0)
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  redemptions    CouponRedemption[]
+  appointments   Appointment[]
+
+  @@unique([organizationId, codeKey])
+  @@index([batchId])
+}
+
+model CouponRedemption {
+  id             String           @id @default(cuid())
+  organizationId String
+  batchId        String
+  batch          CouponBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  codeId         String
+  codeRow        CouponCode       @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  appointmentId  String           @unique
+  appointment    Appointment      @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  customerId     String?
+  channel        CouponUseChannel
+  status         CouponUseStatus  @default(HELD)
+  /// Booking value before the coupon and the coupon discount (whole dirhams).
+  grossAmount    Int
+  discount       Int
+  /// "<batchId>:<customerId>" while a one-per-customer use is live (HELD / COMMITTED), else null:
+  /// the unique index stops one customer holding two uses of such a batch, even in parallel.
+  customerKey    String?          @unique
+  userId         String?
+  createdAt      DateTime         @default(now())
+  committedAt    DateTime?
+  releasedAt     DateTime?
+  releaseReason  String?
+
+  @@index([batchId, status])
+  @@index([codeId])
+  @@index([organizationId, createdAt])
 }
