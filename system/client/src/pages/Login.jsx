@@ -1,5 +1,7 @@
 import React, { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+// fix-rf: each role lands on its own home page (lib/menuDefinition.js ROLE_HOMES)
+import { homePath, userContext } from "../lib/menuDefinition.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import { useI18n } from "../context/LanguageContext.jsx";
 import { AuthShell } from "../marketing/AuthShell.jsx";
@@ -11,6 +13,9 @@ export default function Login() {
   const { t, locale } = useI18n();
   const c = useMarketingCopy(locale);
   const nav = useNavigate();
+  const location = useLocation();
+  // A deep link that sent the user here (Protected) wins over the role's home page.
+  const from = typeof location.state?.from === "string" && location.state.from.startsWith("/") && !location.state.from.startsWith("//") ? location.state.from : "";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
@@ -24,7 +29,7 @@ export default function Login() {
     );
   }
   if (user) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={from || homePath(userContext(user))} replace />;
   }
 
   const submit = async (e) => {
@@ -32,8 +37,8 @@ export default function Login() {
     setErr("");
     setDbUrlInfo(null);
     try {
-      await login(email, password);
-      nav("/dashboard", { replace: true });
+      const signedIn = await login(email, password);
+      nav(from || homePath(userContext(signedIn)), { replace: true });
     } catch (x) {
       setErr(x.message || t("login.failed"));
       const info = x?.data?.urlInfo;
