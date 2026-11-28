@@ -12,9 +12,8 @@ import { FloatingCalculator } from "../FloatingCalculator.jsx";
 import { useDispatchNavBadges } from "../DispatchNav.jsx";
 import { usePendingConfirmations } from "../PaymentConfirmShared.jsx";
 // fix-rf: the menu is one data definition (lib/menuDefinition.js), shared with the role landing
-// pages, the admin's menu preview and the "Who sees what" guide.
-import { MENU_LEGACY_ROLES, MENU_ROLES, sectionForPath } from "../../lib/menuDefinition.js";
-import { setMenuPreview } from "../../lib/menuPreview.js";
+// pages and the "Who sees what" guide.
+import { sectionForPath } from "../../lib/menuDefinition.js";
 import { useStaffMenu } from "../../hooks/useStaffMenu.js";
 
 const sidebarLinkClass = ({ isActive }) =>
@@ -93,44 +92,8 @@ function MenuLink({ item, t, badge }) {
   );
 }
 
-/** fix-rf: the top admin's "Preview menu as" picker (navigation only). */
-function MenuPreviewPicker({ user, previewRole, t }) {
-  return (
-    <div className="app-sidebar-branch app-sidebar-preview">
-      <span className="app-sidebar-branch-kicker">{t("menu.preview.label")}</span>
-      <div className="app-sidebar-branch-control">
-        <span className="app-sidebar-branch-ico" aria-hidden="true">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        </span>
-        <select
-          value={previewRole}
-          onChange={(e) => setMenuPreview(user.id, e.target.value)}
-          aria-label={t("menu.preview.label")}
-          title={t("menu.preview.tooltip")}
-          data-testid="menu-preview-select"
-        >
-          <option value="">{t("menu.preview.off")}</option>
-          {MENU_ROLES.filter((r) => r !== "ADMIN").map((r) => (
-            <option key={r} value={r}>
-              {t(`role.${r}`)}{MENU_LEGACY_ROLES.includes(r) ? ` — ${t("menu.guide.legacy")}` : ""}
-            </option>
-          ))}
-        </select>
-        <span className="app-sidebar-branch-chevron" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
-            <path d="m6 9 6 6 6-6" />
-          </svg>
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function AppLayout() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout } = useAuth();
   const {
     branches,
     activeBranchId,
@@ -140,23 +103,21 @@ export function AppLayout() {
   const { t, locale } = useI18n();
   const nav = useNavigate();
   const location = useLocation();
-  const { menu, realCtx, previewRole, previewReady, previewError } = useStaffMenu();
+  const { menu, realCtx } = useStaffMenu();
 
-  // Badges poll with the user's real rights (hidden while previewing another role's menu).
+  // Badges poll with the user's own rights.
   const { count: alertsBadge } = useAlertsBadgeCount();
   const dispatchBadges = useDispatchNavBadges({
     driverUnseen: realCtx.canModule("driver", "view") && realCtx.isVanUser && user?.role !== "ADMIN",
     approvals: realCtx.canModule("driverApprovals", "view"),
   });
   const confirmData = usePendingConfirmations(realCtx.canModule("paymentConfirm", "view"));
-  const badges = previewRole
-    ? {}
-    : {
-        alerts: alertsBadge,
-        driverUnseen: dispatchBadges.driverUnseen,
-        approvals: dispatchBadges.approvals,
-        confirmations: confirmData?.pending || 0,
-      };
+  const badges = {
+    alerts: alertsBadge,
+    driverUnseen: dispatchBadges.driverUnseen,
+    approvals: dispatchBadges.approvals,
+    confirmations: confirmData?.pending || 0,
+  };
 
   const isPosRoute = location.pathname === "/pos";
 
@@ -256,10 +217,9 @@ export function AppLayout() {
               </div>
             </div>
           ) : null}
-          {isAdmin ? <MenuPreviewPicker user={user} previewRole={previewRole} t={t} /> : null}
         </div>
 
-        <nav className="app-sidebar-nav" data-testid="app-menu" data-preview-role={previewRole || undefined}>
+        <nav className="app-sidebar-nav" data-testid="app-menu">
           {menu.map((section) =>
             section.id === null ? (
               // A role with its own short menu (DRIVER): plain links, no sections.
@@ -318,19 +278,6 @@ export function AppLayout() {
 
       <div className="app-main-wrap">
         <OfflineBanner />
-        {previewRole ? (
-          <div className="menu-preview-banner" role="status" data-testid="menu-preview-banner" title={t("menu.preview.tooltip")}>
-            <span>
-              <strong>{t("menu.preview.banner", { role: t(`role.${previewRole}`) })}</strong>
-              <span className="menu-preview-banner__hint">
-                {previewError ? previewError : previewReady ? t("menu.preview.hint") : t("common.loading")}
-              </span>
-            </span>
-            <button type="button" className="btn-touch menu-preview-banner__exit" onClick={() => setMenuPreview(null, null)} data-testid="menu-preview-exit">
-              {t("menu.preview.exit")}
-            </button>
-          </div>
-        ) : null}
         <main className={`app-main-content${isPosRoute ? " app-main-content--pos-wide" : ""}`}>
           <Outlet />
         </main>

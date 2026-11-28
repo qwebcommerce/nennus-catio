@@ -4420,38 +4420,6 @@ html:not([data-theme="light"]) .accounts-kind--collect {
 .app-sidebar-badge--section {
   margin-inline-start: 0.35rem;
 }
-.app-sidebar-preview select {
-  font-size: 0.85rem;
-}
-.menu-preview-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin: 10px 14px 0;
-  padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--warning) 60%, transparent);
-  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
-  color: var(--text);
-  min-width: 0;
-}
-.menu-preview-banner > span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.menu-preview-banner__hint {
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-.menu-preview-banner__exit {
-  background: var(--accent);
-  color: #fff;
-  min-height: 38px;
-}
 .menu-guide {
   display: flex;
   flex-direction: column;
@@ -4561,9 +4529,6 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   }
   .menu-guide__section th {
     background: #eee !important;
-  }
-  .menu-preview-banner {
-    display: none !important;
   }
 }
 /* ---- fix-rg: printable documents (purchase order, status sheet, vouchers, SO receipt / delivery note) ---- */

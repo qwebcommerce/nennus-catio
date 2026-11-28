@@ -5,7 +5,6 @@ import {
   setCachedSessionUser,
 } from "../lib/sessionUserCache.js";
 import { resolveClientPermissions } from "../lib/permissions.js";
-import { clearMenuPreview } from "../lib/menuPreview.js";
 
 const AuthContext = createContext(null);
 
@@ -76,8 +75,6 @@ export function AuthProvider({ children }) {
 
   const logout = () => {
     api("/api/auth/logout", { method: "POST" }).catch(() => {});
-    // fix-rf: the admin's menu preview ends with the session.
-    clearMenuPreview();
     setCachedSessionUser(null);
     setUser(null);
   };

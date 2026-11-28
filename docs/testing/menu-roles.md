@@ -1,9 +1,9 @@
-# Menu workspaces, role menus, menu preview and "Who sees what" (fix-rf)
+# Menu workspaces, role menus and "Who sees what" (fix-rf)
 
 The staff sidebar was one long "Inventory" section plus loose links injected at the top
 (dispatch, driver approvals, payment confirmations, van returns). It is now built from **one data
-definition**, `client/src/lib/menuDefinition.js`, which also drives each role's landing page, the
-top admin's **Preview menu as role** and the **Who sees what** page (`/permissions/guide`).
+definition**, `client/src/lib/menuDefinition.js`, which also drives each role's landing page and the
+**Who sees what** page (`/permissions/guide`).
 Routes and route guards are unchanged; only the menu moved. No schema change, no migration.
 
 ## The definition
@@ -23,7 +23,7 @@ a visibility rule `show`, optionally `route` (the route guard, when it differs f
 Other exports: `ROLE_MENUS` (roles with a short flat menu: `DRIVER: ["driver", "pos", "cash"]`),
 `ROLE_HOMES` (landing page per role), `visibleMenu(ctx)`, `homePath(ctx)`, `sectionForPath`,
 `accessMatrix(roleMaps)` (the guide), `userContext(user, ownBranchKind)` (the signed-in user, same
-checks as `AuthContext.can/canModule`) and `roleContext(role, moduleMap)` (preview and guide).
+checks as `AuthContext.can/canModule`) and `roleContext(role, moduleMap)` (guide).
 
 Data-testids kept: `nav-driver`, `nav-dispatch`, `nav-approvals`, `nav-confirmations`,
 `nav-van-returns` and their `-badge`s. Every other link is `nav-<id>` with `data-nav-id`; sections
@@ -79,27 +79,10 @@ Dashboard. Used after signing in, when a signed-in user opens `/login`, and for 
 **Deep links:** a signed-out user opening a staff URL is sent to the login page, which now returns to
 that URL after signing in (before, everyone went to `/dashboard`).
 
-## Preview menu as role (top admin)
+## Preview menu as role (removed)
 
-- Picker "Preview menu as" in the sidebar header (top admin only), and "Preview this role's menu"
-  on the Permissions screen and on the guide.
-- The menu is computed with `roleContext(role, map)` from `GET /api/role-menus` (below), so it is
-  exactly the role's menu; a role preview assumes drivers are van users and nobody else is (a
-  preview cannot know a user's location; a legacy cashier at a van also gets My van in reality).
-- Banner at the top of every screen: "Previewing menu as: Driver — Exit preview", with the tooltip
-  and hint "Menu preview only: screens you open still use your own (top admin) rights."
-- Navigation only: it changes the links shown, never the admin's rights, route guards or the API.
-  Badges are hidden during a preview (they would show the admin's counts). Page actions are not
-  hidden.
-- Kept in `sessionStorage` with the admin's user id: survives navigation and reload in that tab;
-  signing out clears it, and it never applies to another user.
-
-### `GET /api/role-menus`
-
-Read-only, top admin (`role === "ADMIN"`, owner or not; others 403 `ADMIN_ONLY` in both languages).
-Returns `roles`, `editableRoles`, `legacyRoles`, `userCounts` (active users per role),
-`modules` (per role, exactly `resolveModulePermissions(org, role)`) and `permissions` (legacy keys).
-New file `server/src/routes/roleMenus.js`, mounted in `app.js`; error pair added to `errorMessages.js`.
+An admin "Preview menu as role" picker was built and then removed at the owner's request (28 Nov 2026):
+to see a role's access, sign in as a user with that role, or open **Who sees what**.
 
 ## Who sees what (`/permissions/guide`)
 
@@ -153,9 +136,7 @@ Not changed (reported, permission defaults left alone):
   every visible link opens without a no-access card or 401/403, nothing reachable is missing; phone
   drawer per role in Arabic (RTL, no sideways scroll, closes on navigation); section auto-open and
   manual open/close; badges (confirmations, approvals, driver unseen, notifications, section sum);
-  preview for each role = that role's real menu, banner and tooltip, survives navigation and reload,
-  admin rights unchanged, exit restores, preview from Permissions, sign-out clears it, no picker or
-  guide for a supervisor; guide = real menus and landing pages, matrix ✓ = real menus, legacy and
+  no guide for a supervisor (the preview checks were removed with the preview); guide = real menus and landing pages, matrix ✓ = real menus, legacy and
   nobody marks, print, EN/AR, follows a permission change. Menu screenshots per role:
   `menu-shots/menu-<ROLE>-1280-en.png`, guide: `menu-shots/guide-*.png`.
 - Regression on fresh DBs (copies of the latest fix-re suites): business-day 323/323; fix-rd API

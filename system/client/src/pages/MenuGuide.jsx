@@ -11,7 +11,7 @@ import {
   roleContext,
   visibleMenu,
 } from "../lib/menuDefinition.js";
-import { setMenuPreview, useRoleMenuData } from "../lib/menuPreview.js";
+import { useRoleMenuData } from "../lib/roleMenus.js";
 
 /**
  * fix-rf: "Who sees what" (/permissions/guide, top admin). Generated from the menu definition and
@@ -22,7 +22,7 @@ const MARK = { menu: "✓", link: "○", none: "–" };
 
 export default function MenuGuide() {
   const { t, locale } = useI18n();
-  const { user, isOrgOwner } = useAuth();
+  const { isOrgOwner } = useAuth();
   const { data, error } = useRoleMenuData(true);
 
   const roles = MENU_ROLES;
@@ -97,16 +97,6 @@ export default function MenuGuide() {
                         ))}
                       </ul>
                     </div>
-                    {r !== "ADMIN" && user?.role === "ADMIN" ? (
-                      <button
-                        type="button"
-                        className="btn-touch vr-btn vr-btn--ghost dashboard-print-hide"
-                        onClick={() => setMenuPreview(user.id, r)}
-                        data-testid={`guide-preview-${r}`}
-                      >
-                        {t("menu.preview.thisRole")}
-                      </button>
-                    ) : null}
                   </article>
                 );
               })}
