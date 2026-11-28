@@ -198,7 +198,7 @@ export default function PurchaseOrders() {
           <button className="btn-touch" type="submit" disabled={busy} style={{ background: "var(--accent)", color: "#fff" }}>{t("po.create")}</button>
         </div>
       </form>
-      <div className="fd-filters rg-filters">
+      <div className="rg-filters">
         <StatusFilters po value={sf} onChange={setSf} />
       </div>
       {!orders.length && (sf.payment || sf.delivery || sf.situation) ? <div className="card">{t("st.noMatch")}</div> : null}

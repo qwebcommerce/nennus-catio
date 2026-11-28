@@ -4417,7 +4417,9 @@ html:not([data-theme="light"]) .accounts-kind--collect {
 .biz-badge--warn { background: #fff1d6; color: #8a5300; }
 .rg-pair { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .rg-pair .biz-badge { margin-inline-start: 0; }
-.rg-filters { flex-wrap: wrap; }
+.rg-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; }
+.rg-filters > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 160px; }
+.rg-filters select { width: 100%; box-sizing: border-box; }
 .rg-doc-wrap { display: grid; gap: 8px; min-width: 0; }
 .rg-doc { max-width: 210mm; width: 100%; box-sizing: border-box; overflow-wrap: anywhere; line-height: 1.4; border: 1px solid var(--border); border-radius: 8px; }
 .rg-doc h2 { margin: 0 0 2px; font-size: 19px; }
