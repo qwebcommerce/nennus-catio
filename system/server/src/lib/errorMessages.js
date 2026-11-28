@@ -696,6 +696,8 @@ const EXACT = [
   ["مجموعة القسائم غير موجودة", "Coupon batch not found"],
   ["حدد التفعيل أو الإيقاف", "Say whether to enable or disable"],
   ["القسيمة غير موجودة", "Coupon code not found"],
+  // ── fix-rf: role menus (routes/roleMenus.js) ──
+  ["هذه الصفحة للمشرف الأعلى فقط", "Only the top admin can see this"],
 ];
 
 const PATTERNS = [

@@ -60,6 +60,8 @@ import { approvalsRouter as driverApprovalRoutes, dispatchRouter as dispatchRout
 import driverRoutes from "./routes/driver.js";
 // fix-rd: accountant confirmation of collected money
 import paymentConfirmRoutes from "./routes/paymentConfirm.js";
+// fix-rf: per-role menus for the admin's menu preview and the "Who sees what" guide
+import roleMenuRoutes from "./routes/roleMenus.js";
 import { prisma } from "./lib/prisma.js";
 import { csrfGuard } from "./middleware/auth.js";
 import {
@@ -205,6 +207,8 @@ app.use("/api/dispatch", dispatchRoutes);
 app.use("/api/driver-approvals", driverApprovalRoutes);
 app.use("/api/driver", driverRoutes);
 app.use("/api/payment-confirmations", paymentConfirmRoutes);
+// fix-rf
+app.use("/api/role-menus", roleMenuRoutes);
 
 /** Unknown API paths answer JSON (bilingual) instead of Express's HTML page. */
 app.use("/api", (_req, res) => {
