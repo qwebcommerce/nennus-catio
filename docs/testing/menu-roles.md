@@ -158,4 +158,11 @@ Not changed (reported, permission defaults left alone):
   guide for a supervisor; guide = real menus and landing pages, matrix ✓ = real menus, legacy and
   nobody marks, print, EN/AR, follows a permission change. Menu screenshots per role:
   `menu-shots/menu-<ROLE>-1280-en.png`, guide: `menu-shots/guide-*.png`.
-- Regression (copies of the fix-re suites; see the report for counts and adaptations).
+- Regression on fresh DBs (copies of the latest fix-re suites): business-day 323/323; fix-rd API
+  164/164, UI 104/104; fix-ra API 202/202, UI 131/131; fix-so API 150/150, UI 116/116; fix-so/vr API
+  125/125, browser 76/76; fix-rb API 155/155, UI 106/106; fix-rc API 213/213, browser 129/129; fix-re
+  API 165/165, UI 109/109. One adaptation: `rd-ui-test.cjs` clicks `nav-van-returns` and
+  `nav-confirmations` from the Dashboard, where those links now sit in closed workspaces; a helper
+  `openNav` opens the link's section first. (The first rd UI run had one timing failure on the driver
+  dashboard's photo thumbnail, unrelated to the menu; the re-run passed 104/104.) Client build,
+  `node --check` on all server files and `npm run check:errors` pass.
