@@ -14,7 +14,7 @@ function dayText(day, locale) {
  * Purchase-order money and documents: paid vs received, attachments (quotation / invoice),
  * prepayment (deposit before goods arrive) and freight bills (landed cost).
  */
-export function PoExtras({ order, suppliers, onChanged, setMsg }) {
+export function PoExtras({ order, suppliers, onChanged, setMsg, onVoucher }) {
   const { t, locale } = useI18n();
   const { canModule } = useAuth();
   const canCreate = canModule("purchasing", "create");
@@ -90,6 +90,7 @@ export function PoExtras({ order, suppliers, onChanged, setMsg }) {
             {p.reference ? <span>· {p.reference}</span> : null}
             <span className="fd-muted">{t("so.applied")} {money(p.amountApplied)}</span>
             {p.proofFile ? <FileLink file={p.proofFile} label={t("so.viewProof")} /> : null}
+            {onVoucher ? <button type="button" className="fd-linkish" onClick={() => onVoucher("prepayment", p.id)}>{t("doc.v.print")}</button> : null}
           </div>
         ))}
         {canCreate && order.status !== "CANCELLED" ? (
@@ -131,6 +132,13 @@ export function PoExtras({ order, suppliers, onChanged, setMsg }) {
             <span className="fd-muted">{t("so.inStockCost")} {money(b.freightCapitalised)}{Number(b.freightExpensed) ? ` · ${t("so.freightOnSold")} ${money(b.freightExpensed)}` : ""}</span>
             <span>{statusLabel("bill", b.status, locale)}</span>
             {b.proofFile ? <FileLink file={b.proofFile} label={t("so.viewFile")} /> : null}
+            {/* fix-rg: freight payments with their voucher */}
+            {(b.payments || []).map((p) => (
+              <span key={p.id} className="fd-muted">
+                · {formatDate(p.paidAt, locale)} {money(p.amount)} {t(`fd.source.${p.method}`)}
+                {onVoucher ? <> <button type="button" className="fd-linkish" onClick={() => onVoucher("payment", p.id)}>{t("doc.v.print")}</button></> : null}
+              </span>
+            ))}
           </div>
         ))}
         {canCreate && ["SENT", "PARTIALLY_RECEIVED", "RECEIVED"].includes(order.status) ? (
