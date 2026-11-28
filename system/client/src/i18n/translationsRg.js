@@ -15,7 +15,7 @@ export const rgEntries = [
   ["st.rcv.NOT_DELIVERED", "لم يُستلم", "Not received"],
   ["st.rcv.PART_DELIVERED", "مُستلم جزئياً", "Partly received"],
   ["st.rcv.DELIVERED", "مُستلم", "Received"],
-  ["st.sit.label", "الحالة", "Situation"],
+  ["st.sit.label", "الوضع", "Situation"],
   ["st.sit.PAID_NOT_DELIVERED", "مدفوع، لم يُسلَّم", "Paid, not delivered"],
   ["st.sit.DELIVERED_NOT_PAID", "مُسلَّم، لم يُدفع", "Delivered, not paid"],
   ["st.sit.OPEN", "لا دفع ولا تسليم بعد", "Nothing paid or delivered yet"],

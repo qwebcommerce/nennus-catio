@@ -4461,6 +4461,7 @@ html:not([data-theme="light"]) .accounts-kind--collect {
   /* Only the open document: everything that is not on its path is removed (no blank pages). */
   body.rg-doc-open *:not(.rg-print-path):not(.rg-doc-live):not(.rg-doc-live *) { display: none !important; }
   body.rg-doc-open .rg-print-path { display: block !important; position: static !important; margin: 0 !important; padding: 0 !important; border: 0 !important; width: auto !important; max-width: none !important; min-width: 0 !important; min-height: 0 !important; height: auto !important; overflow: visible !important; box-shadow: none !important; background: #fff !important; transform: none !important; }
+  html:has(body.rg-doc-open) { background: #fff !important; }
   body.rg-doc-open { margin: 0 !important; padding: 0 !important; background: #fff !important; min-width: 0 !important; overflow: visible !important; }
   body.rg-doc-open .rg-doc-live { position: static !important; visibility: visible !important; }
   .rg-doc { page: rg-a4; border: 0 !important; border-radius: 0; width: 100% !important; max-width: 190mm !important; margin: 0 auto !important; padding: 0 !important; font-size: 10.5pt !important; }
