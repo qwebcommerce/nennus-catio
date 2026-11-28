@@ -13,6 +13,7 @@ import { deliverSalesOrder } from "../lib/soDelivery.js";
 import { checkProof } from "../lib/businessFiles.js";
 import { requireActiveStaff } from "../lib/staffPick.js";
 import { qatarDayKey, qatarDayStart } from "../lib/qatarTime.js";
+import { statusFilter } from "../lib/orderStatus.js";
 import {
   OPEN_STATUSES,
   SO_INCLUDE,
@@ -99,9 +100,14 @@ router.get("/", async (req, res) => {
       { customer: { companyName: { contains: q, mode: "insensitive" } } },
     ];
   }
-  const rows = await prisma.salesOrder.findMany({ where, orderBy: { createdAt: "desc" }, take: 200, include: SO_INCLUDE });
+  // fix-rg: ?payment= &delivery= &situation= (lib/orderStatus.js); filtered after the view is built.
+  const pair = statusFilter(req.query);
+  const rows = await prisma.salesOrder.findMany({ where, orderBy: { createdAt: "desc" }, take: pair.active ? 1000 : 200, include: SO_INCLUDE });
   let list = rows.map((o) => soView(o));
   if (String(req.query.overdue || "") === "1") list = list.filter((o) => o.overdue);
+  if (pair.active) {
+    list = list.filter((o) => pair.test({ ...o, awaiting: Number(o.awaiting) })).slice(0, 200);
+  }
   res.json(list);
 });
 

@@ -14,6 +14,7 @@ import { fail, dayOf } from "./bizError.js";
 import { qatarDayKey, qatarDayStart } from "./qatarTime.js";
 import { allocatePaid, paidStatus } from "./salesOrders.js";
 import { poMoney, sellByMap } from "./purchaseExtras.js";
+import { poStatusPair, soStatusPair } from "./orderStatus.js";
 
 const DAY_MS = 86400000;
 
@@ -288,6 +289,9 @@ export async function pendingStock(orgId, query = {}) {
         location: o.branch?.name || "",
         locationEn: o.branch?.nameEn || o.branch?.name || "",
         paidStatus: m.paidStatus,
+        // fix-rg: money already paid on the order and which side is ahead (paid, not received).
+        paid: fmt(m.paid),
+        situation: poStatusPair(o, m).situation,
       });
     }
   }
@@ -311,6 +315,10 @@ export async function pendingStock(orgId, query = {}) {
         location: o.branch?.name || "",
         locationEn: o.branch?.nameEn || o.branch?.name || "",
         paidStatus: paidStatus(o),
+        // fix-rg: confirmed paid, awaiting the accountant, and which side is ahead.
+        paid: fmt(d(o.amountPaid)),
+        awaiting: fmt(d(o.amountPending)),
+        situation: soStatusPair(o).situation,
       });
     }
   }
