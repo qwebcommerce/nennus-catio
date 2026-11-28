@@ -1,4 +1,4 @@
-/** fix-rf: menu workspaces, admin menu preview, "Who sees what" guide (docs/testing/menu-roles.md). */
+/** fix-rf: menu workspaces, "Who sees what" guide (docs/testing/menu-roles.md). */
 export const rfEntries = [
   // Workspaces (sidebar sections)
   ["menu.section.overview", "نظرة عامة", "Overview"],
@@ -49,14 +49,6 @@ export const rfEntries = [
   ["menu.item.petTypes", "أنواع الحيوانات ومناطق التوصيل", "Pet types & delivery areas"],
   ["menu.item.audit", "سجل التدقيق", "Audit log"],
   ["menu.item.settings", "الإعدادات", "Settings"],
-  // Preview as role
-  ["menu.preview.label", "معاينة القائمة كـ", "Preview menu as"],
-  ["menu.preview.off", "— قائمتي (بدون معاينة) —", "— My menu (no preview) —"],
-  ["menu.preview.banner", "معاينة القائمة كـ: {{role}}", "Previewing menu as: {{role}}"],
-  ["menu.preview.hint", "معاينة للقائمة فقط: الشاشات التي تفتحها تعمل بصلاحياتك أنت (المشرف الأعلى).", "Menu preview only: screens you open still use your own (top admin) rights."],
-  ["menu.preview.tooltip", "معاينة للتنقل فقط. لا تغيّر صلاحياتك ولا عمل النظام؛ كل شاشة تفتحها أثناء المعاينة تعمل بصلاحيات المشرف الأعلى. تنتهي المعاينة عند تسجيل الخروج.", "Navigation preview only. It does not change your rights or how the system works; every screen you open while previewing uses your top-admin rights. Signing out ends the preview."],
-  ["menu.preview.exit", "إنهاء المعاينة", "Exit preview"],
-  ["menu.preview.thisRole", "معاينة قائمة هذا الدور", "Preview this role's menu"],
   // Who sees what
   ["menu.guide.title", "من يرى ماذا", "Who sees what"],
   ["menu.guide.intro", "تُبنى هذه الصفحة تلقائياً من القائمة ومن صلاحيات كل دور الحالية، فتبقى صحيحة عند تغيير الصلاحيات.", "This page is built from the menu and each role's current permissions, so it stays true when permissions change."],
